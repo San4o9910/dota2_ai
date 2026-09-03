@@ -29,6 +29,9 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import AccountControl, { type ViewerSummary } from "@/components/narma/account-control";
+import PricingSection from "@/components/narma/pricing-section";
+
 import {
   AXES,
   AXIS_COPY,
@@ -387,7 +390,13 @@ function LaneCreeps({ time }: { time: number }) {
   );
 }
 
-export default function NarmaAnalysis() {
+type NarmaAnalysisProps = {
+  viewer: ViewerSummary | null;
+  signInHref: string;
+  signOutHref: string;
+};
+
+export default function NarmaAnalysis({ viewer, signInHref, signOutHref }: NarmaAnalysisProps) {
   const [selectedStage, setSelectedStage] = useState<StageKey>("laning");
   const [selectedAxis, setSelectedAxis] = useState<AxisKey>("resources");
   const [selectedHeroId, setSelectedHeroId] = useState<number | null>(null);
@@ -497,14 +506,19 @@ export default function NarmaAnalysis() {
           <a href="#timeline">Хронология</a>
           <a href="#progress">План тренировки</a>
           <a href="#coach">AI-тренер</a>
+          <a href="#pricing">Тарифы</a>
         </nav>
-        <button className="new-analysis" onClick={() => setMatchPanel(true)}><span>+</span> Новый анализ</button>
+        <div className="topbar-actions">
+          <AccountControl viewer={viewer} signInHref={signInHref} signOutHref={signOutHref} />
+          <button className="new-analysis" onClick={() => setMatchPanel(true)}><span>+</span> Новый анализ</button>
+        </div>
         <button className="icon-button menu-button" aria-label={mobileMenu ? "Закрыть меню" : "Открыть меню"} aria-expanded={mobileMenu} onClick={() => setMobileMenu((current) => !current)}><Menu size={20} /></button>
         {mobileMenu && <div className="mobile-nav">
           <a href="#analysis" onClick={() => setMobileMenu(false)}>Анализ матча</a>
           <a href="#timeline" onClick={() => setMobileMenu(false)}>Хронология</a>
           <a href="#progress" onClick={() => setMobileMenu(false)}>План тренировки</a>
           <a href="#coach" onClick={() => setMobileMenu(false)}>AI-тренер</a>
+          <a href="#pricing" onClick={() => setMobileMenu(false)}>Тарифы и аккаунт</a>
           <button onClick={() => { setMobileMenu(false); setMatchPanel(true); }}>+ Новый анализ</button>
         </div>}
       </header>
@@ -842,6 +856,12 @@ export default function NarmaAnalysis() {
             <article className="surface"><span>03</span><Gem /><h3>Сброс после Aegis</h3><p>Если Aegis уже снят, не продолжайте бой по инерции. Отойдите и дождитесь полного состава до следующего входа.</p><small>Критерий: никаких новых контактов, пока живы не все пять</small></article>
           </div>
         </section>
+
+        <PricingSection
+          isAuthenticated={Boolean(viewer)}
+          signInHref={signInHref}
+          onStartTrial={() => setMatchPanel(true)}
+        />
 
         <section className="coach-chat surface" id="coach">
           <div className="coach-avatar"><BrainCircuit /></div>

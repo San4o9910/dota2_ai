@@ -10,6 +10,15 @@ export type AnalysisPaymentRequest = {
   returnUrl: string;
 };
 
+export type CheckoutPaymentRequest = {
+  orderId: string;
+  productCode: string;
+  description: string;
+  matchId?: string;
+  amountRub: string;
+  returnUrl: string;
+};
+
 export type YooKassaPayment = {
   id: string;
   status: "pending" | "waiting_for_capture" | "succeeded" | "canceled";
@@ -35,6 +44,8 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 const MATCH_ID = /^\d{8,12}$/;
 const MONEY = /^\d{1,7}\.\d{2}$/;
 const PAYMENT_ID = /^[0-9a-z-]{8,64}$/i;
+const PRODUCT_CODE = /^[a-z][a-z0-9_]{2,63}$/;
+const REQUEST_TIMEOUT_MS = 12_000;
 
 function authorization(credentials: YooKassaCredentials) {
   if (!/^\d{4,32}$/.test(credentials.shopId) || credentials.secretKey.length < 12) {
@@ -46,6 +57,28 @@ function authorization(credentials: YooKassaCredentials) {
 function validateRequest(input: AnalysisPaymentRequest) {
   if (!UUID_V4.test(input.orderId)) throw new YooKassaError("orderId must be a UUID v4");
   if (!MATCH_ID.test(input.matchId)) throw new YooKassaError("matchId is invalid");
+  if (!MONEY.test(input.amountRub) || Number(input.amountRub) <= 0) {
+    throw new YooKassaError("amountRub must be a positive RUB amount with two decimals");
+  }
+
+  let returnUrl: URL;
+  try {
+    returnUrl = new URL(input.returnUrl);
+  } catch {
+    throw new YooKassaError("returnUrl must be an absolute URL");
+  }
+  if (returnUrl.protocol !== "https:") throw new YooKassaError("returnUrl must use HTTPS");
+}
+
+function validateCheckoutRequest(input: CheckoutPaymentRequest) {
+  if (!UUID_V4.test(input.orderId)) throw new YooKassaError("orderId must be a UUID v4");
+  if (!PRODUCT_CODE.test(input.productCode)) throw new YooKassaError("productCode is invalid");
+  if (!input.description.trim() || input.description.length > 128) {
+    throw new YooKassaError("description must contain 1 to 128 characters");
+  }
+  if (input.matchId !== undefined && !MATCH_ID.test(input.matchId)) {
+    throw new YooKassaError("matchId is invalid");
+  }
   if (!MONEY.test(input.amountRub) || Number(input.amountRub) <= 0) {
     throw new YooKassaError("amountRub must be a positive RUB amount with two decimals");
   }
@@ -86,6 +119,7 @@ export async function createAnalysisPayment(
   validateRequest(input);
   const response = await transport(API_URL, {
     method: "POST",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
       Authorization: authorization(credentials),
       "Content-Type": "application/json",
@@ -106,6 +140,37 @@ export async function createAnalysisPayment(
   return readPaymentResponse(response);
 }
 
+export async function createCheckoutPayment(
+  credentials: YooKassaCredentials,
+  input: CheckoutPaymentRequest,
+  transport: typeof fetch = fetch,
+): Promise<YooKassaPayment> {
+  validateCheckoutRequest(input);
+  const metadata: Record<string, string> = {
+    order_id: input.orderId,
+    product_code: input.productCode,
+  };
+  if (input.matchId) metadata.match_id = input.matchId;
+
+  const response = await transport(API_URL, {
+    method: "POST",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    headers: {
+      Authorization: authorization(credentials),
+      "Content-Type": "application/json",
+      "Idempotence-Key": input.orderId,
+    },
+    body: JSON.stringify({
+      amount: { value: input.amountRub, currency: "RUB" },
+      capture: true,
+      confirmation: { type: "redirect", return_url: input.returnUrl },
+      description: input.description,
+      metadata,
+    }),
+  });
+  return readPaymentResponse(response);
+}
+
 export async function getYooKassaPayment(
   credentials: YooKassaCredentials,
   paymentId: string,
@@ -113,6 +178,7 @@ export async function getYooKassaPayment(
 ): Promise<YooKassaPayment> {
   if (!PAYMENT_ID.test(paymentId)) throw new YooKassaError("paymentId is invalid");
   const response = await transport(`${API_URL}/${paymentId}`, {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: { Authorization: authorization(credentials) },
   });
   return readPaymentResponse(response);
@@ -129,4 +195,21 @@ export function isConfirmedAnalysisPayment(
     && payment.metadata?.order_id === expected.orderId
     && payment.metadata?.match_id === expected.matchId
     && payment.metadata?.product === "match_analysis";
+}
+
+export function isConfirmedCheckoutPayment(
+  payment: YooKassaPayment,
+  expected: Pick<
+    CheckoutPaymentRequest,
+    "orderId" | "productCode" | "matchId" | "amountRub"
+  >,
+) {
+  return payment.status === "succeeded"
+    && payment.paid === true
+    && payment.amount.currency === "RUB"
+    && payment.amount.value === expected.amountRub
+    && payment.metadata?.order_id === expected.orderId
+    && payment.metadata?.product_code === expected.productCode
+    && (expected.matchId === undefined
+      || payment.metadata?.match_id === expected.matchId);
 }

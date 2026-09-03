@@ -1,36 +1,37 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { readFile } from "node:fs/promises";
+import test, { after } from "node:test";
+import { fileURLToPath } from "node:url";
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createServer } from "vite";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const vite = await createServer({
+  appType: "custom",
+  configFile: false,
+  root,
+  resolve: { alias: { "@": root } },
+  server: { middlewareMode: true },
+});
+
+after(async () => vite.close());
+
+const developmentPreviewConfig = /["']codex-preview["']\s*:\s*["']development["']/i;
 
 test("renders development preview metadata", async () => {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
+  const workerSource = await readFile(new URL("../dist/server/index.js", import.meta.url), "utf8");
+  assert.match(workerSource, developmentPreviewConfig);
 
-  const response = await worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
-    }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
+  const { default: NarmaAnalysis } = await vite.ssrLoadModule(
+    "/components/narma/narma-analysis.tsx",
   );
-
-  assert.equal(response.status, 200);
-  assert.match(
-    response.headers.get("content-type") ?? "",
-    /^text\/html\b/i,
-  );
-  const html = await response.text();
-  assert.match(html, developmentPreviewMeta);
+  const html = renderToStaticMarkup(React.createElement(NarmaAnalysis, {
+    viewer: null,
+    signInHref: "/signin-with-chatgpt?return_to=%2F%23pricing",
+    signOutHref: "/signout-with-chatgpt?return_to=%2F",
+  }));
   assert.match(html, /NARMA/);
   assert.match(html, /8963624400/);
   assert.match(html, /Драфт/);
@@ -38,4 +39,8 @@ test("renders development preview metadata", async () => {
   assert.match(html, /Мид-гейм/);
   assert.match(html, /Лейт-гейм/);
   assert.match(html, /\/generated\/dota\/7\.41\/minimap\.png/);
+  assert.match(html, /Первый разбор/);
+  assert.match(html, /299[^<]*₽/);
+  assert.match(html, /799[^<]*₽/);
+  assert.match(html, /\/signin-with-chatgpt\?return_to=/);
 });

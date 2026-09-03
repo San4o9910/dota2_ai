@@ -91,3 +91,34 @@ test("rejects invalid payment fields before networking", async () => {
   );
   assert.equal(called, false);
 });
+
+test("creates and verifies a catalog checkout without trusting a browser price", async () => {
+  const { createCheckoutPayment, isConfirmedCheckoutPayment } = await vite.ssrLoadModule(
+    "/lib/payments/yookassa.ts",
+  );
+  const checkout = {
+    orderId: request.orderId,
+    productCode: "coach_30_days",
+    description: "NARMA VISION — AI-тренер на 30 дней",
+    amountRub: "799.00",
+    returnUrl: request.returnUrl,
+  };
+  let body;
+  const payment = await createCheckoutPayment(credentials, checkout, async (_url, init) => {
+    body = JSON.parse(init.body);
+    return Response.json({
+      id: "2f63c820-000f-5000-9000-1b68e2b15f29",
+      status: "succeeded",
+      paid: true,
+      test: true,
+      amount: { value: checkout.amountRub, currency: "RUB" },
+      confirmation: { type: "redirect", confirmation_url: "https://yoomoney.ru/checkout/test" },
+      metadata: { order_id: checkout.orderId, product_code: checkout.productCode },
+    });
+  });
+
+  assert.equal(body.metadata.product_code, "coach_30_days");
+  assert.equal(body.amount.value, "799.00");
+  assert.equal(isConfirmedCheckoutPayment(payment, checkout), true);
+  assert.equal(isConfirmedCheckoutPayment({ ...payment, amount: { value: "1.00", currency: "RUB" } }, checkout), false);
+});
