@@ -53,6 +53,18 @@ import {
 type LayerKey = "heroes" | "vision" | "structures" | "objectives" | "camps" | "creeps";
 type MapMode = "coach" | "vision" | "full";
 
+type TrainingDrill = {
+  id: string;
+  title: string;
+  axis: string;
+  why: string;
+  evidence: string;
+  steps: string[];
+  metric: string;
+  dose: string;
+  moment: number;
+};
+
 const LAYERS: Array<{ key: LayerKey; label: string }> = [
   { key: "heroes", label: "Герои / смерти" },
   { key: "vision", label: "Варды" },
@@ -61,6 +73,157 @@ const LAYERS: Array<{ key: LayerKey; label: string }> = [
   { key: "camps", label: "Лагеря" },
   { key: "creeps", label: "Волны крипов · модель" },
 ];
+
+export const TRAINING_PLAN: Record<StageKey, {
+  goal: string;
+  result: string;
+  drills: TrainingDrill[];
+}> = {
+  draft: {
+    goal: "До выхода крипов понимать, как ваша пятёрка выигрывает карту и чего ей нельзя отдавать.",
+    result: "За 30 секунд назвать инициатора, главную угрозу врага и план первой общей драки.",
+    drills: [
+      {
+        id: "draft-win-condition",
+        title: "Собрать план драфта в трёх фразах",
+        axis: "Макро · микро",
+        why: "Без общего плана Radiant было проще согласиться на удобный Dire бой 5×5, где работали Centaur, Black Hole, Requiem и Eclipse.",
+        evidence: "Матч 8963624400: Dire имел более простой массовый контроль и быстрее превращал победу в строения.",
+        steps: [
+          "Назовите героя, который начинает ваш хороший бой.",
+          "Назовите способность врага, из-за которой нельзя стоять вместе.",
+          "Решите заранее: после победы вы забираете башню, Roshan или две линии фарма.",
+        ],
+        metric: "План сформулирован до 0:00 и помещается в 30 секунд.",
+        dose: "Перед каждой из следующих 5 игр",
+        moment: 0,
+      },
+      {
+        id: "draft-formation",
+        title: "Назначить игрока вне первой волны контроля",
+        axis: "Передвижения · микро",
+        why: "Против Enigma один герой обязан стоять отдельно и иметь возможность прервать или переждать Black Hole.",
+        evidence: "На 43:06 сгруппированная тройка Radiant попала под Black Hole с BKB.",
+        steps: [
+          "Определите, кто из пяти не показывает позицию до начала Black Hole.",
+          "Отметьте безопасный угол входа относительно основной четвёрки.",
+          "После каждой драки проверьте: этот герой вошёл раньше или позже ключевой способности?",
+        ],
+        metric: "В 4 из 5 драк ключевой страхующий герой не попадает в первый массовый контроль.",
+        dose: "5 командных драк",
+        moment: 2586,
+      },
+    ],
+  },
+  laning: {
+    goal: "Не путать равный счёт по убийствам с равной линией: главный ориентир — крипы, уровни и состояние башни.",
+    result: "К 10:00 не отдавать большой разрыв по добитым крипам ради ротаций без продолжения.",
+    drills: [
+      {
+        id: "lane-last-hits",
+        title: "Три десятиминутки на стабильный фарм",
+        axis: "Ресурсы · микро",
+        why: "Убийства не закрывают потерянные волны. В этом матче при счёте 6–6 Dire уже вёл на 4 705 золота.",
+        evidence: "На 10:00 у команд было 190 против 92 LH; на центре SF имел 63/8, а Windranger — 18/4.",
+        steps: [
+          "Сыграйте 10 минут в тренировочном лобби без предметов на урон.",
+          "После каждого промаха назовите причину: анимация, агр крипов или лишнее движение.",
+          "Повторите ещё два раза и запишите лучший и средний результат, а не только рекорд.",
+        ],
+        metric: "Кор: не меньше 55 LH к 10:00; саппорт: не пропустить pull/stack-окно ради бесполезной ротации.",
+        dose: "3 подхода по 10 минут",
+        moment: 600,
+      },
+      {
+        id: "lane-rotation-price",
+        title: "Посчитать цену каждой ротации",
+        axis: "Передвижения · макро",
+        why: "Хорошая драка может быть плохим обменом, если свободный кор забирает волну и башню.",
+        evidence: "Ротация Radiant на 7:01 дала 2–1, но Shadow Fiend без давления забрал центральную T1 на 7:41.",
+        steps: [
+          "Перед уходом с линии посмотрите, где находится следующая волна.",
+          "Назовите продолжение ротации: руна, башня, вард или возврат на фарм.",
+          "Через 40 секунд сравните полученное с потерянными крипами и уроном по своей башне.",
+        ],
+        metric: "Не терять больше одной полной волны без убийства ключевого героя или объекта.",
+        dose: "Контроль первых 3 ротаций в матче",
+        moment: 421,
+      },
+    ],
+  },
+  mid: {
+    goal: "Начинать драку только после короткой проверки реальной силы команд и следующей цели.",
+    result: "Каждый вход имеет понятную причину: численность, важный предмет, способность или выгодная позиция.",
+    drills: [
+      {
+        id: "mid-power-check",
+        title: "Пятисекундная проверка перед контактом",
+        axis: "Ресурсы · микро",
+        why: "При заметном отставании равный по числу героев бой начинается не с нуля — соперник уже сильнее предметами и уровнями.",
+        evidence: "К 26:00 Dire имел +13 668 золота; драки 15:24 и 16:40 закрепили его Blink-тайминги.",
+        steps: [
+          "Посчитайте видимых союзников и врагов: входить можно только при понятной численности.",
+          "Проверьте свои BKB/ультимейты и два последних показанных ключевых предмета врага.",
+          "Скажите вслух одно основание для входа; если его нет — покажите линии и разойдитесь.",
+        ],
+        metric: "Ноль равных 5×5 без информации о ключевой способности или предметном преимуществе.",
+        dose: "Перед каждой дракой 12:00–30:00",
+        moment: 1000,
+      },
+      {
+        id: "mid-vision-objective",
+        title: "Связать вард с конкретной целью",
+        axis: "Вижен · макро",
+        why: "Вард ценен не сам по себе: он должен дать безопасный вход к Tormentor, башне, Roshan или в чужой лес.",
+        evidence: "Dire связал выигранные драки, контроль подходов и Tormentor на 25:50.",
+        steps: [
+          "До постановки назовите объект и опасный путь соперника к нему.",
+          "Поставьте обзор на подход, а не в центр уже контролируемой зоны.",
+          "В течение минуты либо заберите цель, либо снимите риск и вернитесь к линиям.",
+        ],
+        metric: "Не меньше 70% ключевых вардов приводят к объекту или безопасному фарму в течение 60 секунд.",
+        dose: "5 осмысленных вардов",
+        moment: 1550,
+      },
+    ],
+  },
+  late: {
+    goal: "После большого объекта или потерянной драки остановить инерцию и снова собрать команду в пять героев.",
+    result: "Ни одного нового контакта без полного состава, buyback-плана и готовых ключевых кнопок.",
+    drills: [
+      {
+        id: "late-aegis-reset",
+        title: "Команда «сброс» после потери Aegis",
+        axis: "Макро · передвижения",
+        why: "Aegis даёт вторую жизнь, но не делает следующий бой автоматически хорошим. После его снятия условия нужно оценить заново.",
+        evidence: "Roshan на 38:46 был правильным; после снятия Aegis в 42:30 Radiant не отошёл и принял 3×4 на 43:06.",
+        steps: [
+          "Сразу после снятия Aegis один игрок говорит: «сброс, считаем живых».",
+          "Проверьте таймеры смерти, телепорты, buyback и готовность основных ультимейтов.",
+          "До восстановления пяти героев защищайте линии издалека и не переходите реку за новой целью.",
+        ],
+        metric: "После потери Aegis команда не начинает новый бой, пока не восстановит безопасный состав.",
+        dose: "Отработать в 3 поздних играх",
+        moment: 2550,
+      },
+      {
+        id: "late-buyback",
+        title: "Один общий выход вместо цепочки dieback",
+        axis: "Ресурсы · микро",
+        why: "Разрозненные buyback дают сопернику несколько лёгких мини-драк вместо одной полноценной защиты.",
+        evidence: "После 43:06 три buyback Radiant закончились повторными смертями и потерей всех трёх линий казарм.",
+        steps: [
+          "Перед buyback назовите защищаемый объект и игроков, которые выходят одновременно.",
+          "Если объект уже нельзя спасти, сохраните buyback и готовьте следующую линию обороны.",
+          "После возвращения дождитесь общей позиции; не телепортируйтесь по одному в уже проигранную зону.",
+        ],
+        metric: "Ноль одиночных dieback; каждый buyback либо сохраняет объект, либо создаёт полноценный бой 5×5.",
+        dose: "Проверять каждое решение после 35:00",
+        moment: 2604,
+      },
+    ],
+  },
+};
 
 const ICONS: Record<AxisKey, typeof Route> = {
   movement: Route,
@@ -236,6 +399,8 @@ export default function NarmaAnalysis() {
   const [matchPanel, setMatchPanel] = useState(false);
   const [matchIdDraft, setMatchIdDraft] = useState("");
   const [matchNotice, setMatchNotice] = useState("");
+  const [trainingStage, setTrainingStage] = useState<StageKey>("laning");
+  const [completedDrills, setCompletedDrills] = useState<Record<string, boolean>>({});
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     heroes: true,
     vision: true,
@@ -248,6 +413,9 @@ export default function NarmaAnalysis() {
   const [coachReply, setCoachReply] = useState("Выберите героя — тогда я отделю ваши решения от командных и разберу их по пяти осям.");
 
   const stage = STAGES.find((item) => item.key === selectedStage) ?? STAGES[1];
+  const training = TRAINING_PLAN[trainingStage];
+  const completedCount = Object.values(completedDrills).filter(Boolean).length;
+  const totalDrills = Object.values(TRAINING_PLAN).reduce((sum, item) => sum + item.drills.length, 0);
   const selectedHero = HEROES.find((hero) => hero.id === selectedHeroId) ?? null;
   const minute = Math.min(47, Math.max(0, Math.round(time / 60)));
   const activeFight = useMemo(() => FIGHTS.reduce((closest, fight) => {
@@ -284,6 +452,7 @@ export default function NarmaAnalysis() {
   const chooseStage = (key: StageKey) => {
     const next = STAGES.find((item) => item.key === key)!;
     setSelectedStage(key);
+    setTrainingStage(key);
     setTime(next.focusTime);
     setPlaying(false);
   };
@@ -291,6 +460,11 @@ export default function NarmaAnalysis() {
   const seek = (next: number) => {
     setTime(next);
     setSelectedStage(stageAtTime(next));
+  };
+
+  const openTrainingMoment = (moment: number) => {
+    seek(moment);
+    window.requestAnimationFrame(() => document.getElementById("analysis")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
   const sendQuestion = (value = chatText) => {
@@ -576,7 +750,92 @@ export default function NarmaAnalysis() {
         </section>
 
         <section className="progress-section" id="progress">
-          <div className="section-head"><div><p className="eyebrow">Перенос в следующую игру</p><h2>Три действия вместо общих советов</h2></div></div>
+          <div className="section-head training-title">
+            <div><p className="eyebrow">Перенос в следующую игру</p><h2>План тренировки по четырём стадиям</h2></div>
+            <div
+              className="training-progress"
+              role="progressbar"
+              aria-label="Прогресс плана тренировки"
+              aria-valuemin={0}
+              aria-valuemax={totalDrills}
+              aria-valuenow={completedCount}
+              aria-valuetext={`Выполнено ${completedCount} из ${totalDrills} упражнений`}
+            >
+              <span><b>{completedCount}</b> / {totalDrills}</span>
+              <i><em style={{ width: `${completedCount / totalDrills * 100}%` }} /></i>
+              <small>упражнений выполнено</small>
+            </div>
+          </div>
+
+          <div className="training-stage-tabs" role="group" aria-label="Стадия для плана тренировки">
+            {STAGES.map((item, index) => (
+              <button
+                key={item.key}
+                aria-pressed={trainingStage === item.key}
+                className={trainingStage === item.key ? "active" : ""}
+                onClick={() => setTrainingStage(item.key)}
+              >
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <strong>{item.label}</strong>
+                <small>{item.interval}</small>
+              </button>
+            ))}
+          </div>
+
+          <div className="training-summary surface">
+            <div>
+              <p className="eyebrow">Цель стадии</p>
+              <h3>{training.goal}</h3>
+            </div>
+            <div>
+              <p className="eyebrow">Что должно измениться</p>
+              <p>{training.result}</p>
+              <span>{selectedHero
+                ? selectedHero.side === "R"
+                  ? `Персональный фокус: ${selectedHero.name}, позиция ${selectedHero.position}`
+                  : `${selectedHero.name} играл за Dire: ниже показано, какие ошибки соперника помогли вашей команде победить.`
+                : "Командный план Radiant. Выберите своего героя наверху — добавим правильную перспективу игрока."}</span>
+            </div>
+          </div>
+
+          <div className="drill-grid">
+            {training.drills.map((drill, index) => {
+              const done = Boolean(completedDrills[drill.id]);
+              return (
+                <article key={drill.id} className={`training-drill surface ${done ? "done" : ""}`}>
+                  <div className="drill-head">
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <div><small>{drill.axis}</small><h3>{drill.title}</h3></div>
+                    <button
+                      className="drill-check"
+                      aria-pressed={done}
+                      onClick={() => setCompletedDrills((current) => ({ ...current, [drill.id]: !done }))}
+                    >
+                      <CheckCircle2 size={17} /> {done ? "Выполнено" : "Отметить"}
+                    </button>
+                  </div>
+
+                  <div className="drill-context">
+                    <div><strong>Почему это важно</strong><p>{drill.why}</p></div>
+                    <div><strong>Основание из матча</strong><p>{drill.evidence}</p></div>
+                  </div>
+
+                  <div className="drill-steps">
+                    <strong>Как тренировать</strong>
+                    <ol>{drill.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+                  </div>
+
+                  <div className="drill-footer">
+                    <div><small>Проверка результата</small><strong>{drill.metric}</strong></div>
+                    <div><small>Объём</small><strong>{drill.dose}</strong></div>
+                    <button onClick={() => openTrainingMoment(drill.moment)}>Показать момент {formatTime(drill.moment)} <ChevronRight size={16} /></button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          <div className="section-head compact-head"><div><p className="eyebrow">Быстрая памятка</p><h3>Три обязательных правила из этого матча</h3></div></div>
           <div className="action-grid">
             <article className="surface"><span>01</span><Route /><h3>Перед контактом</h3><p>Сверьте общий перевес золота/XP, число видимых героев и готовность ключевых предметов.</p><small>Критерий: назвать причину входа до нажатия smoke</small></article>
             <article className="surface"><span>02</span><Eye /><h3>Связать обзор с целью</h3><p>Вард должен отвечать на вопрос: кто входит, откуда и какой объект команда забирает дальше.</p><small>Критерий: объект не дальше 60 секунд от постановки</small></article>

@@ -336,6 +336,53 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 
 .progress-section { padding: 64px 0 0; }
 .progress-section h2 { margin: 0; font-size: clamp(26px, 3vw, 40px); font-weight: 540; letter-spacing: -.04em; }
+.training-title { align-items: end; }
+.training-progress { width: min(260px, 100%); display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 5px 11px; }
+.training-progress > span { grid-row: 1 / 3; color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+.training-progress > span b { color: var(--foreground); font-size: 26px; font-weight: 650; }
+.training-progress > i { height: 5px; overflow: hidden; border-radius: 99px; background: #27312d; }
+.training-progress > i em { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width .25s ease; }
+.training-progress > small { color: var(--text-3); font-size: 12px; }
+.training-stage-tabs { margin-top: 24px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.training-stage-tabs button { min-height: 70px; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; align-content: center; gap: 2px 11px; padding: 11px 15px; color: var(--text-3); text-align: left; border: 1px solid var(--border); border-radius: 14px; background: rgba(12,18,17,.62); cursor: pointer; }
+.training-stage-tabs button > span { grid-row: 1 / 3; align-self: center; color: #65726b; font-size: 12px; font-variant-numeric: tabular-nums; }
+.training-stage-tabs button strong { color: #aeb9b2; font-size: 14px; font-weight: 590; }
+.training-stage-tabs button small { color: #65726b; font-size: 12px; }
+.training-stage-tabs button.active { border-color: rgba(158,202,160,.48); background: linear-gradient(145deg, rgba(46,70,57,.72), rgba(23,35,29,.7)); box-shadow: inset 0 0 0 1px rgba(158,202,160,.12), 0 12px 30px rgba(0,0,0,.16); }
+.training-stage-tabs button.active > span, .training-stage-tabs button.active strong { color: #eaf2eb; }
+.training-stage-tabs button:hover { border-color: rgba(158,202,160,.3); background-color: rgba(30,44,37,.65); }
+.training-summary { margin-top: 10px; padding: 23px; display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,.9fr); gap: 28px; }
+.training-summary h3 { max-width: 700px; margin: 0; font-size: 22px; font-weight: 560; line-height: 1.35; letter-spacing: -.02em; }
+.training-summary > div:last-child { padding-left: 27px; border-left: 1px solid var(--border); }
+.training-summary > div:last-child p:not(.eyebrow) { margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.6; }
+.training-summary > div:last-child span { display: block; margin-top: 9px; color: var(--primary); font-size: 12px; line-height: 1.45; }
+.drill-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; margin-top: 16px; }
+.training-drill { min-width: 0; padding: 23px; transition: border-color .2s ease, opacity .2s ease; }
+.training-drill.done { border-color: rgba(119,189,140,.36); }
+.drill-head { display: grid; grid-template-columns: 36px minmax(0,1fr) auto; align-items: start; gap: 11px; }
+.drill-head > span { width: 36px; height: 36px; display: grid; place-items: center; color: var(--primary); border: 1px solid rgba(158,202,160,.23); border-radius: 10px; background: rgba(158,202,160,.06); font-size: 11px; font-variant-numeric: tabular-nums; }
+.drill-head small { display: block; margin: 1px 0 5px; color: #809087; font-size: 12px; }
+.drill-head h3 { margin: 0; font-size: 19px; font-weight: 580; line-height: 1.3; letter-spacing: -.02em; }
+.drill-check { min-height: 44px; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; color: #8c9a92; border: 1px solid var(--border); border-radius: 10px; background: #0b1110; font-size: 12px; cursor: pointer; }
+.drill-check[aria-pressed="true"] { color: #cbe4cf; border-color: rgba(119,189,140,.32); background: rgba(119,189,140,.08); }
+.drill-check:hover { color: var(--foreground); border-color: rgba(158,202,160,.3); }
+.drill-context { margin-top: 19px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border: 1px solid var(--border); border-radius: 13px; overflow: hidden; }
+.drill-context > div { padding: 15px; }
+.drill-context > div + div { border-left: 1px solid var(--border); background: rgba(255,255,255,.012); }
+.drill-context strong, .drill-steps > strong { display: block; margin-bottom: 7px; color: #c8d1cb; font-size: 13px; }
+.drill-context p { margin: 0; color: #8f9c94; font-size: 14px; line-height: 1.55; }
+.drill-steps { margin-top: 18px; }
+.drill-steps ol { margin: 0; padding: 0; list-style: none; counter-reset: drill-step; display: grid; gap: 8px; }
+.drill-steps li { counter-increment: drill-step; position: relative; min-height: 34px; padding: 7px 0 7px 41px; color: #a6b1aa; font-size: 14px; line-height: 1.5; }
+.drill-steps li::before { content: counter(drill-step); position: absolute; left: 0; top: 5px; width: 28px; height: 28px; display: grid; place-items: center; color: #9fb7a4; border: 1px solid #33423a; border-radius: 50%; background: #111916; font-size: 11px; }
+.drill-footer { margin-top: 17px; padding-top: 16px; display: grid; grid-template-columns: minmax(0,1.35fr) minmax(120px,.65fr); gap: 13px; border-top: 1px solid var(--border); }
+.drill-footer > div { display: grid; align-content: start; gap: 5px; }
+.drill-footer small { color: var(--text-3); font-size: 12px; }
+.drill-footer strong { color: #bdc7c0; font-size: 13px; font-weight: 540; line-height: 1.45; }
+.drill-footer button { grid-column: 1 / 3; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 7px; color: #dce8df; border: 1px solid #43564b; border-radius: 10px; background: linear-gradient(180deg,#19251f,#111a16); font-size: 12px; cursor: pointer; }
+.drill-footer button:hover { border-color: rgba(158,202,160,.48); background: linear-gradient(180deg,#223229,#15221b); }
+.compact-head { margin-top: 40px; }
+.compact-head h3 { font-size: 22px; }
 .action-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; }
 .action-grid article { position: relative; min-height: 250px; padding: 24px; overflow: hidden; }
 .action-grid article > span { position: absolute; right: 18px; top: 11px; color: rgba(181,203,186,.08); font-size: 64px; font-weight: 700; }
@@ -363,6 +410,7 @@ footer span { display: flex; align-items: center; gap: 7px; }
   .analysis-grid { grid-template-columns: 1fr; }.insight-stack{grid-template-columns:repeat(3,1fr)}
   .coach-card,.balance-card,.axis-card{min-width:0}.coach-verdict{font-size:15px}.axis-list button{min-height:47px}
   .charts-grid { grid-template-columns: 1fr; }
+  .drill-grid { grid-template-columns: 1fr; }
   .quick-prompts { display:none; }.coach-chat{grid-template-columns:60px 1fr}.chat-input{grid-column:2}
 }
 
@@ -381,6 +429,15 @@ footer span { display: flex; align-items: center; gap: 7px; }
   .map-layout{grid-template-columns:1fr}.map-stage{min-height:0}.map-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 7px}.control-title,.map-data-note{grid-column:1 / 3}.map-data-note{margin-top:5px}
   .insight-stack{grid-template-columns:1fr}.coach-card,.balance-card,.axis-card{padding:17px}
   .timeline-section,.chart-card,.fight-impact-card{padding:16px}.timeline-section .section-head{align-items:flex-start;flex-direction:column}.resource-chart{min-width:690px}.chart-wrap{overflow-x:auto}.chart-legend{min-width:690px}.chart-legend .data-note{display:none}
+  .training-title { align-items:flex-start; flex-direction:column; }
+  .training-progress { width:100%; }
+  .training-stage-tabs { display:flex; overflow-x:auto; padding-bottom:5px; }
+  .training-stage-tabs button { flex:0 0 150px; }
+  .training-summary { grid-template-columns:1fr; gap:18px; padding:18px; }
+  .training-summary > div:last-child { padding:17px 0 0; border-left:0; border-top:1px solid var(--border); }
+  .training-drill { padding:18px; }
+  .drill-context { grid-template-columns:1fr; }
+  .drill-context > div + div { border-left:0; border-top:1px solid var(--border); }
   .action-grid{grid-template-columns:1fr}.action-grid article{min-height:220px}
   .coach-chat{grid-template-columns:48px 1fr;padding:18px;gap:13px}.coach-avatar{width:48px;height:48px}.chat-input{grid-column:1 / 3}.chat-copy h2{font-size:17px}
   footer{align-items:flex-start;flex-direction:column;justify-content:center}
@@ -402,7 +459,7 @@ footer span { display: flex; align-items: center; gap: 7px; }
   .map-legend{gap:6px 9px}.map-legend>span{font-size:7.5px}
   .coach-verdict{font-size:16px}.versus-grid>div{padding:10px}.versus-grid strong{font-size:21px}
   .chart-card,.fight-impact-card,.timeline-section{padding:13px}.event-track button{flex-basis:125px}
-  .progress-section{padding-top:48px}.progress-section h2{font-size:28px}.action-grid article{padding:20px}.action-grid small{left:20px;right:20px}
+  .progress-section{padding-top:48px}.progress-section h2{font-size:28px}.training-stage-tabs button{flex-basis:138px}.training-summary h3{font-size:19px}.training-drill{padding:15px}.drill-head{grid-template-columns:36px 1fr}.drill-check{grid-column:1 / 3;width:100%;justify-content:center}.drill-footer{grid-template-columns:1fr}.drill-footer button{grid-column:1}.action-grid article{padding:20px}.action-grid small{left:20px;right:20px}
 }
 
 @media (prefers-reduced-motion: reduce) {

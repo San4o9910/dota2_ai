@@ -51,3 +51,32 @@ test("the decisive 43:06 fight is encoded without reversing deaths", async () =>
   assert.equal(fight.dire.deaths, 0);
   assert.ok(EVENTS.some((event) => event.t === 2586 && /3×4/.test(event.title)));
 });
+
+test("training plan covers every stage and every analysis axis", async () => {
+  const { MATCH } = await vite.ssrLoadModule("/app/data/match-8963624400.ts");
+  const { TRAINING_PLAN } = await vite.ssrLoadModule("/components/narma/narma-analysis.tsx");
+  const stages = Object.entries(TRAINING_PLAN);
+  const drills = stages.flatMap(([, stage]) => stage.drills);
+
+  assert.equal(stages.length, 4);
+  assert.equal(drills.length, 8);
+  for (const [stageKey, stage] of stages) {
+    assert.equal(stage.drills.length, 2, `${stageKey} must have exactly two focused drills`);
+    assert.ok(stage.goal.length > 20);
+    assert.ok(stage.result.length > 20);
+  }
+
+  for (const drill of drills) {
+    assert.ok(drill.why.length > 40);
+    assert.ok(drill.evidence.length > 30);
+    assert.ok(drill.steps.length >= 3);
+    assert.ok(drill.metric.length > 20);
+    assert.ok(drill.dose.length > 5);
+    assert.ok(drill.moment >= 0 && drill.moment <= MATCH.duration);
+  }
+
+  const axes = drills.map((drill) => drill.axis.toLowerCase()).join(" ");
+  for (const axis of ["передвижения", "вижен", "ресурсы", "макро", "микро"]) {
+    assert.match(axes, new RegExp(axis));
+  }
+});
