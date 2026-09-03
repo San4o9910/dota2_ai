@@ -497,7 +497,7 @@ export default function NarmaAnalysis({ viewer, signInHref, signOutHref }: Narma
     <main className="narma-shell">
       <header className="topbar">
         <a className="brand" href="#top" aria-label="NARMA VISION — наверх">
-          <span className="brand-mark"><Sparkles size={16} /></span>
+          <span className="brand-mark"><Swords size={16} /></span>
           <span><b>NARMA</b> VISION</span>
           <small>AI-ТРЕНЕР ДЛЯ DOTA 2</small>
         </a>
