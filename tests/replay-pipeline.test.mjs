@@ -71,7 +71,7 @@ test('worker claims and result callbacks survive duplicate delivery without expo
  }finally{sqlite.close();}
 });
 test('map coordinates, pregame wards and rewind use replay facts',()=>{
- assert.deepEqual(map.worldToPercent(-10464,10400),{left:0,top:0});assert.deepEqual(map.worldToPercent(10400,-10464),{left:100,top:100});assert.deepEqual(map.gridToWorld(128,128),{x:0,y:0});
+ const gate=map.worldToPercent(-6458,7599);assert.ok(Math.abs(gate.left/100*2166-333)<5);assert.ok(Math.abs(gate.top/100*2048-230)<5);assert.deepEqual(map.gridToWorld(128,128),{x:0,y:0});
  const ward={placedAt:-30,removedAt:400};assert.equal(map.wardStateAt(ward,-31),'not_placed');assert.equal(map.wardStateAt(ward,0),'active');assert.equal(map.wardStateAt(ward,400),'removed');assert.equal(map.wardStateAt({...ward,removedAt:null},900),'unknown');
  const key='npc_dota_goodguys_tower1_mid',events=[{key,destroyedAt:800}];assert.equal(map.buildingStateAt(key,events,800,true).state,'destroyed');assert.equal(map.buildingStateAt(key,events,799,true).state,'standing');assert.equal(map.buildingStateAt(key,[],0,false).state,'unknown');
  assert.equal(map.buildingStateAt('npc_dota_goodguys_tower4_top',[{key:'npc_dota_goodguys_tower4',destroyedAt:1000}],1200,true).state,'unknown');

@@ -139,6 +139,7 @@ export function normalizeOpenDotaMatch(raw: OpenDotaMatch): NormalizedMatchV1 {
       const radiantDeaths = sumRaw(radiantPlayers, "deaths");
       const direDeaths = sumRaw(direPlayers, "deaths");
       return {
+        players: fight.players.map((player,index)=>({playerSlot:raw.players[index].player_slot,heroId:nullable(raw.players[index].hero_id),goldDelta:nullable(player.gold_delta),xpDelta:nullable(player.xp_delta)})),
         startSeconds: fight.start,
         endSeconds: fight.end,
         radiant: {

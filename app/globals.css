@@ -995,3 +995,53 @@ footer { font-size: 12px; }
 .replay-hero.radiant {border-color:#9ee4a8;color:#9ee4a8;}.replay-hero.dire {border-color:#ff9b8e;color:#ff9b8e;}
 
 .replay-upload-panel {padding:24px;margin:20px 0;font-size:16px;}.replay-upload-panel>label {display:block;margin:15px 0 8px;}.replay-upload-panel button {border:1px solid var(--border);padding:10px 16px;border-radius:8px;color:var(--text);background:var(--surface);margin:10px 8px 10px 0;}.replay-upload-panel progress {display:block;width:100%;margin:12px 0;}.replay-upload-row {display:flex;gap:14px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border);padding:14px 0;}.replay-upload-row>div {flex:1;min-width:180px;overflow-wrap:anywhere;}
+
+/* One time axis owns the economy cursor and each fight's exact interval. */
+.timeline-resources { margin:24px 0;padding:24px;min-width:0; }
+.economy-timeline { display:grid;gap:16px;min-width:0; }
+.economy-timeline-controls { display:flex;align-items:center;flex-wrap:wrap;gap:12px;font-size:14px; }
+.economy-timeline-controls label { display:flex;align-items:center;gap:8px; }
+.economy-timeline-controls select,.economy-timeline-controls button,.fight-boundary-actions button { padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font:inherit;min-height:40px; }
+.economy-timeline-controls button[aria-pressed="true"] { border-color:var(--accent); }
+.economy-timeline-controls>span { margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums; }
+.timed-resource-chart { display:block;width:100%;min-width:720px;height:auto;cursor:crosshair;touch-action:pan-x; }
+.timeline-time-grid { stroke:#ffffff12;stroke-width:1; }
+.fight-time-highlight { fill:#d8b67518;stroke:#d8b67566;stroke-width:1; }
+.timeline-cursor-label { fill:var(--text);font:600 12px system-ui; }
+.timed-fight-marker { cursor:pointer;stroke:#dce4e866;stroke-width:1; }
+.timed-fight-marker.radiant { fill:#65b98d; }
+.timed-fight-marker.dire { fill:#d17b70; }
+.timed-fight-marker.unknown { fill:#777d83; }
+.timed-fight-marker.active,.timed-fight-marker:focus-visible { stroke:#fff;stroke-width:3;outline:none; }
+.economy-time-scrubber { display:grid;gap:8px;font-size:14px;font-variant-numeric:tabular-nums; }
+.economy-time-scrubber input { width:100%;accent-color:var(--accent); }
+.selected-fight-result { padding-top:18px;border-top:1px solid var(--border); }
+.selected-fight-title { display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap; }
+.selected-fight-title h4 { margin:4px 0 12px;font-size:19px;font-weight:600; }
+.fight-boundary-actions { display:flex;gap:8px;flex-wrap:wrap;font-size:13px; }
+.fight-team-gold { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:14px 0; }
+.fight-team-result { padding:18px;border-radius:8px;border:1px solid var(--border);border-left:3px solid #65b98d;background:#111b20; }
+.fight-team-result.dire { border-left-color:#d17b70;background:#211919; }
+.fight-team-result>span { display:block;font-size:14px;color:#9ee4b9; }
+.fight-team-result.dire>span { color:#f0a497; }
+.fight-team-result>strong { display:block;margin-top:8px;font-size:30px;font-weight:600;font-variant-numeric:tabular-nums; }
+.fight-team-result>strong small { font-size:15px;color:var(--muted);font-weight:400; }
+.fight-team-result p { margin:8px 0 0;font-size:13px;color:var(--muted);line-height:1.6; }
+.fight-result-difference { font-size:15px;line-height:1.6; }
+.fight-player-breakdown { margin-top:16px;overflow:auto;font-size:14px; }
+.fight-player-breakdown summary { cursor:pointer;padding:8px 0; }
+.fight-player-breakdown table { width:100%;border-collapse:collapse;text-align:left;font-variant-numeric:tabular-nums; }
+.fight-player-breakdown th,.fight-player-breakdown td { padding:10px 8px;border-bottom:1px solid var(--border); }
+.fight-player-breakdown th:nth-child(n+3),.fight-player-breakdown td:nth-child(n+3) { text-align:right; }
+@media(max-width:600px) {
+  .timeline-resources { padding:16px;margin:16px 0; }
+  .economy-timeline-controls>span { width:100%;margin-left:0; }
+  .fight-team-result { padding:12px; }
+  .fight-team-result>strong { font-size:24px; }
+  .fight-team-gold { gap:8px; }
+  .fight-player-breakdown table { min-width:390px; }
+}
+.original-game-map { object-fit:contain;filter:none;user-select:none; }
+.map-image-credit { color:var(--muted);font-size:11px;line-height:1.5; }
+.map-image-credit a { text-decoration:underline;text-underline-offset:2px; }
+.replay-building.destroyed { opacity:1;border-style:solid;background:#181a1ef0;color:#f1b0a8; }

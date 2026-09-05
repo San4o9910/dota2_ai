@@ -1,32 +1,48 @@
-# Карта и события реплея
+# Original game map and replay coordinates
 
-Подложка — визуализация настоящей сетки рельефа и исходных деревьев 7.41.
-Это не скриншот игрового клиента. Цвета нанесены приложением на фактические
-данные высоты, непроходимости и деревьев; геометрия не генерируется.
+The displayed background is the original7.41 game raster uploaded by Buny154
+on10July2026 to [Liquipedia](https://liquipedia.net/commons/File:Game_map_7.41.jpg).
+It matches the demo's patch. The7.39 image in the user's screenshot is a visual
+reference, not the source for7.41 gameplay overlays.
 
-Источник: leamare/dota-interactive-map, commit
-`bc73d0e3ea6a421d43780a017aa92e0288c939b5`:
-- https://github.com/leamare/dota-interactive-map/blob/bc73d0e3ea6a421d43780a017aa92e0288c939b5/assets/img/map_data_741.png
-- https://github.com/leamare/dota-interactive-map/blob/bc73d0e3ea6a421d43780a017aa92e0288c939b5/worlddata.json
-- https://github.com/leamare/dota-interactive-map/blob/bc73d0e3ea6a421d43780a017aa92e0288c939b5/assets/data/741/mapdata.json
-- ISC license: https://github.com/leamare/dota-interactive-map/blob/bc73d0e3ea6a421d43780a017aa92e0288c939b5/LICENSE
+- Bundled: `public/maps/7.41/game-map.jpg`,2166×2048,1,048,406bytes.
+- [Original server thumbnail](https://liquipedia.net/commons/images/thumb/0/07/Game_map_7.41.jpg/2166px-Game_map_7.41.jpg)
+- [Full raster](https://liquipedia.net/commons/images/0/07/Game_map_7.41.jpg),8909×8424.
+- SHA256: `3f60db1ca1a1397c7a7e3fb3bd78c81370aacb17088e7b9518d62314ba31ca35`.
+- Image credit: Buny154/Liquipedia, ©Valve Corporation. The page describes Valve's
+  permission for Liquipedia; it is not an ISC or CC-licensed raster. Do not
+  conflate the raster with the ISC coordinate data attributed in LICENSE.txt.
 
-Пять полос PNG 327×327 содержат высоты, деревья, проходимость, блокировку
-обзора и запрет установки вардов. World X = -10464 + column*64;
-World Y = 10400 - row*64. Общая проекция всех событий:
-X%=(x+10464)/20864*100; Y%=(10400-y)/20864*100.
-OpenDota grid предварительно переводится в world: (grid-128)*128.
+The image is copied without redrawing, color changes or local resampling.
+The old generated terrain-color canvas is removed. Keep natural aspect2166/2048.
 
-Жизненный цикл вардов сопоставляется по ehandle. Без удаления в журнале
-вард обозначается как установка с неизвестной текущей активностью.
-Никакого общего срока жизни или появления до установки нет.
+## Display calibration
 
-Башни связываются по building_kill.key, а не по команде убийцы.
-Две T4 с одинаковым ключом не различимы: после первого события обе имеют
-неопределённый индивидуальный статус, после второго обе разрушены.
-Эталонный fixture содержит неполный журнал и явно не доказывает сохранность
-постройки при отсутствии события. Данные других патчей не накладываются на7.41.
+`lib/replay/game-map-calibration.json` retains source URLs, image hash, ten
+measured tower/ancient anchors, two independent Twin Gate check points and fit
+residuals. `map-state.ts` applies the same transform to all overlays:
 
-Точные позиции живых героев, срубленные деревья и текущий туман войны требуют
-полного реплея и дополнительного извлечения/проверки. Счётчик вардов, круги
-радиуса и даже видимость отдельных героев не заменяют карту обзора команды.
+```
+pixelX = 0.1112410929658031 * worldX + 1055.2606396150288
+pixelY = -0.11164212900641522 * worldY + 1079.8155559442366
+leftPercent = pixelX / 2166 * 100
+topPercent = pixelY / 2048 * 100
+```
+
+Fit RMS3.15pixels; largest anchor residual5.45pixels. Independent gate checks
+are4.13/2.64pixels. This is approximate display calibration, not a claim of
+pixel-exact game-coordinate extraction. Old terrain bounds(-10464…10400) must
+not be reused for this camera raster. OpenDota grid first becomes world using
+`(grid-128)*128`.
+
+## State overlays
+
+Ward lifetimes use matching ehandle placement/removal entries. Before placement
+a ward is hidden. Without removal evidence its activity remains unknown.
+Building kills use target keys, not the killer's team. Generic T4 deaths remain
+individually ambiguous after the first event and both destroyed after the next.
+Absent events do not prove standing buildings when the journal is incomplete.
+
+The raster contains static buildings/trees. Standing/destroyed/unknown replay
+states are separate visible markers. The image itself is not destructible world
+state. Exact team fog, dynamic trees and player camera remain unavailable.

@@ -1,4 +1,8 @@
-Terrain grid from leamare/dota-interactive-map
+game-map.jpg: © Valve Corporation. Uploaded by Buny154 to Liquipedia.
+https://liquipedia.net/commons/File:Game_map_7.41.jpg
+The game raster is not covered by the ISC notice below.
+
+Building coordinate data from leamare/dota-interactive-map
 Commit bc73d0e3ea6a421d43780a017aa92e0288c939b5
 https://github.com/leamare/dota-interactive-map
 

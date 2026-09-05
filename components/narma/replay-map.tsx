@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
-import TerrainMap from "@/components/narma/terrain-map";
-import { MAP_BUILDINGS, buildingStateAt, wardStateAt, worldToPercent, type ReplayMap } from "@/lib/replay/map-state";
+import GameMapImage from "@/components/narma/game-map-image";
+import { GAME_MAP_ASPECT_RATIO, MAP_BUILDINGS, buildingStateAt, wardStateAt, worldToPercent, type ReplayMap } from "@/lib/replay/map-state";
 
 export function gameTimeLabel(t: number) { const value=Math.abs(Math.floor(t));return `${t<0 ? "−" : ""}${Math.floor(value/60)}:${String(value%60).padStart(2,"0")}`; }
 
@@ -20,13 +20,13 @@ export default function ReplayMapView({data,time,perspective="all",structures=tr
   const ward=data.wards.find(w=>w.id===selected);
   return <div className="replay-map-shell">
     <div className="replay-map-toolbar">
-      <span>{gameTimeLabel(time)} · {perspective==="all" ? "Общий обзор" : perspective==="radiant" ? "Варды Radiant" : "Варды Dire"}</span>
+      <span>{gameTimeLabel(time)} · {perspective==="all" ? "Все события" : perspective==="radiant" ? "Варды Radiant" : "Варды Dire"}</span>
       <label><input type="checkbox" checked={history} onChange={e=>setHistory(e.target.checked)}/> История вардов</label>
       <button type="button" onClick={()=>setZoom(z=>z===1 ? 1.5 : 1)} aria-label={zoom===1 ? "Увеличить карту" : "Показать всю карту"}>{zoom===1 ? "1.5×" : "1×"}</button>
     </div>
     <div className="replay-map-scroll" tabIndex={0} aria-label="Карта матча; при увеличении можно прокручивать">
-      <div className="map-stage replay-map-stage" style={{width:`${zoom*100}%`,aspectRatio:"1"}}>
-        {!failed ? <TerrainMap onError={()=>setFailed(true)}/> : <p className="map-missing" role="status">Не удалось загрузить карту. События доступны в хронологии.</p>}
+      <div className="map-stage replay-map-stage" style={{width:`${zoom*100}%`,aspectRatio:GAME_MAP_ASPECT_RATIO}}>
+        {!failed ? <GameMapImage onError={()=>setFailed(true)}/> : <p className="map-missing" role="status">Не удалось загрузить карту. События доступны в хронологии.</p>}
         {!failed && structures && MAP_BUILDINGS.map(b=>{
           const state=buildingStateAt(b.key,data.buildings,time,data.buildingEventsComplete);
           const pos=worldToPercent(b.x,b.y);
@@ -47,7 +47,8 @@ export default function ReplayMapView({data,time,perspective="all",structures=tr
       {building && buildingState ? <p><strong>{building.side==="radiant" ? "Radiant" : "Dire"} · {building.label}</strong> — {buildingState.state==="destroyed" ? `разрушена в ${gameTimeLabel(buildingState.destroyedAt!)}` : buildingState.state==="standing" ? "на выбранный момент стоит" : "в доступном журнале нет полного состояния этой постройки"}.</p>
         : ward ? <p><strong>{ward.kind==="observer" ? "Observer Ward" : "Sentry Ward"}</strong> · поставлен {gameTimeLabel(ward.placedAt)}. {ward.removedAt===null ? "Время снятия неизвестно; активность не подтверждена." : `Снят ${gameTimeLabel(ward.removedAt)}.`}</p>
         : <p>Нажмите на башню или вард, чтобы увидеть событие.</p>}
-      <p className="fine-print">Рельеф и исходные деревья — патч 7.41. Туман войны недоступен в сводке. Варды показаны по журналу установки и снятия; это не вся область обзора команды.</p>
+      <p className="map-image-credit">Карта: <a href="https://liquipedia.net/commons/File:Game_map_7.41.jpg" target="_blank" rel="noreferrer">Buny154 / Liquipedia</a> · © Valve Corporation</p>
+      <p className="fine-print">Игровая карта — патч 7.41. Состояние башен обозначено метками. Туман войны недоступен в сводке. Варды показаны по журналу установки и снятия; это не вся область обзора команды.</p>
     </div>
   </div>;
 }

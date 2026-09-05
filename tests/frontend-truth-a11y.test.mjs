@@ -39,7 +39,7 @@ test("server-rendered demo separates pricing and states its data limits", async 
   assert.doesNotMatch(html, /aria-current="location"/);
   assert.match(html, /href="\/pricing"/);
   assert.doesNotMatch(html, /id="pricing"/);
-  assert.match(html, /<canvas[^>]+aria-label="Рельеф, река и деревья карты Dota 2 патча 7.41"/);
+  assert.match(html, /<img[^>]+src="\/maps\/7\.41\/game-map\.jpg"[^>]+alt="Игровая карта Dota 2, патч 7.41"/);
   assert.match(html, /Без replay \.dem не видно/);
   assert.match(html, /Выберите героя\. Без выбора показан командный разбор/);
   assert.match(html, /интерпретация/);

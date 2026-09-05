@@ -38,10 +38,10 @@ test("renders development preview metadata", async () => {
   assert.match(html, /Лайнинг/);
   assert.match(html, /Мид-гейм/);
   assert.match(html, /Лейт-гейм/);
-  assert.match(html, /<canvas[^>]+class="game-map terrain-map"/);
-  const terrain = await readFile(new URL("../dist/client/maps/7.41/terrain.png", import.meta.url));
-  assert.equal(terrain.readUInt32BE(16), 1635);
-  assert.equal(terrain.readUInt32BE(20), 327);
+  assert.match(html, /src="\/maps\/7\.41\/game-map\.jpg"/);
+  const image = await readFile(new URL("../dist/client/maps/7.41/game-map.jpg", import.meta.url));
+  assert.equal(image.readUInt16BE(0), 0xffd8);
+  assert.equal(image.length, 1048406);
   assert.match(html, /Без replay \.dem не видно/);
   assert.match(html, /href="\/pricing"/);
   assert.doesNotMatch(html, /299[^<]*₽/);

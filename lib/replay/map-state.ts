@@ -1,5 +1,7 @@
+import calibration from "@/lib/replay/game-map-calibration.json";
 import { z } from "zod";
 
+export const GAME_MAP_ASPECT_RATIO=`${calibration.thumbnailWidth}/${calibration.thumbnailHeight}`;
 export const MAP_WORLD_BOUND = 12000;
 export const MapSideSchema = z.enum(["radiant", "dire"]);
 const coordinate = z.number().finite().min(-MAP_WORLD_BOUND).max(MAP_WORLD_BOUND);
@@ -29,8 +31,9 @@ export type ReplayMap = z.infer<typeof ReplayMapSchema>;
 
 export function worldToPercent(x: number, y: number) {
   // Pinned source image and crop metadata: docs/MAP_ASSET.md.
-  return { left: ((x + 10464) / 20864) * 100,
-    top: ((10400 - y) / 20864) * 100 };
+  const c=calibration.coefficients;
+  return {left:(c.pixelXScale*x+c.pixelXOffset)/calibration.thumbnailWidth*100,
+    top:(c.pixelYScale*y+c.pixelYOffset)/calibration.thumbnailHeight*100};
 }
 export function gridToWorld(x: number, y: number) {
   return { x: (x - 128) * 128, y: (y - 128) * 128 };

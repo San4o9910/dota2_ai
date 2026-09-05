@@ -6,7 +6,7 @@ import {
 import { canonicalJson, canonicalSha256 } from "@/lib/analysis/canonical-json";
 import { scanUnavailable } from "@/lib/scan/errors";
 
-export const SCAN_NORMALIZER_VERSION = `${NORMALIZED_MATCH_SCHEMA_VERSION}.opendota-2-map` as const;
+export const SCAN_NORMALIZER_VERSION = `${NORMALIZED_MATCH_SCHEMA_VERSION}.opendota-3-fight-players` as const;
 export const SCAN_RATE_LIMIT_SCOPE = "anonymous_scan" as const;
 export const SCAN_RATE_LIMIT_WINDOW_SECONDS = 15 * 60;
 export const SCAN_RATE_LIMIT_MAX_REQUESTS = 12;

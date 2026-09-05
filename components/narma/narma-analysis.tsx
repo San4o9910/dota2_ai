@@ -19,7 +19,6 @@ import {
   Play,
   RotateCcw,
   Route,
-  Shield,
   Sparkles,
   Swords,
   Users,
@@ -28,6 +27,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useTrainingProgress } from "@/components/narma/use-training-progress";
+import MatchEconomyTimeline from "@/components/narma/match-economy-timeline";
 import ReplayMapView from "@/components/narma/replay-map";
 import { DEMO_REPLAY_MAP } from "@/lib/replay/demo-map";
 import AccountControl, { type ViewerSummary } from "@/components/narma/account-control";
@@ -48,7 +48,6 @@ import {
   formatTime,
   heroImage,
   type AxisKey,
-  type Fight,
   type Hero,
   type StageKey,
 } from "@/app/data/match-8963624400";
@@ -79,10 +78,6 @@ function stageAtTime(time: number): StageKey {
   return "late";
 }
 
-function signed(value: number) {
-  return `${value > 0 ? "+" : value < 0 ? "−" : ""}${Math.abs(value).toLocaleString("ru-RU")}`;
-}
-
 function sideLead(value: number) {
   if (value === 0) return "Равенство";
   return `${value > 0 ? "Radiant" : "Dire"} +${Math.abs(value).toLocaleString("ru-RU")}`;
@@ -105,94 +100,11 @@ function HeroPortrait({ hero, small = false }: { hero: Hero; small?: boolean }) 
   );
 }
 
-function ResourceChart({ time }: { time: number }) {
-  const width = 920;
-  const height = 280;
-  const plotTop = 22;
-  const plotBottom = 238;
-  const max = 50000;
-  const zero = (plotTop + plotBottom) / 2;
-  const xAt = (i: number) => 34 + (i / 47) * (width - 62);
-  const yAt = (v: number) => zero - (v / max) * ((plotBottom - plotTop) / 2);
-  const path = (values: number[]) => values.map((v, i) => `${i ? "L" : "M"}${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(" ");
-  const minute = resourceMinuteAt(time);
-  const bands = [
-    { from: 0, to: 12, label: "Лайнинг" },
-    { from: 12, to: 30, label: "Мид" },
-    { from: 30, to: 47, label: "Лейт" },
-  ];
-
-  return (
-    <div className="chart-wrap">
-      <div className="chart-legend">
-        <span className="resource-readout gold">
-          <i aria-hidden="true" />
-          <span><small>Gold · срез {formatTime(minute * 60)}</small><strong>{sideLead(GOLD_ADV[minute])}</strong></span>
-        </span>
-        <span className="resource-readout xp">
-          <i aria-hidden="true" />
-          <span><small>XP · срез {formatTime(minute * 60)}</small><strong>{sideLead(XP_ADV[minute])}</strong></span>
-        </span>
-      </div>
-      <div className="chart-scale-note">
-        <span>Общая шкала · Radiant выше нуля, Dire ниже</span>
-        <span>Поминутно · OpenDota</span>
-      </div>
-      <div
-        className="chart-scroll"
-        role="region"
-        aria-label={`Прокручиваемый график Gold и XP на общей шкале. Срез ${formatTime(minute * 60)}: золото ${sideLead(GOLD_ADV[minute])}, опыт ${sideLead(XP_ADV[minute])}`}
-        tabIndex={0}
-      >
-        <svg viewBox={`0 0 ${width} ${height}`} className="resource-chart" aria-hidden="true">
-          {bands.map((band) => (
-            <text key={band.label} x={(xAt(band.from) + xAt(band.to)) / 2} y="270" textAnchor="middle" className="chart-label">{band.label}</text>
-          ))}
-          {[50000, 25000, 0, -25000, -50000].map((tick) => (
-            <g key={tick}>
-              <line x1="34" x2={width - 28} y1={yAt(tick)} y2={yAt(tick)} className={tick === 0 ? "chart-zero" : "chart-grid"} />
-              <text x="4" y={yAt(tick) + 4} className="chart-tick">{tick === 0 ? "0" : `${tick > 0 ? "+" : "−"}${Math.abs(tick / 1000)}k`}</text>
-            </g>
-          ))}
-          <text x="40" y="17" className="chart-side radiant-text">Radiant</text>
-          <text x="40" y="252" className="chart-side dire-text">Dire</text>
-          <path d={path(GOLD_ADV)} className="chart-line gold" />
-          <path d={path(XP_ADV)} className="chart-line xp" />
-          <line x1={xAt(minute)} x2={xAt(minute)} y1={plotTop} y2={plotBottom} className="chart-cursor" />
-          <circle cx={xAt(minute)} cy={yAt(GOLD_ADV[minute])} r="5" className="chart-dot gold" />
-          <circle cx={xAt(minute)} cy={yAt(XP_ADV[minute])} r="5" className="chart-dot xp" />
-        </svg>
-      </div>
-    </div>
-  );
-}
-
-function FightImpactChart({ active, onSelect }: { active: Fight; onSelect: (time: number) => void }) {
-  const max = 7000;
-  return (
-    <div className="fight-chart" aria-label="Разница золота, полученного командами в каждом окне драки">
-      {FIGHTS.map((fight, index) => {
-        const delta = fight.radiant.gold - fight.dire.gold;
-        const height = Math.max(4, Math.abs(delta) / max * 100);
-        return (
-          <button
-            type="button"
-            key={fight.start}
-            className={fight.start === active.start ? "active" : ""}
-            onClick={() => onSelect(fight.start)}
-            style={{ "--bar-height": `${height}%` } as React.CSSProperties}
-            title={`${formatTime(fight.start)}: ${delta >= 0 ? "Radiant" : "Dire"} +${Math.abs(delta).toLocaleString("ru-RU")} золота за окно`}
-            aria-label={`Драка ${index + 1}, ${formatTime(fight.start)}`}
-            aria-current={fight.start === active.start ? "true" : undefined}
-          >
-            <span className={delta >= 0 ? "bar radiant" : "bar dire"} />
-            <small>{index + 1}</small>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+const DEMO_ECONOMY=GOLD_ADV.map((gold,i)=>({timeSeconds:i*60,radiantGoldAdvantage:gold,radiantXpAdvantage:XP_ADV[i]??null}));
+const DEMO_FIGHTS=FIGHTS.map((fight,index)=>({id:`fight.${String(index).padStart(4,"0")}`,startSeconds:fight.start,endSeconds:fight.end,
+  radiant:{...fight.radiant,goldDelta:fight.radiant.gold,xpDelta:fight.radiant.xp},
+  dire:{...fight.dire,goldDelta:fight.dire.gold,xpDelta:fight.dire.xp},
+}));
 
 type NarmaAnalysisProps = {
   viewer: ViewerSummary | null;
@@ -255,13 +167,6 @@ export default function NarmaAnalysis({
   const totalDrills = Object.values(TRAINING_PLAN).reduce((sum, item) => sum + item.drills.length, 0);
   const selectedHero = HEROES.find((hero) => hero.id === selectedHeroId) ?? null;
   const minute = resourceMinuteAt(time);
-  const activeFight = useMemo(() => FIGHTS.reduce((closest, fight) => {
-    const currentGap = Math.min(Math.abs(time - fight.start), Math.abs(time - fight.end));
-    const closestGap = Math.min(Math.abs(time - closest.start), Math.abs(time - closest.end));
-    return currentGap < closestGap ? fight : closest;
-  }, FIGHTS[0]), [time]);
-
-
   useEffect(() => {
     if (!playing) return;
     const timer = window.setInterval(() => {
@@ -284,6 +189,7 @@ export default function NarmaAnalysis({
   };
 
   const seek = (next: number) => {
+    setPlaying(false);
     setTime(next);
     setSelectedStage(stageAtTime(next));
   };
@@ -518,20 +424,6 @@ export default function NarmaAnalysis({
               {!selectedHero && <button type="button" className="select-hint" onClick={() => document.querySelector(".hero-grid")?.scrollIntoView({ behavior: "smooth" })}><Users size={17} /> Выбрать перспективу героя <ChevronRight size={17} /></button>}
             </article>
 
-            <article className="balance-card surface">
-              <div className="section-head"><div><p className="eyebrow">Баланс сил</p><h3>Драка {formatTime(activeFight.start)}–{formatTime(activeFight.end)}</h3></div><Swords size={20} /></div>
-              <div className="global-lead">
-                <div><span>Золото до окна · вся команда</span><strong className={GOLD_ADV[Math.min(47, Math.floor(activeFight.start / 60))] >= 0 ? "radiant-text" : "dire-text"}>{sideLead(GOLD_ADV[Math.min(47, Math.floor(activeFight.start / 60))])}</strong></div>
-                <div><span>Опыт до окна · вся команда</span><strong className={XP_ADV[Math.min(47, Math.floor(activeFight.start / 60))] >= 0 ? "radiant-text" : "dire-text"}>{sideLead(XP_ADV[Math.min(47, Math.floor(activeFight.start / 60))])}</strong></div>
-              </div>
-              <div className="versus-grid">
-                <div><small>Radiant</small><strong>{activeFight.radiant.kills}–{activeFight.radiant.deaths}</strong><span>{signed(activeFight.radiant.gold)} золота</span><span>{signed(activeFight.radiant.xp)} XP</span></div>
-                <b>VS</b>
-                <div><small>Dire</small><strong>{activeFight.dire.kills}–{activeFight.dire.deaths}</strong><span>{signed(activeFight.dire.gold)} золота</span><span>{signed(activeFight.dire.xp)} XP</span></div>
-              </div>
-              <p className="fine-print"><Info size={14} /> «До окна» — общий перевес. Цифры ниже — результат выбранной драки. Кто находился рядом до начала, покажет только replay.</p>
-            </article>
-
             <article className="axis-card surface">
               <p className="eyebrow">Разбор по игре</p>
               <div className="axis-list">
@@ -542,6 +434,11 @@ export default function NarmaAnalysis({
               </div>
             </article>
           </aside>
+        </section>
+
+        <section className="timeline-resources surface" id="economy">
+          <div className="section-head"><div><p className="eyebrow">Gold + XP · одна шкала</p><h3>Золото и драки по времени</h3></div><span className="confidence"><Database size={14} /> OpenDota</span></div>
+          <MatchEconomyTimeline samples={DEMO_ECONOMY} fights={DEMO_FIGHTS} duration={MATCH.duration} time={time} onSeek={seek}/>
         </section>
 
         <section className="timeline-section surface" id="timeline">
@@ -556,27 +453,6 @@ export default function NarmaAnalysis({
               </button>
             ))}
           </div>
-        </section>
-
-        <section className="charts-grid">
-          <article className="chart-card surface">
-            <div className="section-head"><div><p className="eyebrow">Gold + XP · одна шкала</p><h3>Ресурсы по минутам</h3></div><span className="confidence"><Database size={14} /> OpenDota · 48 срезов</span></div>
-            <ResourceChart time={time} />
-          </article>
-
-          <article className="fight-impact-card surface">
-            <div className="section-head"><div><p className="eyebrow">15 командных драк</p><h3>Кто забирал золото в окне</h3></div><Swords size={19} /></div>
-            <FightImpactChart active={activeFight} onSelect={seek} />
-            <div className="fight-callout">
-              <span>Выбрано · {formatTime(activeFight.start)}</span>
-              <strong>{activeFight.radiant.gold - activeFight.dire.gold >= 0 ? "Radiant" : "Dire"} +{Math.abs(activeFight.radiant.gold - activeFight.dire.gold).toLocaleString("ru-RU")}</strong>
-              <small>золота за окно, не запас до драки</small>
-            </div>
-            <div className="vision-summary">
-              <div><Eye size={16} /><span>Observer</span><b>Radiant 20</b><b>Dire 21</b></div>
-              <div><Shield size={16} /><span>Sentry</span><b>Radiant 37</b><b>Dire 36</b></div>
-            </div>
-          </article>
         </section>
 
         <section className="progress-section" id="progress">

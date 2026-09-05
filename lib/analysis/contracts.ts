@@ -82,6 +82,7 @@ export const NormalizedFightV1Schema = z.object({
   id: z.string().regex(/^fight\.\d{4}$/),
   startSeconds: z.number().int().min(-600).max(43200),
   endSeconds: z.number().int().min(-600).max(43200),
+  players: z.array(z.object({playerSlot:PlayerSlotSchema,heroId:nullableNonNegativeInt,goldDelta:nullableInt,xpDelta:nullableInt}).strict()).length(10).optional(),
   radiant: FightTeamV1Schema,
   dire: FightTeamV1Schema,
 }).strict().refine((fight) => fight.endSeconds >= fight.startSeconds, {
