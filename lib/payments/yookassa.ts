@@ -1,3 +1,5 @@
+import { isJsonContentType } from "@/lib/security/content-type";
+
 export type YooKassaCredentials = {
   shopId: string;
   secretKey: string;
@@ -29,6 +31,8 @@ export type YooKassaPayment = {
   metadata?: Record<string, string>;
 };
 
+export type YooKassaPaymentMode = "test" | "live";
+
 export class YooKassaError extends Error {
   constructor(
     message: string,
@@ -46,9 +50,18 @@ const MONEY = /^\d{1,7}\.\d{2}$/;
 const PAYMENT_ID = /^[0-9a-z-]{8,64}$/i;
 const PRODUCT_CODE = /^[a-z][a-z0-9_]{2,63}$/;
 const REQUEST_TIMEOUT_MS = 12_000;
+const MAX_RESPONSE_BYTES = 64 * 1024;
+const PAYMENT_STATUSES = new Set(["pending", "waiting_for_capture", "succeeded", "canceled"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function authorization(credentials: YooKassaCredentials) {
-  if (!/^\d{4,32}$/.test(credentials.shopId) || credentials.secretKey.length < 12) {
+  if (
+    !/^\d{4,32}$/.test(credentials.shopId)
+    || !/^[\x21-\x7e]{12,256}$/.test(credentials.secretKey)
+  ) {
     throw new YooKassaError("YooKassa credentials are not configured");
   }
   return `Basic ${btoa(`${credentials.shopId}:${credentials.secretKey}`)}`;
@@ -92,10 +105,110 @@ function validateCheckoutRequest(input: CheckoutPaymentRequest) {
   if (returnUrl.protocol !== "https:") throw new YooKassaError("returnUrl must use HTTPS");
 }
 
+async function readBoundedResponse(response: Response) {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength && Number(declaredLength) > MAX_RESPONSE_BYTES) {
+    throw new YooKassaError("YooKassa response exceeds the size limit", response.status);
+  }
+
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let body = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new YooKassaError("YooKassa response exceeds the size limit", response.status);
+    }
+    body += decoder.decode(value, { stream: true });
+  }
+  return body + decoder.decode();
+}
+
+function parsePayment(payload: unknown, status: number): YooKassaPayment {
+  if (!isRecord(payload)) {
+    throw new YooKassaError("YooKassa response must be an object", status);
+  }
+  const amount = payload.amount;
+  if (
+    typeof payload.id !== "string"
+    || !PAYMENT_ID.test(payload.id)
+    || typeof payload.status !== "string"
+    || !PAYMENT_STATUSES.has(payload.status)
+    || typeof payload.paid !== "boolean"
+    || typeof payload.test !== "boolean"
+    || !isRecord(amount)
+    || typeof amount.value !== "string"
+    || !MONEY.test(amount.value)
+    || typeof amount.currency !== "string"
+    || !/^[A-Z]{3}$/.test(amount.currency)
+  ) {
+    throw new YooKassaError("YooKassa response has invalid payment fields", status);
+  }
+
+  let confirmation: YooKassaPayment["confirmation"];
+  if (payload.confirmation !== undefined) {
+    if (!isRecord(payload.confirmation)) {
+      throw new YooKassaError("YooKassa confirmation is invalid", status);
+    }
+    const type = payload.confirmation.type;
+    const confirmationUrl = payload.confirmation.confirmation_url;
+    if (
+      (type !== undefined && (typeof type !== "string" || type.length > 64))
+      || (confirmationUrl !== undefined
+        && (typeof confirmationUrl !== "string"
+          || confirmationUrl.length > 2048
+          || !confirmationUrl.startsWith("https://")))
+    ) {
+      throw new YooKassaError("YooKassa confirmation is invalid", status);
+    }
+    confirmation = {
+      type: type as string | undefined,
+      confirmation_url: confirmationUrl as string | undefined,
+    };
+  }
+
+  let metadata: Record<string, string> | undefined;
+  if (payload.metadata !== undefined) {
+    if (!isRecord(payload.metadata)) {
+      throw new YooKassaError("YooKassa metadata is invalid", status);
+    }
+    metadata = {};
+    for (const [key, value] of Object.entries(payload.metadata)) {
+      if (
+        !/^[a-z0-9_]{1,64}$/i.test(key)
+        || typeof value !== "string"
+        || value.length > 512
+      ) {
+        throw new YooKassaError("YooKassa metadata is invalid", status);
+      }
+      metadata[key] = value;
+    }
+  }
+
+  return {
+    id: payload.id,
+    status: payload.status as YooKassaPayment["status"],
+    paid: payload.paid,
+    test: payload.test,
+    amount: { value: amount.value, currency: amount.currency },
+    confirmation,
+    metadata,
+  };
+}
+
 async function readPaymentResponse(response: Response): Promise<YooKassaPayment> {
+  if (!isJsonContentType(response.headers.get("content-type"))) {
+    throw new YooKassaError("YooKassa returned a non-JSON response", response.status);
+  }
+  const body = await readBoundedResponse(response);
   let payload: unknown;
   try {
-    payload = await response.json();
+    payload = JSON.parse(body);
   } catch {
     throw new YooKassaError("YooKassa returned an unreadable response", response.status);
   }
@@ -104,11 +217,24 @@ async function readPaymentResponse(response: Response): Promise<YooKassaPayment>
     throw new YooKassaError(`YooKassa rejected the request (${response.status})`, response.status);
   }
 
-  const payment = payload as Partial<YooKassaPayment>;
-  if (!payment.id || !payment.status || !payment.amount) {
-    throw new YooKassaError("YooKassa response is missing payment fields", response.status);
+  return parsePayment(payload, response.status);
+}
+
+async function requestPayment(
+  transport: typeof fetch,
+  url: string,
+  init: RequestInit,
+) {
+  try {
+    return await readPaymentResponse(await transport(url, init));
+  } catch (error) {
+    if (error instanceof YooKassaError) throw error;
+    const timedOut = error instanceof Error
+      && ["AbortError", "TimeoutError"].includes(error.name);
+    throw new YooKassaError(
+      timedOut ? "YooKassa request timed out" : "YooKassa request failed",
+    );
   }
-  return payment as YooKassaPayment;
 }
 
 export async function createAnalysisPayment(
@@ -117,7 +243,7 @@ export async function createAnalysisPayment(
   transport: typeof fetch = fetch,
 ): Promise<YooKassaPayment> {
   validateRequest(input);
-  const response = await transport(API_URL, {
+  return requestPayment(transport, API_URL, {
     method: "POST",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
@@ -137,7 +263,6 @@ export async function createAnalysisPayment(
       },
     }),
   });
-  return readPaymentResponse(response);
 }
 
 export async function createCheckoutPayment(
@@ -152,7 +277,7 @@ export async function createCheckoutPayment(
   };
   if (input.matchId) metadata.match_id = input.matchId;
 
-  const response = await transport(API_URL, {
+  return requestPayment(transport, API_URL, {
     method: "POST",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
@@ -168,7 +293,6 @@ export async function createCheckoutPayment(
       metadata,
     }),
   });
-  return readPaymentResponse(response);
 }
 
 export async function getYooKassaPayment(
@@ -177,19 +301,20 @@ export async function getYooKassaPayment(
   transport: typeof fetch = fetch,
 ): Promise<YooKassaPayment> {
   if (!PAYMENT_ID.test(paymentId)) throw new YooKassaError("paymentId is invalid");
-  const response = await transport(`${API_URL}/${paymentId}`, {
+  return requestPayment(transport, `${API_URL}/${paymentId}`, {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: { Authorization: authorization(credentials) },
   });
-  return readPaymentResponse(response);
 }
 
 export function isConfirmedAnalysisPayment(
   payment: YooKassaPayment,
   expected: Pick<AnalysisPaymentRequest, "orderId" | "matchId" | "amountRub">,
+  paymentMode: YooKassaPaymentMode,
 ) {
   return payment.status === "succeeded"
     && payment.paid === true
+    && paymentMatchesMode(payment, paymentMode)
     && payment.amount.currency === "RUB"
     && payment.amount.value === expected.amountRub
     && payment.metadata?.order_id === expected.orderId
@@ -203,13 +328,33 @@ export function isConfirmedCheckoutPayment(
     CheckoutPaymentRequest,
     "orderId" | "productCode" | "matchId" | "amountRub"
   >,
+  paymentMode: YooKassaPaymentMode,
 ) {
   return payment.status === "succeeded"
     && payment.paid === true
+    && checkoutPaymentMatchesOrder(payment, expected, paymentMode);
+}
+
+/** Verifies immutable order identity for every provider state, before redirect. */
+export function checkoutPaymentMatchesOrder(
+  payment: YooKassaPayment,
+  expected: Pick<
+    CheckoutPaymentRequest,
+    "orderId" | "productCode" | "matchId" | "amountRub"
+  >,
+  paymentMode: YooKassaPaymentMode,
+) {
+  return paymentMatchesMode(payment, paymentMode)
     && payment.amount.currency === "RUB"
     && payment.amount.value === expected.amountRub
     && payment.metadata?.order_id === expected.orderId
     && payment.metadata?.product_code === expected.productCode
-    && (expected.matchId === undefined
-      || payment.metadata?.match_id === expected.matchId);
+    && payment.metadata?.match_id === expected.matchId;
+}
+
+export function paymentMatchesMode(
+  payment: Pick<YooKassaPayment, "test">,
+  paymentMode: YooKassaPaymentMode,
+) {
+  return payment.test === (paymentMode === "test");
 }

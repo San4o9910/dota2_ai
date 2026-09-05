@@ -67,6 +67,9 @@ test("training plan covers every stage and every analysis axis", async () => {
   }
 
   for (const drill of drills) {
+    assert.ok(drill.reflectionQuestion.length > 20);
+    assert.ok(drill.reflectionQuestion.endsWith("?"));
+    assert.ok(drill.decisionRule.length > 40);
     assert.ok(drill.why.length > 40);
     assert.ok(drill.evidence.length > 30);
     assert.ok(drill.steps.length >= 3);
@@ -78,5 +81,19 @@ test("training plan covers every stage and every analysis axis", async () => {
   const axes = drills.map((drill) => drill.axis.toLowerCase()).join(" ");
   for (const axis of ["передвижения", "вижен", "ресурсы", "макро", "микро"]) {
     assert.match(axes, new RegExp(axis));
+  }
+});
+
+test("demo coaching copy does not invent replay-only mechanics", async () => {
+  const data = await vite.ssrLoadModule("/app/data/match-8963624400.ts");
+  const { TRAINING_PLAN } = await vite.ssrLoadModule("/components/narma/narma-analysis.tsx");
+  const coachingCopy = JSON.stringify({
+    stages: data.STAGES,
+    axes: data.AXIS_COPY,
+    plan: TRAINING_PLAN,
+  });
+
+  for (const unsupported of ["Black Hole", "BKB", "Blink", "Requiem", "Eclipse"]) {
+    assert.equal(coachingCopy.includes(unsupported), false, `unsupported replay claim: ${unsupported}`);
   }
 });

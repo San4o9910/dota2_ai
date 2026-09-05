@@ -18,7 +18,7 @@ const vite = await createServer({
 
 after(async () => vite.close());
 
-const developmentPreviewConfig = /["']codex-preview["']\s*:\s*["']development["']/i;
+const developmentPreviewConfig = /["'`]codex-preview["'`]\s*:\s*["'`]development["'`]/i;
 
 test("renders development preview metadata", async () => {
   const workerSource = await readFile(new URL("../dist/server/index.js", import.meta.url), "utf8");
@@ -29,7 +29,7 @@ test("renders development preview metadata", async () => {
   );
   const html = renderToStaticMarkup(React.createElement(NarmaAnalysis, {
     viewer: null,
-    signInHref: "/signin-with-chatgpt?return_to=%2F%23pricing",
+    signInHref: "/signin-with-chatgpt?return_to=%2F",
     signOutHref: "/signout-with-chatgpt?return_to=%2F",
   }));
   assert.match(html, /NARMA/);
@@ -38,9 +38,13 @@ test("renders development preview metadata", async () => {
   assert.match(html, /Лайнинг/);
   assert.match(html, /Мид-гейм/);
   assert.match(html, /Лейт-гейм/);
-  assert.match(html, /\/generated\/dota\/7\.41\/minimap\.png/);
-  assert.match(html, /Первый разбор/);
-  assert.match(html, /299[^<]*₽/);
-  assert.match(html, /799[^<]*₽/);
+  assert.match(html, /<canvas[^>]+class="game-map terrain-map"/);
+  const terrain = await readFile(new URL("../dist/client/maps/7.41/terrain.png", import.meta.url));
+  assert.equal(terrain.readUInt32BE(16), 1635);
+  assert.equal(terrain.readUInt32BE(20), 327);
+  assert.match(html, /Без replay \.dem не видно/);
+  assert.match(html, /href="\/pricing"/);
+  assert.doesNotMatch(html, /299[^<]*₽/);
+  assert.doesNotMatch(html, /799[^<]*₽/);
   assert.match(html, /\/signin-with-chatgpt\?return_to=/);
 });

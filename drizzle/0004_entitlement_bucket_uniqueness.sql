@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `entitlement_ledger_one_grant_per_bucket` ON `entitlement_ledger` (`user_id`,`resource`,`bucket_key`) WHERE entry_type = 'grant';

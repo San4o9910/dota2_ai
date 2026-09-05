@@ -2,7 +2,8 @@ import { and, eq, sql } from "drizzle-orm";
 
 import type { ChatGPTUser } from "@/app/chatgpt-auth";
 import { getDb } from "@/db";
-import { authIdentities, users } from "@/db/schema";
+import { authIdentities, entitlementLedger, users } from "@/db/schema";
+import { freeTrialLedgerEntries } from "@/lib/billing/ledger";
 
 const PROVIDER = "chatgpt";
 
@@ -10,6 +11,7 @@ export type CurrentAccount = {
   id: string;
   displayName: string;
   status: string;
+  deletedAt: string | null;
   planCode: string;
   analysisCredits: number;
   coachQuestionsRemaining: number;
@@ -40,13 +42,22 @@ async function findBySubject(providerSubject: string): Promise<CurrentAccount | 
       id: users.id,
       displayName: users.displayName,
       status: users.status,
+      deletedAt: users.deletedAt,
       planCode: users.planCode,
-      analysisCredits: sql<number>`
-        ${users.analysisCredits} + ${users.subscriptionAnalysisCredits}
-      `,
-      coachQuestionsRemaining: sql<number>`
-        ${users.coachQuestionsRemaining} + ${users.subscriptionCoachQuestionsRemaining}
-      `,
+      analysisCredits: sql<number>`COALESCE((
+        SELECT SUM(delta)
+        FROM entitlement_ledger
+        WHERE user_id = ${users.id}
+          AND resource = 'analysis'
+          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+      ), 0)`,
+      coachQuestionsRemaining: sql<number>`COALESCE((
+        SELECT SUM(delta)
+        FROM entitlement_ledger
+        WHERE user_id = ${users.id}
+          AND resource = 'coach_question'
+          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+      ), 0)`,
       planExpiresAt: users.planExpiresAt,
     })
     .from(authIdentities)
@@ -73,6 +84,7 @@ export async function getOrCreateCurrentAccount(user: ChatGPTUser) {
   const db = getDb();
 
   if (existing) {
+    if (existing.status === "deleted" || existing.deletedAt) return existing;
     await db.batch([
       db
         .update(authIdentities)
@@ -93,6 +105,7 @@ export async function getOrCreateCurrentAccount(user: ChatGPTUser) {
 
   const userId = crypto.randomUUID();
   try {
+    const initialEntitlements = freeTrialLedgerEntries(userId);
     await db.batch([
       db.insert(users).values({ id: userId, displayName }),
       db.insert(authIdentities).values({
@@ -102,6 +115,7 @@ export async function getOrCreateCurrentAccount(user: ChatGPTUser) {
         providerSubject,
         email,
       }),
+      db.insert(entitlementLedger).values(initialEntitlements),
     ]);
   } catch (error) {
     // Two first requests can race. D1 rolls the failed batch back, so the

@@ -2,6 +2,7 @@ export type PaidProductCode = "single_analysis" | "coach_30_days";
 
 export type BillingProduct = {
   code: PaidProductCode;
+  version: string;
   name: string;
   shortName: string;
   priceKopecks: number;
@@ -11,6 +12,8 @@ export type BillingProduct = {
   description: string;
   features: string[];
 };
+
+export const BILLING_CATALOG_VERSION = "closed-beta-2026-09-v1";
 
 export const FREE_TRIAL = {
   code: "free_trial" as const,
@@ -24,6 +27,7 @@ export const FREE_TRIAL = {
 export const BILLING_CATALOG: Record<PaidProductCode, BillingProduct> = {
   single_analysis: {
     code: "single_analysis",
+    version: BILLING_CATALOG_VERSION,
     name: "Разбор матча",
     shortName: "Разовый",
     priceKopecks: 29_900,
@@ -41,6 +45,7 @@ export const BILLING_CATALOG: Record<PaidProductCode, BillingProduct> = {
   },
   coach_30_days: {
     code: "coach_30_days",
+    version: BILLING_CATALOG_VERSION,
     name: "AI-тренер на 30 дней",
     shortName: "Тренер",
     priceKopecks: 79_900,

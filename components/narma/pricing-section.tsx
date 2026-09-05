@@ -9,11 +9,12 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { FormEvent, useState } from "react";
+import Link from "next/link";
+import { FormEvent, useCallback, useRef, useState } from "react";
 
+import { useModalDialog } from "@/components/narma/use-modal-dialog";
 import {
   BILLING_CATALOG,
-  FREE_TRIAL,
   formatRubles,
   type BillingProduct,
   type PaidProductCode,
@@ -22,21 +23,36 @@ import {
 type PricingSectionProps = {
   isAuthenticated: boolean;
   signInHref: string;
-  onStartTrial: () => void;
+  demoHref: string;
+  checkoutEnabled: boolean;
 };
 
 export default function PricingSection({
   isAuthenticated,
   signInHref,
-  onStartTrial,
+  demoHref,
+  checkoutEnabled,
 }: PricingSectionProps) {
   const [selected, setSelected] = useState<BillingProduct | null>(null);
   const [matchId, setMatchId] = useState("");
   const [checkoutAttemptId, setCheckoutAttemptId] = useState("");
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
+  const checkoutDialogRef = useRef<HTMLFormElement>(null);
+  const checkoutReturnFocusRef = useRef<HTMLElement | null>(null);
+
+  const closeCheckout = useCallback(() => {
+    setSelected(null);
+    setNotice("");
+  }, []);
+
+  useModalDialog(Boolean(selected), checkoutDialogRef, checkoutReturnFocusRef, closeCheckout);
 
   const choose = (code: PaidProductCode) => {
+    if (!checkoutEnabled) return;
+    checkoutReturnFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     setSelected(BILLING_CATALOG[code]);
     setMatchId("");
     setCheckoutAttemptId(crypto.randomUUID());
@@ -72,13 +88,18 @@ export default function PricingSection({
     <section className="pricing-section" id="pricing">
       <div className="pricing-heading">
         <div>
-          <p className="eyebrow">Понятная цена без безлимита</p>
-          <h2>Начните бесплатно, платите только за полезные разборы</h2>
-          <p>Полный анализ обычно готовится 5–10 минут. Повторное открытие того же отчёта не расходует кредит.</p>
+          <p className="eyebrow">Тарифы</p>
+          <h2>{checkoutEnabled ? "Разбор за 299 ₽ или 30 дней за 799 ₽" : "Платные разборы ещё не открыты"}</h2>
+          <p>{checkoutEnabled
+            ? "Выберите один матч или пакет на 30 дней. Перед оплатой потребуется войти."
+            : "Сейчас можно посмотреть один готовый разбор. Когда приём новых матчей заработает, здесь появится оплата."}</p>
         </div>
-        <div className="payment-state">
+        <div className="payment-state" id="payment-availability" role="status" aria-live="polite">
           <ShieldCheck size={18} />
-          <span><strong>ЮKassa подготовлена</strong><small>Сейчас тестовый режим · списаний нет</small></span>
+          <span>
+            <strong>{checkoutEnabled ? "Оплата доступна" : "Оплата отключена"}</strong>
+            <small>{checkoutEnabled ? "Переход к ЮKassa откроется после выбора" : "Сайт не откроет платёжную форму"}</small>
+          </span>
         </div>
       </div>
 
@@ -86,22 +107,18 @@ export default function PricingSection({
         <article className="price-card surface trial">
           <div className="price-card-top">
             <span className="price-icon"><Sparkles size={20} /></span>
-            <small>Знакомство с продуктом</small>
+            <small>Сейчас доступно</small>
           </div>
-          <h3>{FREE_TRIAL.name}</h3>
-          <div className="price"><strong>0 ₽</strong><span>один раз</span></div>
-          <p>{FREE_TRIAL.description}</p>
+          <h3>Пример разбора</h3>
+          <div className="price"><strong>0 ₽</strong><span>без регистрации</span></div>
+          <p>Готовый матч 8963624400: факты, карта, таймлайн и тренировка.</p>
           <ul>
-            <li><CheckCircle2 />Все четыре стадии игры</li>
-            <li><CheckCircle2 />Интерактивная карта и диаграммы</li>
-            <li><CheckCircle2 />{FREE_TRIAL.coachQuestions} вопросов AI-тренеру</li>
+            <li><CheckCircle2 />Карта и события матча</li>
+            <li><CheckCircle2 />Экономика и драки</li>
+            <li><CheckCircle2 />Вопросы по готовым данным</li>
           </ul>
-          {isAuthenticated ? (
-            <button type="button" className="price-button secondary" onClick={onStartTrial}>Начать бесплатный разбор</button>
-          ) : (
-            <a className="price-button secondary" href={signInHref} target="_top">Создать аккаунт</a>
-          )}
-          <small className="price-note">Одна бесплатная проба на аккаунт</small>
+          <Link className="price-button secondary" href={demoHref}>Открыть пример</Link>
+          <small className="price-note">Новые Match ID пока не принимаются</small>
         </article>
 
         {Object.values(BILLING_CATALOG).map((product) => (
@@ -109,64 +126,73 @@ export default function PricingSection({
             {product.code === "coach_30_days" && <span className="recommended">Выгоднее с 3-го матча</span>}
             <div className="price-card-top">
               <span className="price-icon">{product.code === "coach_30_days" ? <Gauge size={20} /> : <CreditCard size={20} />}</span>
-              <small>{product.shortName}</small>
+              <small>{checkoutEnabled ? product.shortName : "Скоро"}</small>
             </div>
             <h3>{product.name}</h3>
             <div className="price"><strong>{formatRubles(product.priceKopecks)}</strong><span>{product.durationDays ? "/ 30 дней" : "за матч"}</span></div>
             <p>{product.description}</p>
+            {!checkoutEnabled && <small className="planned-label">Что войдёт:</small>}
             <ul>
               {product.features.map((feature) => <li key={feature}><CheckCircle2 />{feature}</li>)}
             </ul>
-            {isAuthenticated ? (
+            {!checkoutEnabled ? (
+              <button type="button" className="price-button" disabled aria-describedby="payment-availability">Скоро</button>
+            ) : isAuthenticated ? (
               <button type="button" className="price-button" onClick={() => choose(product.code)}>Выбрать тариф</button>
             ) : (
               <a className="price-button" href={signInHref} target="_top">Войти и выбрать</a>
             )}
-            <small className="price-note">Без автопродления · неиспользованные лимиты не переносятся</small>
+            <small className="price-note">{checkoutEnabled ? "Без автопродления · неиспользованные лимиты не переносятся" : "Оплата не подключена"}</small>
           </article>
         ))}
       </div>
 
       <div className="pricing-rules surface">
-        <div><Clock3 /><span><strong>Контроль времени</strong><small>Если анализ не готов за 30 минут из-за сервиса, кредит возвращается автоматически.</small></span></div>
-        <div><ShieldCheck /><span><strong>Оплата после оформления продавца</strong><small>На российском запуске — рубли через ЮKassa. Крипта и скины как оплата не принимаются.</small></span></div>
-        <div><Gauge /><span><strong>Честный лимит</strong><small>8 полных разборов — тренировочный ритм два раза в неделю без скрытого ограничения нейросети.</small></span></div>
+        <div><Clock3 /><span><strong>Сейчас — один пример</strong><small>Новые матчи пока не отправляются на анализ.</small></span></div>
+        <div><ShieldCheck /><span><strong>Без списаний</strong><small>Пока оплата отключена, платёжная форма не открывается.</small></span></div>
+        <div><Gauge /><span><strong>Лимиты видны заранее</strong><small>Количество разборов и вопросов указано в карточках.</small></span></div>
       </div>
 
       {selected && (
         <div
           className="checkout-modal"
           role="presentation"
-          onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }}
-          onKeyDown={(event) => { if (event.key === "Escape") setSelected(null); }}
+          onClick={(event) => { if (event.target === event.currentTarget) closeCheckout(); }}
         >
           <form
+            ref={checkoutDialogRef}
             className="checkout-dialog surface"
             role="dialog"
             aria-modal="true"
             aria-labelledby="checkout-title"
+            aria-describedby="checkout-description"
+            tabIndex={-1}
             onSubmit={submitCheckout}
           >
-            <button type="button" className="dialog-close" onClick={() => setSelected(null)} aria-label="Закрыть"><X size={20} /></button>
+            <button type="button" className="dialog-close" onClick={closeCheckout} aria-label="Закрыть оформление тарифа"><X size={20} /></button>
             <p className="eyebrow">Безопасная оплата</p>
             <h2 id="checkout-title">{selected.name}</h2>
+            <p id="checkout-description" className="checkout-description">Проверьте Match ID перед переходом на защищённую страницу платёжного провайдера.</p>
             <div className="checkout-price"><strong>{formatRubles(selected.priceKopecks)}</strong><span>{selected.analyses} {selected.analyses === 1 ? "разбор" : "разборов"}</span></div>
-            <label>
+            <label htmlFor="checkout-match-id">
               <span>{selected.code === "single_analysis" ? "Match ID для разбора" : "Match ID первого матча (необязательно)"}</span>
               <input
-                autoFocus
+                id="checkout-match-id"
+                name="matchId"
+                data-dialog-initial-focus
                 inputMode="numeric"
                 value={matchId}
                 onChange={(event) => { setMatchId(event.target.value.replace(/\D/g, "").slice(0, 12)); setNotice(""); }}
                 placeholder="8963624400"
                 required={selected.code === "single_analysis"}
+                aria-describedby="checkout-description"
               />
             </label>
             <div className="checkout-provider"><CreditCard size={17} /><span><strong>ЮKassa</strong><small>Доступные карты и способы оплаты будут показаны на защищённой странице провайдера.</small></span></div>
-            <div className="checkout-warning"><ShieldCheck size={16} /><span>Тестовый режим: пока вы не оформите самозанятость и не добавите ключи магазина, форма не создаст реальное списание.</span></div>
-            {notice && <div className="checkout-notice" role="status">{notice}</div>}
+            <div className="checkout-warning"><ShieldCheck size={16} /><span>Цена и тариф повторно проверяются сервером; подтверждение оплаты принимается только от ЮKassa.</span></div>
+            {notice && <div className="checkout-notice" id="checkout-error" role="alert">{notice}</div>}
             <button className="checkout-submit" type="submit" disabled={loading}>{loading ? "Проверяем…" : "Перейти к ЮKassa"}</button>
-            <small className="checkout-legal">Цена и состав тарифа задаются сервером. Кредит списывается только после успешно готового анализа.</small>
+            <small className="checkout-legal">Цена и состав тарифа задаются сервером. Возврат на эту страницу сам по себе не подтверждает выдачу доступа.</small>
           </form>
         </div>
       )}

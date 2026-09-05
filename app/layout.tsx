@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "NARMA VISION — разбор Dota 2 матча 8963624400",
-  description: "Интерактивный доказательный разбор матча Dota 2 по четырём стадиям игры.",
+  title: {
+    default: "NARMA VISION — разбор матчей Dota 2",
+    template: "%s | NARMA VISION",
+  },
+  description: "Разбор матча Dota 2 по событиям, экономике, карте и replay-данным.",
   other: {
     "codex-preview": "development",
   },
@@ -20,7 +23,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ru">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <a className="skip-link" href="#main-content">Перейти к основному содержимому</a>
+        {children}
+      </body>
     </html>
   );
 }
