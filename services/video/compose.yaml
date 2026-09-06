@@ -41,7 +41,7 @@ services:
       VIDEO_STORAGE_PATH: /var/lib/narma/video
     ports: ["127.0.0.1:8080:8080"]
     volumes: [media:/var/lib/narma/video]
-    tmpfs: [/tmp:size=64m,mode=1777]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -70,7 +70,7 @@ services:
       VIDEO_REQUEST_BUDGET: ${VIDEO_REQUEST_BUDGET:-250}
       VIDEO_OWNER_DAILY_REQUEST_BUDGET: ${VIDEO_OWNER_DAILY_REQUEST_BUDGET:-1000}
     volumes: [media:/var/lib/narma/video]
-    tmpfs: [/tmp:size=192m,mode=1777]
+    tmpfs: ["/tmp:size=192m,mode=1777"]
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
