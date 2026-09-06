@@ -110,7 +110,9 @@ def ensure_public_ip(cloud, server):
     if attached:
         raise CheckError("multiple_public_ip_bindings")
     zone = server.get("availability_zone")
-    if zone != "nl-1":
+    # Region/preset and availability-zone identifiers are distinct in live API.
+    # Use the validated VM's own zone rather than guessing it from "nl-1".
+    if server.get("preset_id") != PRESET or not isinstance(zone, str) or not re.fullmatch(r"[a-z0-9-]{1,64}", zone):
         raise CheckError("unexpected_server_availability_zone")
     # Do not appropriate an address reserved for another purpose. A previous
     # ambiguous/failed allocation must be reconciled before allocating again.

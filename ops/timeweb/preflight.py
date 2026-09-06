@@ -98,6 +98,7 @@ def main():
                     item = pilot[0]
                     report["narma_pilot"] = {
                         "id":item.get("id"), "preset_id":item.get("preset_id"),
+                        "availability_zone":item.get("availability_zone") if re.fullmatch(r"[a-z0-9-]{1,64}", str(item.get("availability_zone", ""))) else None,
                         "project_id":item.get("project_id"),
                         "public_ipv4_present":any(ip.get("type") == "ipv4"
                             for network in item.get("networks", []) if network.get("type") == "public"
