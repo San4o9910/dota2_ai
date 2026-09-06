@@ -14,7 +14,7 @@ lock = open("/var/lock/narma-deploy.lock", "a")
 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 incoming = json.load(sys.stdin)
 key = incoming["gemini_key"]
-if not re.fullmatch(r"[A-Za-z0-9_-]{20,16384}", key):
+if not re.fullmatch(r"[A-Za-z0-9_./+=:-]{20,16384}", key):
     raise SystemExit(2)
 directory = Path("/opt/narma/secrets")
 directory.mkdir(parents=True, exist_ok=True, mode=0o700)

@@ -65,12 +65,22 @@ class Cloud:
         return value
 
 
-def command(argv, *, input=None, timeout=180):
+def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
     # Never expose raw stdout/stderr from commands that may handle secrets.
     result = subprocess.run(argv, input=input, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, timeout=timeout)
+    if bootstrap:
+        stages = {"lock", "cloud_init", "packages", "docker_firewall", "stop_worker",
+                  "build", "database_api", "readiness", "ready"}
+        for line in (result.stdout + b"\n" + result.stderr).splitlines():
+            match = re.fullmatch(rb"NARMA_BOOTSTRAP_(STAGE|FAILURE):([a-z_]+)(?::([0-9]{1,3}))?", line)
+            if match and match[2].decode() in stages:
+                event("bootstrap_" + match[1].decode().lower(), stage=match[2].decode(),
+                      exit_code=int(match[3]) if match[3] else None)
     if result.returncode:
-        raise CheckError("command_failed_" + Path(argv[0]).name)
+        phases = {"command", "release_directory", "source_transfer", "secret_install", "bootstrap"}
+        safe_phase = phase if phase in phases else "command"
+        raise CheckError("command_failed_" + safe_phase + "_exit_" + str(result.returncode))
     return result.stdout
 
 
@@ -232,7 +242,7 @@ runcmd:
                     time.sleep(10)
             event("ssh_ready", server_id=server_id)
             release = "/opt/narma/releases/" + sha
-            command(ssh+["mkdir -p " + release], timeout=30)
+            command(ssh+["mkdir -p " + release], timeout=30, phase="release_directory")
             archive = temporary/"source.tar.gz"
             with tarfile.open(archive, "w:gz") as bundle:
                 for directory in (Path("services/video"), Path("ops/timeweb")):
@@ -244,13 +254,13 @@ runcmd:
                         if path.name.startswith(".env") or path.suffix in {".key",".pem",".dem",".mp4",".mkv"}:
                             continue
                         bundle.add(path, arcname=str(path), recursive=False)
-            command(ssh+["tar --no-same-owner -xzf - -C " + release], input=archive.read_bytes(), timeout=120)
+            command(ssh+["tar --no-same-owner -xzf - -C " + release], input=archive.read_bytes(), timeout=120, phase="source_transfer")
             # Secrets cross SSH only; none enters cloud-init, the source archive,
             # GitHub artifacts, command arguments or public logs.
             secret_input = json.dumps({"gemini_key":key, "release":sha}).encode()
-            command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30)
+            command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
             event("installing_private_services", server_id=server_id, release=sha)
-            command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha], timeout=1200)
+            command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha], timeout=1200, bootstrap=True, phase="bootstrap")
             event("private_services_ready", server_id=server_id, release=sha,
                 public_application=False, worker_enabled=False,
                 ready_checks=["postgresql","schema","media","private_api"])
