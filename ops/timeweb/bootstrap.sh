@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 stage=lock
-trap 'code=$?; printf "NARMA_BOOTSTRAP_FAILURE:%s:%s\n" "$stage" "$code" >&2' ERR
+failure() {
+  code=$?
+  printf 'NARMA_BOOTSTRAP_FAILURE:%s:%s\n' "$stage" "$code" >&2
+  if [[ -n "${release:-}" ]]; then
+    python3 "$release/ops/timeweb/diagnose.py" "$1" || true
+  fi
+}
+trap 'failure "$1"' ERR
 mark_stage() { stage="$1"; printf 'NARMA_BOOTSTRAP_STAGE:%s\n' "$stage"; }
 exec 9>/var/lock/narma-deploy.lock
 flock -n 9

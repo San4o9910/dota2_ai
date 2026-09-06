@@ -77,6 +77,24 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
             if match and match[2].decode() in stages:
                 event("bootstrap_" + match[1].decode().lower(), stage=match[2].decode(),
                       exit_code=int(match[3]) if match[3] else None)
+            if line.startswith(b'{"event": "container_'):
+                try:
+                    item = json.loads(line)
+                    if item.get("event") == "container_status" and item.get("service") in {"db","migrate","api","worker"}:
+                        state = item.get("state")
+                        health = item.get("health")
+                        event("container_status", service=item["service"],
+                            state=state if state in {"created","running","restarting","exited","paused","dead","removing"} else "unknown",
+                            health=health if health in {"healthy","unhealthy","starting"} else "none",
+                            exit_code=item.get("exit_code") if type(item.get("exit_code")) is int else None)
+                    elif item.get("event") == "container_diagnostic" and item.get("service") in {"db","migrate","api"}:
+                        allowed = {"permission_denied","read_only_filesystem","connection_refused","database_authentication_failed",
+                            "dns_failed","missing_module","sql_syntax_error","database_operational_error","image_pull_rate_limit",
+                            "image_pull_denied","out_of_memory"}
+                        if item.get("code") in allowed:
+                            event("container_diagnostic", service=item["service"], code=item["code"])
+                except (ValueError, TypeError):
+                    pass
     if result.returncode:
         phases = {"command", "release_directory", "source_transfer", "secret_install", "bootstrap"}
         safe_phase = phase if phase in phases else "command"

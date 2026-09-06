@@ -38,6 +38,7 @@ jobs:
           python3 -m compileall -q services/video/narma_video ops/timeweb
           bash -n ops/timeweb/bootstrap.sh
           docker build --tag narma-video-check services/video
+          docker run --rm narma-video-check python -c "import narma_video.api, narma_video.worker, narma_video.db; print('Runtime imports passed')"
       - name: Create or reuse one hourly billed pilot and start private services
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}

@@ -14,7 +14,7 @@ create, change or delete a service and is not a deployment workflow.
    rerun that failed job after saving it. Merely adding a secret does not start a run.
 3. Read the Timeweb preflight job summary. `server_read_access: ok` confirms only
    the ability to list permitted servers, not creation, S3 or deployment access.
-4. Before provisioning, verify the returned tariff's monthly payment period,
+4. Before provisioning, verify the returned tariff's monthly-equivalent price,
    Gemini-supported location, public IPv4 price, offserver backup storage,
    traffic and any existing paid resources. Raw `price` is not a final quote.
 
@@ -27,7 +27,8 @@ work; a successful preflight does not establish production readiness.
 
 Security: fixed HTTPS API origin and three GET endpoints, no redirects, bounded
 responses/timeouts, no dependencies installed with the secret, no raw response
-or provider error logging, and no customer resource names/IPs/IDs in public logs.
+or provider error logging. Only the specifically named managed pilot is included
+in sanitized resource status; unrelated customer resource details are omitted.
 The workflow runs only on the owner's named branch, never on a pull-request
 trigger. The token is exposed only to the read-only Python step.
 
@@ -70,7 +71,26 @@ and explicitly keeps the worker stopped. `/livez` reports process liveness;
 Gemini inference works. Inference budgets are still request-count limits, not a
 global monetary cap. Do not enable an unattended queue before adding that cap.
 
-Outstanding after bootstrap: a metered Gemini image test, private offserver
+Outstanding after bootstrap: a Gemini image test from the VPS, private offserver
 backup/restore, domain and verified HTTPS, full website/auth/data migration from
 Sites, exact `.dem` renderer integration and in-game quality validation. A green
 deployment is evidence for private infrastructure readiness only.
+
+## Verification recorded on 2026-09-06
+
+- [Gemini vision check](https://github.com/San4o9910/dota2_ai/actions/runs/34060868435)
+  completed one provider call from a GitHub runner with four synthetic JPEGs.
+  It confirmed the reviewed frame IDs and did not invent a player or findings.
+  Usage: 4,825 input, 91 output and 156 thought tokens (5,072 total).
+  This verifies the transport and response contract, not Dota coaching quality
+  or network access from the VPS. Estimated standard API cost is under $0.01;
+  only the provider billing record can establish the actual charge.
+- [Application CI](https://github.com/San4o9910/dota2_ai/actions/runs/34062124912)
+  passed lint, type checking, tests, build, package checks and advisory lookup.
+- The first managed VM was created and its public IPv4 attached. Subsequent
+  attempts reuse that VM and address. SSH access was verified. These events
+  do not by themselves establish a running database or application.
+- The 2,000 RUB Gemini test allowance is a total allowance, separate from
+  recurring Timeweb charges. No global monetary limiter is implemented yet;
+  unattended analysis remains disabled. A full match's cost must be measured
+  on a real video fragment before accepting full-match jobs.
