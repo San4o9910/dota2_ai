@@ -46,9 +46,7 @@ import {
   STAGES,
   XP_ADV,
   formatTime,
-  heroImage,
   type AxisKey,
-  type Hero,
   type StageKey,
 } from "@/app/data/match-8963624400";
 
@@ -87,19 +85,6 @@ export function resourceMinuteAt(time: number) {
   return Math.min(47, Math.max(0, Math.floor(time / 60)));
 }
 
-function HeroPortrait({ hero, small = false }: { hero: Hero; small?: boolean }) {
-  const [failed, setFailed] = useState(false);
-  return (
-    <span className={`hero-portrait ${hero.side === "R" ? "radiant" : "dire"} ${small ? "small" : ""}`}>
-      {!failed ? (
-        <img src={heroImage(hero.slug)} alt={hero.name} onError={() => setFailed(true)} />
-      ) : (
-        <span aria-hidden="true">{hero.name.slice(0, 2).toUpperCase()}</span>
-      )}
-    </span>
-  );
-}
-
 const DEMO_ECONOMY=GOLD_ADV.map((gold,i)=>({timeSeconds:i*60,radiantGoldAdvantage:gold,radiantXpAdvantage:XP_ADV[i]??null}));
 const DEMO_FIGHTS=FIGHTS.map((fight,index)=>({id:`fight.${String(index).padStart(4,"0")}`,startSeconds:fight.start,endSeconds:fight.end,
   radiant:{...fight.radiant,goldDelta:fight.radiant.gold,xpDelta:fight.radiant.xp},
@@ -121,7 +106,7 @@ export default function NarmaAnalysis({
 }: NarmaAnalysisProps) {
   const [selectedStage, setSelectedStage] = useState<StageKey>("laning");
   const [selectedAxis, setSelectedAxis] = useState<AxisKey>("resources");
-  const [selectedHeroId, setSelectedHeroId] = useState<number | null>(null);
+  const selectedHeroId = HEROES.find(hero=>hero.name === "Juggernaut")?.id ?? HEROES[0].id;
   const [time, setTime] = useState(461);
   const [playing, setPlaying] = useState(false);
   const [mapMode, setMapMode] = useState<MapMode>("coach");
@@ -277,7 +262,7 @@ export default function NarmaAnalysis({
               >
                 <p className="eyebrow">Новый анализ</p>
                 <h2 id="match-dialog-title">Введите Match ID</h2>
-                <p id="match-dialog-description">Пока доступен один подготовленный матч. Для другого Match ID нужен работающий анализ replay.</p>
+                <p id="match-dialog-description">Здесь открыт подготовленный пример. Свой ник и Match ID можно указать в разделе «Мои разборы».</p>
                 <p className="field-help" id="match-id-help">Доступный Match ID: 8963624400. Формат — от 8 до 12 цифр.</p>
                 <label htmlFor="match-id"><span>Match ID</span></label>
                 <input
@@ -295,7 +280,8 @@ export default function NarmaAnalysis({
                   placeholder="8963624400"
                 />
                 {matchNotice && <div className="dialog-notice" id="match-id-error" role="alert"><Info size={15} aria-hidden="true" />{matchNotice}</div>}
-                <button className="dialog-submit" type="submit">Открыть анализ <ChevronRight size={17} /></button>
+                <button className="dialog-submit" type="submit">Открыть пример <ChevronRight size={17} /></button>
+                <Link className="price-button secondary" href="/analyses">Мой ник и мои матчи</Link>
               </form>
             )}
           </div>
@@ -318,27 +304,8 @@ export default function NarmaAnalysis({
           </div>
           <div className="source-badge"><Database size={16} /> OpenDota</div>
           <div className="hero-prompt">
-            <div>
-              <strong>{selectedHero ? `Ваш герой: ${selectedHero.name}` : "За кого вы играли?"}</strong>
-              <span>{selectedHero ? `Позиция ${selectedHero.position} · ${selectedHero.lane.toLowerCase()} линия` : "Выберите героя. Без выбора показан командный разбор."}</span>
-            </div>
-            {selectedHero && <button type="button" className="text-button" onClick={() => setSelectedHeroId(null)}>Сбросить</button>}
-          </div>
-          <div className="hero-grid">
-            {HEROES.map((hero) => (
-              <button
-                type="button"
-                key={hero.id}
-                className={`hero-choice ${selectedHeroId === hero.id ? "selected" : ""}`}
-                onClick={() => setSelectedHeroId(hero.id)}
-                aria-pressed={selectedHeroId === hero.id}
-                title={`${hero.name} — ${hero.kills}/${hero.deaths}/${hero.assists}`}
-              >
-                <HeroPortrait hero={hero} />
-                <span>{hero.name}</span>
-                <small>{hero.kills}/{hero.deaths}/{hero.assists}</small>
-              </button>
-            ))}
+            <div><strong>Пример разбора · {selectedHero?.name}</strong><span>Это подготовленный пример. Свои матчи разбирайте по закреплённому нику.</span></div>
+            <Link className="price-button secondary" href="/analyses">Указать мой ник</Link>
           </div>
         </section>
 
@@ -421,7 +388,6 @@ export default function NarmaAnalysis({
               <div className="evidence-list">
                 {stage.evidence.map((item) => <div key={item}><CheckCircle2 size={15} /><span>{item}</span></div>)}
               </div>
-              {!selectedHero && <button type="button" className="select-hint" onClick={() => document.querySelector(".hero-grid")?.scrollIntoView({ behavior: "smooth" })}><Users size={17} /> Выбрать перспективу героя <ChevronRight size={17} /></button>}
             </article>
 
             <article className="axis-card surface">

@@ -6,6 +6,7 @@ import {
   sqliteTable,
   text,
   uniqueIndex,
+  primaryKey,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 
@@ -46,6 +47,24 @@ export const authIdentities = sqliteTable(
     ),
   ],
 );
+
+// A selected coaching identity, not a claim of verified Steam ownership.
+export const dotaPlayerProfiles = sqliteTable("dota_player_profiles", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "restrict" }),
+  accountId: integer("account_id").notNull(),
+  nickname: text("nickname").notNull(),
+  sourceMatchId: text("source_match_id").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, table => [check("dota_profile_account_valid",sql`${table.accountId} BETWEEN 1 AND 4294967294`)]);
+
+export const dotaMatchTargets = sqliteTable("dota_match_targets", {
+  userId: text("user_id").notNull().references(() => dotaPlayerProfiles.userId, { onDelete: "restrict" }),
+  matchId: text("match_id").notNull(),
+  accountId: integer("account_id").notNull(),
+  playerSlot: integer("player_slot").notNull(),
+  heroId: integer("hero_id").notNull(),
+}, table => [primaryKey({columns:[table.userId,table.matchId]}),
+  check("dota_target_slot_valid",sql`${table.playerSlot} IN (0,1,2,3,4,128,129,130,131,132)`)]);
 
 /**
  * Durable payment order. The physical name stays `orders` so the first
@@ -402,7 +421,7 @@ export const coachExchanges = sqliteTable("coach_exchanges", {
 
 export const replayUploads = sqliteTable("replay_uploads", {
   id:text("id").primaryKey(),userId:text("user_id").notNull().references(()=>users.id),
-  completionToken:text("completion_token"),uploadId:text("upload_id"),normalizedPayload:text("normalized_payload"),leaseToken:text("lease_token"),leaseExpiresAt:text("lease_expires_at"),attempt:integer("attempt").notNull().default(0),
+  completionToken:text("completion_token"),uploadId:text("upload_id"),normalizedPayload:text("normalized_payload"),identityPayload:text("identity_payload"),leaseToken:text("lease_token"),leaseExpiresAt:text("lease_expires_at"),attempt:integer("attempt").notNull().default(0),
   filename:text("filename").notNull(),objectKey:text("object_key").notNull(),sizeBytes:integer("size_bytes").notNull(),
   state:text("state").notNull().default("uploading"),failureCode:text("failure_code"),matchId:text("match_id"),
   createdAt:text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),updatedAt:text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),

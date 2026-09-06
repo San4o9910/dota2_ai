@@ -79,3 +79,29 @@ check (0high/critical,5moderate,1low); that is not a zero-advisory claim.
   geometry, honest fight totals, player attribution, raster integrity and
   independent coordinate anchors. No browser or live gameplay validation
   was performed for this correction.
+
+## One player per account — 2026-09-06
+
+- Nickname lookup binds a single immutable Dota account ID to the authenticated
+  platform account. Nicknames are compared without case, with exact Unicode NFC
+  spelling. Ambiguous or hidden identities fail before any analysis reservation.
+  This is a chosen coaching profile, not verified Steam account ownership.
+- Profile, Scan and analysis creation share an account lookup budget. Client
+  slot/hero/account overrides are rejected. A private match target controls
+  reservation, replay substitution, model execution and reading saved reports.
+- Only the target player's personal summary enters the model evidence. Shared
+  team, fight and economy facts remain context. Grounding also rejects disguised
+  references to another player's personal summary.
+- Replay player identities are stored separately from shared normalized data.
+  Steam64 values retain exact digits; names may be protobuf byte strings; hero
+  and team mapping never assumes metadata order equals game player slot.
+- The submitted replay has valid Source 2 framing and a readable end
+  metadata record identifying the requested nickname. This is not a completed
+  entity/combat parse or AI report. Four other provided match IDs remain
+  unverified because development-environment OpenDota requests were unavailable.
+- Migration 0012 adds profile/target storage and private replay identity data;
+  database guards prevent target switching. Runtime analysis/payment gates
+  remain unchanged.
+- Local verification: lint and generated types passed; 155 unit/SQLite cases
+  passed across the full run and targeted rerun after two stale test assertions
+  were corrected. The production build and all 5 package tests passed.

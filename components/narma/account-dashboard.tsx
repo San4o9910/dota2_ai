@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { setEstimatedMapData, useEstimatedMapData } from "@/components/narma/use-estimated-map-data";
+import type {DotaProfile} from "@/lib/dota/player-binding";
 
 type AccountSnapshot = {
   displayName: string;
@@ -23,6 +24,7 @@ type AccountDashboardProps = {
 
 export default function AccountDashboard({ displayName, email, signOutHref }: AccountDashboardProps) {
   const [account, setAccount] = useState<AccountSnapshot | null>(null);
+  const [dotaProfile,setDotaProfile]=useState<DotaProfile|null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const showEstimatedMapData = useEstimatedMapData();
   const accountIsActive = status === "ready" && account?.status === "active";
@@ -31,6 +33,8 @@ export default function AccountDashboard({ displayName, email, signOutHref }: Ac
 
   useEffect(() => {
     const controller = new AbortController();
+    fetch("/api/account/dota-player",{credentials:"same-origin",cache:"no-store",signal:controller.signal})
+      .then(async response=>{if(response.ok){const data=await response.json() as {profile:DotaProfile|null};setDotaProfile(data.profile);}}).catch(()=>{});
     fetch("/api/account", {
       method: "POST",
       credentials: "same-origin",
@@ -102,6 +106,13 @@ export default function AccountDashboard({ displayName, email, signOutHref }: Ac
             <Link className="price-button secondary" href="/pricing">Тарифы</Link>
             <Link className="price-button secondary" href="/">Открыть пример</Link>
           </div>
+        </section>
+
+        <section className="account-settings surface" aria-labelledby="dota-profile-title">
+          <h2 id="dota-profile-title">Профиль Dota 2</h2>
+          <p><strong>{dotaProfile?.nickname??"Игрок пока не закреплён"}</strong></p>
+          <p>Один аккаунт платформы разбирает игру одного игрока. Герой определяется автоматически для каждого матча.</p>
+          <Link className="price-button secondary" href="/analyses">{dotaProfile?"Разобрать мой матч":"Указать ник и матч"}</Link>
         </section>
 
         <section className="account-settings surface" aria-labelledby="account-settings-title">

@@ -41,7 +41,7 @@ test("server-rendered demo separates pricing and states its data limits", async 
   assert.doesNotMatch(html, /id="pricing"/);
   assert.match(html, /<img[^>]+src="\/maps\/7\.41\/game-map\.jpg"[^>]+alt="Игровая карта Dota 2, патч 7.41"/);
   assert.match(html, /Без replay \.dem не видно/);
-  assert.match(html, /Выберите героя\. Без выбора показан командный разбор/);
+  assert.match(html, /Пример разбора · Juggernaut/);
   assert.match(html, /интерпретация/);
   assert.match(html, /Туман войны недоступен в сводке/);
   assert.match(html, /role="region" aria-label="Прокручиваемый график[^<]+" tabindex="0"/);
@@ -58,18 +58,18 @@ test("server-rendered demo separates pricing and states its data limits", async 
   assert.doesNotMatch(html, /5[–-]10 минут/i);
 });
 
-test("anonymous Scan SSR starts with a bounded Match ID form and factual copy", async () => {
+test("account-bound Scan SSR starts with a bounded Match ID form and factual copy", async () => {
   const { default: NarmaScanFlow } = await vite.ssrLoadModule(
     "/components/narma/narma-scan-flow.tsx",
   );
   const html = renderToStaticMarkup(React.createElement(NarmaScanFlow));
 
-  assert.match(html, /Бесплатный NARMA Scan/);
+  assert.match(html, /Ник в Dota 2/);
   assert.match(html, /<form[^>]+aria-busy="false"/);
   assert.match(html, /id="scan-match-id"/);
   assert.match(html, /inputMode="numeric"/);
   assert.match(html, /maxLength="12"/);
-  assert.match(html, /Данные берутся из OpenDota/);
+  assert.match(html, /Персональный разбор закрепляется за одним игроком/);
   assert.match(html, /role="status" aria-live="polite" aria-atomic="true"/);
   assert.doesNotMatch(html, /кредит|оплат|модель/i);
   assert.doesNotMatch(html, /только демонстрационн/i);
@@ -124,13 +124,14 @@ test("dialog and account source contracts include keyboard and focus behavior", 
   assert.match(analysis, /href="\/replays"/);
   assert.doesNotMatch(analysis, /Black Hole|BKB|Blink|Requiem|Eclipse/);
   assert.match(scanFlow, /new AbortController\(\)/);
-  assert.match(scanFlow, /controllerRef\.current\?\.abort\(\)/);
+  assert.match(scanFlow, /controller\.current\?\.abort\(\)/);
   assert.match(scanFlow, /fetch\("\/api\/scan"/);
-  assert.match(scanFlow, /credentials: "same-origin"/);
+  assert.match(scanFlow, /credentials:\s*"same-origin"/);
   assert.match(scanFlow, /aria-live="polite"/);
-  assert.match(scanFlow, /fieldset className="scan-roster"/);
-  assert.match(scanFlow, /Scan не утверждает, что момент решил исход матча/);
-  assert.match(scanFlow, /Имена игроков и героев пока не загружаются/);
+  assert.doesNotMatch(scanFlow, /scan-roster|Другая перспектива/);
+  assert.match(scanFlow,/PlayerIdentityPanel/);
+  assert.match(scanFlow, /не установленная причина поражения/);
+  assert.match(scanFlow, /JSON.stringify\(\{matchId\}\)/);
   assert.doesNotMatch(analysis, /onMouseDown=/);
   assert.match(pricing, /aria-describedby="checkout-description"/);
   assert.match(pricing, /data-dialog-initial-focus/);

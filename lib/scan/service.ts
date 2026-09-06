@@ -3,11 +3,7 @@ import { fetchOpenDotaMatch } from "@/lib/analysis/opendota";
 import { buildEvidenceBundle } from "@/lib/analysis/normalizer";
 import { normalizeOpenDotaMatch } from "@/lib/analysis/normalizer";
 import { buildScanPreview } from "@/lib/analysis/scan-preview";
-import {
-  ScanRosterItemSchema,
-  type ScanRequest,
-  type ScanSuccessResponse,
-} from "@/lib/scan/contracts";
+import type { ScanReadyResponse } from "@/lib/scan/contracts";
 import type { ScanMatchCache } from "@/lib/scan/storage";
 
 export type ScanServiceDependencies = {
@@ -17,9 +13,9 @@ export type ScanServiceDependencies = {
 };
 
 export async function runScan(
-  request: ScanRequest,
+  request: {matchId:string;playerSlot:number},
   dependencies: ScanServiceDependencies,
-): Promise<ScanSuccessResponse> {
+): Promise<ScanReadyResponse> {
   let match = await dependencies.cache.get(request.matchId);
   if (!match) {
     const raw = await fetchOpenDotaMatch(request.matchId, {
@@ -30,26 +26,7 @@ export async function runScan(
     await dependencies.cache.put(match);
   }
 
-  if (request.playerSlot === undefined) {
-    const players = match.players.map((player) => ScanRosterItemSchema.parse({
-      playerSlot: player.playerSlot,
-      heroId: player.heroId,
-      side: player.isRadiant ? "radiant" : "dire",
-      kills: player.kills,
-      deaths: player.deaths,
-      assists: player.assists,
-    }));
-    return {
-      status: "choose_player",
-      match: {
-        matchId: match.matchId,
-        durationSeconds: match.durationSeconds,
-      },
-      players,
-    };
-  }
-
-  const artifacts = await buildEvidenceBundle(match);
+  const artifacts = await buildEvidenceBundle(match,request.playerSlot);
   return {
     status: "ready",
     preview: buildScanPreview(artifacts.evidenceBundle, request.playerSlot),

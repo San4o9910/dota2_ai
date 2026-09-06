@@ -6,7 +6,7 @@ tests. Keep checkout off until the separate release runbook is complete.
 
 ## Runtime and credentials
 
-The Site requires D1 `DB`, R2 `REPLAYS`, and migrations through `0011`.
+The Site requires D1 `DB`, R2 `REPLAYS`, and migrations through `0012`.
 Set a server-side `REPLAY_WORKER_TOKEN` of at least 32 random characters. Put the
 same value in the external process environment as `NARMA_REPLAY_WORKER_TOKEN`.
 Set `NARMA_SITE_ORIGIN` to the HTTPS origin. Never put these credentials in the
@@ -93,3 +93,17 @@ The current parser emits sampled hero positions, wards, buildings and economy.
 It does **not** supply exact team fog-of-war, dynamic tree state or player
 camera. Enemy positions are hidden in team-specific ward mode because their
 visibility is unknown. Do not describe this as a complete in-game observer.
+
+## Player identity binding
+
+The app stores one coaching identity per authenticated account. Nickname lookup
+chooses a stable Dota account ID; it does not authenticate Steam ownership.
+The application never accepts a client-selected player slot for new analyses.
+
+The replay adapter reads identity from the epilogue, preserving Steam64 using
+Node22 JSON reviver source text and BigInt. It matches unique hero plus team,
+never metadata roster order. It accepts both strings and validated Gson
+ByteString byte arrays. The worker callback stores this roster in private
+identity_payload, separate from the normalized match and model evidence.
+Unknown identity remains null; reprocess legacy replay results before using
+them for profile binding. Production replay execution is still unverified.

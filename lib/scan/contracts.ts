@@ -1,17 +1,14 @@
 import { z } from "zod";
+import { PlayerMatchRequestSchema } from "@/lib/dota/player-identity";
 
 import {
-  MATCH_ID_PATTERN,
   PlayerSlotSchema,
   TeamSideSchema,
 } from "@/lib/analysis/contracts";
 
 const nullableStat = z.number().int().nonnegative().safe().finite().nullable();
 
-export const ScanRequestSchema = z.object({
-  matchId: z.string().regex(MATCH_ID_PATTERN),
-  playerSlot: PlayerSlotSchema.optional(),
-}).strict();
+export const ScanRequestSchema = PlayerMatchRequestSchema;
 export type ScanRequest = z.infer<typeof ScanRequestSchema>;
 
 export const ScanRosterItemSchema = z.object({

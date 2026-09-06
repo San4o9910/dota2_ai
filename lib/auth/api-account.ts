@@ -4,6 +4,7 @@ import { getAnalysisRuntime } from "@/lib/analyses/runtime";
 import { isSameOriginRequest } from "@/lib/security/same-origin";
 import { BoundedJsonError } from "@/lib/security/bounded-json";
 import { ZodError } from "zod";
+import { AnalysisRouteError } from "@/lib/analyses/errors";
 
 export class AccountApiError extends Error { constructor(message:string,public status:number) {super(message);} }
 export async function requireApiAccount(request?:Request,create=false) {
@@ -18,6 +19,7 @@ export async function requireApiAccount(request?:Request,create=false) {
 }
 export function accountJson(body:unknown,status=200) {return Response.json(body,{status,headers:{"Cache-Control":"no-store"}});}
 export function accountApiError(error:unknown) {
+  if(error instanceof AnalysisRouteError) return accountJson({error:error.message,code:error.code},error.httpStatus);
   if(error instanceof AccountApiError) return accountJson({error:error.message},error.status);
   if(error instanceof ZodError || error instanceof BoundedJsonError) return accountJson({error:"Проверьте данные запроса."},400);
   const requestId=crypto.randomUUID();console.error(JSON.stringify({event:"account_api_failure",requestId}));

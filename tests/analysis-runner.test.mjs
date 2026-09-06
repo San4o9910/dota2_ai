@@ -56,6 +56,7 @@ function dependencies(overrides = {}) {
       apiKey: "server-secret-key-with-enough-length",
       model: "model-approved",
       allowedModels: ["model-approved"],
+      authorizeTarget:async (_user,matchId,playerSlot)=>({matchId,playerSlot,accountId:1000,heroId:1,nickname:"Test player"}),
       fetch: async (input, init) => {
         const url = String(input);
         if (url.includes("api.opendota.com")) return jsonResponse(makeOpenDotaMatch());

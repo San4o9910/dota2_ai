@@ -3,6 +3,9 @@ import { buildEvidenceBundle, normalizeOpenDotaMatch } from "@/lib/analysis/norm
 import { generateAnalysisReport } from "@/lib/analysis/openai";
 import { fetchOpenDotaMatch, type AnalysisFetch } from "@/lib/analysis/opendota";
 import { NARMA_COACHING_METHOD_VERSION } from "@/lib/coaching/method";
+import { D1PlayerBindingStore } from "@/lib/dota/player-binding";
+import { playerError, type PlayerTarget } from "@/lib/dota/player-identity";
+import { AnalysisRouteError } from "@/lib/analyses/errors";
 import {
   D1AnalysisStore,
   type ClaimAnalysisResult,
@@ -21,6 +24,7 @@ export type RunAnalysisDependencies = {
   apiKey: string;
   model: string;
   allowedModels: readonly string[];
+  authorizeTarget: (userId: string, matchId: string, playerSlot: number) => Promise<PlayerTarget>;
   fetch?: AnalysisFetch;
   signal?: AbortSignal;
 };
@@ -32,6 +36,7 @@ export type RunAnalysisResult = {
 };
 
 function safeRunnerFailure(error: unknown) {
+  if (error instanceof AnalysisRouteError) return {code:error.code,message:error.message,retryable:false};
   if (error instanceof AnalysisError) {
     return {
       code: error.code,
@@ -70,6 +75,7 @@ export async function runOwnedAnalysis(
   const started=Date.now();
   console.info(JSON.stringify({event:"analysis_attempt_started",jobId:analysisId,attempt:claim.attempt}));
   try {
+    const target = await dependencies.authorizeTarget(userId,claim.matchId,claim.playerSlot);
     let match = await dependencies.store.getReadyReplay?.(userId,claim.matchId) ?? await dependencies.cache.get(claim.matchId);
     if (!match) {
       const raw = await fetchOpenDotaMatch(claim.matchId, {
@@ -80,7 +86,9 @@ export async function runOwnedAnalysis(
       await dependencies.cache.put(match);
     }
 
-    const artifacts = await buildEvidenceBundle(match);
+    if (match.matchId !== target.matchId || !match.players.some(player => player.playerSlot === target.playerSlot && player.heroId === target.heroId))
+      throw playerError("DOTA_TARGET_MISMATCH","Данные реплея не совпали с закреплённым игроком.",403);
+    const artifacts = await buildEvidenceBundle(match,claim.playerSlot);
     const report = await generateAnalysisReport({
       apiKey: dependencies.apiKey,
       model: dependencies.model,
@@ -134,5 +142,6 @@ export function analysisRunnerDependencies(
     model: config.model,
     allowedModels: config.allowedModels,
     signal: options.signal,
+    authorizeTarget: (userId,matchId,playerSlot) => new D1PlayerBindingStore(db).assertTarget(userId,matchId,playerSlot),
   };
 }

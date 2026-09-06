@@ -1,3 +1,4 @@
+import {D1PlayerBindingStore} from "@/lib/dota/player-binding";
 import { after } from "next/server";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
 import { ANALYSIS_ID_PATTERN } from "@/lib/analyses/contracts";
@@ -53,6 +54,7 @@ export async function POST(
       apiKey: runtime.apiKey,
       model: runtime.model,
       allowedModels: runtime.allowedModels,
+      authorizeTarget:(userId,matchId,slot)=>new D1PlayerBindingStore(runtime.db!).assertTarget(userId,matchId,slot),
       signal: AbortSignal.timeout(25_000),
     });
     after(work);

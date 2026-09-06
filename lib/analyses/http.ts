@@ -12,6 +12,7 @@ import {
 import type { D1AnalysisStore } from "@/lib/analyses/store";
 import { BoundedJsonError, readBoundedJson } from "@/lib/security/bounded-json";
 import { isSameOriginRequest } from "@/lib/security/same-origin";
+import type { PlayerMatchRequest, PlayerTarget } from "@/lib/dota/player-identity";
 
 export const MAX_ANALYSIS_REQUEST_BYTES = 4 * 1024;
 
@@ -71,6 +72,7 @@ export async function handleCreateAnalysis(
     account: AnalysisAccount;
     store: D1AnalysisStore;
     acceptingJobs: boolean;
+    resolveTarget: (input: PlayerMatchRequest) => Promise<PlayerTarget>;
     requestId?: () => string;
   },
 ) {
@@ -113,10 +115,11 @@ export async function handleCreateAnalysis(
     const parsed = CreateAnalysisRequestSchema.safeParse(raw);
     if (!parsed.success) throw bodyError(parsed.error);
 
+    const target = await dependencies.resolveTarget(parsed.data);
     const created = await dependencies.store.create({
       userId: dependencies.account.id,
       matchId: parsed.data.matchId,
-      playerSlot: parsed.data.playerSlot,
+      playerSlot: target.playerSlot,
       idempotencyKey,
     });
     if (created.outcome === "idempotency_conflict") {
@@ -150,4 +153,3 @@ export async function handleCreateAnalysis(
 export function analysisJobResponse(job: PublicAnalysisJob, replayed = false) {
   return response({ job, replayed });
 }
-

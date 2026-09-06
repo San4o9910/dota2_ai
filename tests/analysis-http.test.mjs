@@ -32,6 +32,7 @@ function dependencies(overrides = {}) {
   return {
     account,
     acceptingJobs: true,
+    resolveTarget:async input=>({matchId:input.matchId,playerSlot:0,accountId:1000,heroId:1,nickname:"Test player"}),
     requestId: () => "analysis-request-test",
     store: {
       create: async () => ({
@@ -88,20 +89,19 @@ test("create handler validates origin, body and idempotency before reserving", a
     },
   };
   const invalidOrigin = await handleCreateAnalysis(request(
-    { matchId: "8963624400", playerSlot: 0 },
+    { matchId: "8963624400" },
     { headers: { Origin: "https://evil.test" } },
   ), dependencies({ store }));
   assert.equal(invalidOrigin.status, 403);
 
   const invalidKey = await handleCreateAnalysis(request(
-    { matchId: "8963624400", playerSlot: 0 },
+    { matchId: "8963624400" },
     { headers: { "Idempotency-Key": "short" } },
   ), dependencies({ store }));
   assert.equal(invalidKey.status, 400);
 
   const unknownField = await handleCreateAnalysis(request({
     matchId: "8963624400",
-    playerSlot: 0,
     accountId: "forged",
   }), dependencies({ store }));
   assert.equal(unknownField.status, 400);
@@ -109,7 +109,6 @@ test("create handler validates origin, body and idempotency before reserving", a
 
   const created = await handleCreateAnalysis(request({
     matchId: "8963624400",
-    playerSlot: 0,
   }), dependencies({ store }));
   assert.equal(created.status, 201);
   assert.equal(created.headers.get("location"), "/api/analyses/123e4567-e89b-42d3-a456-426614174000");
@@ -119,27 +118,23 @@ test("create handler validates origin, body and idempotency before reserving", a
 test("create handler returns bounded public errors for disabled, inactive and empty accounts", async () => {
   const disabled = await handleCreateAnalysis(request({
     matchId: "8963624400",
-    playerSlot: 0,
   }), dependencies({ acceptingJobs: false }));
   assert.equal(disabled.status, 503);
   assert.equal((await disabled.json()).error.code, "ANALYSIS_DISABLED");
 
   const inactive = await handleCreateAnalysis(request({
     matchId: "8963624400",
-    playerSlot: 0,
   }), dependencies({ account: { ...account, status: "deleted", deletedAt: "now" } }));
   assert.equal(inactive.status, 403);
 
   const empty = await handleCreateAnalysis(request({
     matchId: "8963624400",
-    playerSlot: 0,
   }), dependencies({ store: { create: async () => ({ outcome: "insufficient_entitlement" }) } }));
   assert.equal(empty.status, 402);
   assert.equal((await empty.json()).error.code, "ENTITLEMENT_REQUIRED");
 
   const oversized = await handleCreateAnalysis(request(JSON.stringify({
     matchId: "8963624400",
-    playerSlot: 0,
     padding: "x".repeat(MAX_ANALYSIS_REQUEST_BYTES),
   })), dependencies());
   assert.equal(oversized.status, 413);

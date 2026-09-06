@@ -282,7 +282,7 @@ export type EvidenceArtifactsV1 = {
   evidenceHash: string;
 };
 
-export async function buildEvidenceBundle(matchInput: NormalizedMatchV1): Promise<EvidenceArtifactsV1> {
+export async function buildEvidenceBundle(matchInput: NormalizedMatchV1, targetPlayerSlot?: number): Promise<EvidenceArtifactsV1> {
   const match = NormalizedMatchV1Schema.parse(matchInput);
   const normalizedMatchHash = await canonicalSha256(match);
   const evidence: EvidenceItemV1[] = [];
@@ -302,7 +302,7 @@ export async function buildEvidenceBundle(matchInput: NormalizedMatchV1): Promis
     summary: `${match.winner} won a ${match.durationSeconds}-second match.`,
   });
   evidence.push(teamEvidence(match, "radiant"), teamEvidence(match, "dire"));
-  evidence.push(...match.players.map(playerEvidence));
+  evidence.push(...match.players.filter(player => targetPlayerSlot === undefined || player.playerSlot === targetPlayerSlot).map(playerEvidence));
 
   for (const objective of match.objectives) {
     evidence.push({

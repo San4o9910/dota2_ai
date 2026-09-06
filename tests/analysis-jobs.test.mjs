@@ -21,6 +21,8 @@ const { buildEvidenceBundle, normalizeOpenDotaMatch } = await vite.ssrLoadModule
 
 function addUserAndGrant(sqlite, userId = "user-analysis", units = 1) {
   sqlite.prepare("INSERT INTO users (id, display_name) VALUES (?, ?)").run(userId, "Analyst");
+  sqlite.prepare("INSERT INTO dota_player_profiles(user_id,account_id,nickname,source_match_id) VALUES (?,1000,?,?)").run(userId,"Test player","8963624400");
+  for(const matchId of ["8963624400","8963624401","8963624402","8963624403"]) sqlite.prepare("INSERT INTO dota_match_targets(user_id,match_id,account_id,player_slot,hero_id) VALUES (?,?,1000,0,1)").run(userId,matchId);
   sqlite.prepare(`
     INSERT INTO entitlement_ledger (
       id, user_id, entry_type, resource, bucket_key, delta,
@@ -253,7 +255,7 @@ test("queued cancellation and an exhausted expired lease cannot strand a credit"
   const exhaustedJob = await store.create({
     userId: "user-analysis",
     matchId: "8963624401",
-    playerSlot: 1,
+    playerSlot: 0,
     idempotencyKey: "create:analysis:exhausted",
   });
   assert.equal(exhaustedJob.outcome, "created");
@@ -328,7 +330,7 @@ test("history is owner-scoped and cursor pagination is stable", async () => {
     const created = await store.create({
       userId: "user-analysis",
       matchId,
-      playerSlot: index,
+      playerSlot: 0,
       idempotencyKey: `create:history:${index}`,
     });
     assert.equal(created.outcome, "created");

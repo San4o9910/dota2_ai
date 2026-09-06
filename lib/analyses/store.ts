@@ -16,8 +16,10 @@ import {
   NormalizedMatchV1Schema,
   type NormalizedMatchV1,
 } from "@/lib/analysis/contracts";
-import { compileCoachingPresentation } from "@/lib/analysis/coaching-presentation";
+import { validateGroundedReport } from "@/lib/analysis/grounding";
 import { storageUnavailable } from "@/lib/analyses/errors";
+import { D1PlayerBindingStore } from "@/lib/dota/player-binding";
+import { IdentityRosterSchema } from "@/lib/dota/player-identity";
 
 const DEFAULT_HISTORY_LIMIT = 20;
 const MAX_HISTORY_LIMIT = 50;
@@ -193,6 +195,7 @@ export class D1AnalysisStore {
   }
 
   async create(input: CreateStoredAnalysisInput): Promise<CreateStoredAnalysisResult> {
+    await new D1PlayerBindingStore(this.db).assertTarget(input.userId,input.matchId,input.playerSlot);
     const requestHash = await canonicalSha256({
       matchId: input.matchId,
       playerSlot: input.playerSlot,
@@ -231,6 +234,7 @@ export class D1AnalysisStore {
             GROUP BY bucket_key
             HAVING SUM(delta) >= 1
           )
+          AND EXISTS (SELECT 1 FROM dota_match_targets t JOIN dota_player_profiles p ON p.user_id=t.user_id AND p.account_id=t.account_id WHERE t.user_id=?2 AND t.match_id=?3 AND t.player_slot=?4)
           AND (SELECT COUNT(*) FROM analysis_jobs WHERE user_id=?2 AND state IN ('queued','running')) < 2
           AND NOT EXISTS (SELECT 1 FROM analysis_jobs WHERE user_id=?2 AND match_id=?3 AND player_slot=?4 AND state='failed' AND updated_at>datetime(CURRENT_TIMESTAMP,'-15 minutes'))
           ON CONFLICT DO NOTHING
@@ -338,6 +342,8 @@ export class D1AnalysisStore {
         LIMIT 1
       `).bind(analysisId, userId).first<DetailRow>();
       if (!row) return null;
+      const target=await new D1PlayerBindingStore(this.db).target(userId,row.matchId);
+      if(!target || target.playerSlot!==row.playerSlot) return null;
       let report: AnalysisReportV1 | null = null;
       if (row.reportPayload !== null) {
         report = AnalysisReportV1Schema.parse(JSON.parse(row.reportPayload));
@@ -346,7 +352,7 @@ export class D1AnalysisStore {
       let match = row.normalizedPayload ? NormalizedMatchV1Schema.parse(JSON.parse(row.normalizedPayload)) : null;
       if (evidenceBundle && report) {
         if (evidenceBundle.matchId !== row.matchId || await canonicalSha256(evidenceBundle) !== report.evidenceHash) throw new Error("Saved evidence integrity mismatch");
-        report = compileCoachingPresentation(report,evidenceBundle);
+        report = await validateGroundedReport(report,evidenceBundle,{evidenceHash:report.evidenceHash,playerSlot:row.playerSlot});
       }
       if (match && (!evidenceBundle || match.matchId !== row.matchId || await canonicalSha256(match) !== evidenceBundle.normalizedMatchHash)) match = null;
       return AnalysisDetailSchema.parse({ job: publicJob(row), report, evidenceBundle, match });
@@ -356,8 +362,12 @@ export class D1AnalysisStore {
   }
 
   async getReadyReplay(userId:string,matchId:string):Promise<NormalizedMatchV1|null> {
-    const row=await this.db.prepare("SELECT normalized_payload AS payload FROM replay_uploads WHERE user_id=?1 AND match_id=?2 AND state='ready' ORDER BY updated_at DESC LIMIT 1").bind(userId,matchId).first<{payload:string|null}>();
+    const row=await this.db.prepare("SELECT normalized_payload AS payload,identity_payload AS identities FROM replay_uploads WHERE user_id=?1 AND match_id=?2 AND state='ready' ORDER BY updated_at DESC LIMIT 1").bind(userId,matchId).first<{payload:string|null;identities:string|null}>();
     if(!row?.payload)return null;
+    const target=await new D1PlayerBindingStore(this.db).target(userId,matchId);
+    if(!target||!row.identities)return null;
+    const identities=IdentityRosterSchema.parse(JSON.parse(row.identities));
+    if(identities.filter(player=>player.accountId===target.accountId).length!==1 || !identities.some(player=>player.accountId===target.accountId&&player.playerSlot===target.playerSlot&&player.heroId===target.heroId))return null;
     const match=NormalizedMatchV1Schema.parse(JSON.parse(row.payload));
     return match.matchId===matchId ? match : null;
   }

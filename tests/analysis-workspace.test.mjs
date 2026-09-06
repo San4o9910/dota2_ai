@@ -24,10 +24,10 @@ test("analysis workspace renders a labeled, gated form and truthful empty state"
   assert.match(html, /id="full-analysis-match-id"/);
   assert.match(html, /inputMode="numeric"/);
   assert.match(html, /maxLength="12"/);
-  assert.match(html, /<label for="full-analysis-player">Ваш герой<\/label>/);
+  assert.match(html, /<label[^>]+>Ник в Dota 2<\/label>/);
   assert.match(html, /<button type="submit" disabled=""/);
   assert.match(html, /Новые разборы пока недоступны/);
-  assert.match(html, /Выберите героя из матча/);
+  assert.doesNotMatch(html, /name="playerSlot"|Выберите героя/);
   assert.doesNotMatch(html, /анализируется прямо сейчас|оплата подтверждена/i);
 });
 

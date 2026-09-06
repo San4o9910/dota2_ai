@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PlayerMatchRequestSchema } from "@/lib/dota/player-identity";
 
 import {
   AnalysisReportV1Schema,
@@ -21,10 +22,7 @@ export const AnalysisJobStateSchema = z.enum([
 ]);
 export type AnalysisJobState = z.infer<typeof AnalysisJobStateSchema>;
 
-export const CreateAnalysisRequestSchema = z.object({
-  matchId: z.string().regex(MATCH_ID_PATTERN),
-  playerSlot: PlayerSlotSchema,
-}).strict();
+export const CreateAnalysisRequestSchema = PlayerMatchRequestSchema;
 export type CreateAnalysisRequest = z.infer<typeof CreateAnalysisRequestSchema>;
 
 export const AnalysisFailureSchema = z.object({

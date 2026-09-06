@@ -1,4 +1,5 @@
 export type AnalysisRouteErrorCode =
+  | `DOTA_${string}`
   | "ANALYSIS_RATE_LIMITED"
   | "ACCOUNT_INACTIVE"
   | "ANALYSIS_BUSY"
@@ -97,4 +98,3 @@ export function errorEnvelope(
     },
   };
 }
-

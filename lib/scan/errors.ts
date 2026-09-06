@@ -8,7 +8,7 @@ export type ScanErrorCode =
 
 export type ScanErrorEnvelope = {
   error: {
-    code: ScanErrorCode | import("@/lib/analysis/errors").AnalysisErrorCode;
+    code: ScanErrorCode | import("@/lib/analysis/errors").AnalysisErrorCode | import("@/lib/analyses/errors").AnalysisRouteErrorCode;
     message: string;
     retryable: boolean;
     requestId: string;

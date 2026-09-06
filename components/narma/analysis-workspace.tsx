@@ -13,8 +13,8 @@ import {
   Swords,
 } from "lucide-react";
 import Link from "next/link";
-import heroCatalog from "@/app/data/hero-catalog.json";
-import { NormalizedMatchV1Schema,type NormalizedMatchV1 } from "@/lib/analysis/contracts";
+import PlayerIdentityPanel from "@/components/narma/player-identity-panel";
+import type { PlayerTarget } from "@/lib/dota/player-identity";
 import ReportFollowup from "@/components/narma/report-followup";
 import MatchReplayPanel from "@/components/narma/match-replay-panel";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
@@ -142,9 +142,8 @@ export default function AnalysisWorkspace({
 }: AnalysisWorkspaceProps) {
   const [replayTime,setReplayTime] = useState(0);
   const [matchId, setMatchId] = useState(initialMatchId);
-  const [playerSlot, setPlayerSlot] = useState("");
-  const [roster,setRoster] = useState<NormalizedMatchV1|null>(null);
-  const [rosterLoading,setRosterLoading] = useState(false);
+  const [target,setTarget]=useState<PlayerTarget|null>(null);
+  const [bindingBusy,setBindingBusy]=useState(false);
   const [jobs, setJobs] = useState<PublicAnalysisJob[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [historyState, setHistoryState] = useState<RequestState>("loading");
@@ -269,7 +268,7 @@ export default function AnalysisWorkspace({
   const createAnalysis = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const normalizedMatchId = matchId.trim();
-    if(!roster || roster.matchId!==normalizedMatchId || playerSlot==="") {setNotice("Загрузите состав и выберите своего героя.");return;}
+    if(!target || target.matchId!==normalizedMatchId) {setNotice("Найдите свой профиль в этом матче.");return;}
     if (!/^\d{8,12}$/.test(normalizedMatchId)) {
       setNotice("Match ID должен содержать от восьми до двенадцати цифр.");
       return;
@@ -285,7 +284,7 @@ export default function AnalysisWorkspace({
           "Content-Type": "application/json",
           "Idempotency-Key": crypto.randomUUID(),
         },
-        body: JSON.stringify({ matchId: normalizedMatchId, playerSlot: Number(playerSlot) }),
+        body: JSON.stringify({ matchId: normalizedMatchId }),
       });
       const payload: unknown = await response.json();
       if (!response.ok) throw new Error(messageFromPayload(payload, "Не удалось создать анализ."));
@@ -338,18 +337,6 @@ export default function AnalysisWorkspace({
     }
   };
 
-  const loadRoster = async () => {
-    if(!/^[1-9]\d{7,11}$/.test(matchId)) {setNotice("Введите Match ID.");return;}
-    setRosterLoading(true);setNotice("");
-    try {
-      const response=await fetch(`/api/matches/${matchId}`);
-      const body=await response.json() as {match?:unknown;error?:string};
-      if(!response.ok)throw new Error(body.error);
-      const match=NormalizedMatchV1Schema.parse(body.match);setRoster(match);setPlayerSlot("");
-    }catch(error){setNotice(error instanceof Error ? error.message : "Не удалось загрузить состав.");}
-    finally{setRosterLoading(false);}
-  };
-
   const selectedJob = selected?.job ?? null;
   const selectedRetryGate = retryGate?.jobId === selectedJob?.id ? retryGate : null;
   const retryRemaining = selectedRetryGate
@@ -379,12 +366,13 @@ export default function AnalysisWorkspace({
       <div className="analysis-workspace-grid">
         <section className="analysis-create surface" aria-labelledby="create-analysis-title">
           <p className="eyebrow">Новый полный разбор</p>
-          <h1 id="create-analysis-title">Матч и перспектива игрока</h1>
+          <h1 id="create-analysis-title">Мой разбор матча</h1>
           <p>Выберите матч из OpenDota или загрузите реплей. В разбор попадут показатели этого матча и эпизоды для проверки.</p>
           <form onSubmit={createAnalysis} noValidate>
             <label htmlFor="full-analysis-match-id">Match ID</label>
             <input
               id="full-analysis-match-id"
+              disabled={bindingBusy}
               name="matchId"
               inputMode="numeric"
               autoComplete="off"
@@ -394,20 +382,15 @@ export default function AnalysisWorkspace({
               aria-describedby="full-analysis-help"
               onChange={(event) => {
                 setMatchId(event.target.value.replace(/\D/g, "").slice(0, 12));
-                setNotice("");setRoster(null);setPlayerSlot("");
+                setNotice("");setTarget(null);
               }}
               placeholder="8963624400"
             />
             <small id="full-analysis-help">От восьми до двенадцати цифр из клиента Dota&nbsp;2.</small>
 
-            <button type="button" disabled={rosterLoading} onClick={()=>void loadRoster()}>{rosterLoading ? "Загружаем состав…" : "Загрузить состав матча"}</button>
-            <label htmlFor="full-analysis-player">Ваш герой</label>
-            <select id="full-analysis-player" name="playerSlot" value={playerSlot} disabled={!roster} onChange={event=>setPlayerSlot(event.target.value)}>
-              <option value="">Выберите героя из матча</option>
-              {roster?.players.map(player=><option key={player.playerSlot} value={player.playerSlot}>{player.isRadiant ? "Radiant" : "Dire"} · {(heroCatalog as Record<string,{name:string}>)[String(player.heroId)]?.name ?? `Герой ${player.heroId}`}</option>)}
-            </select>
+            <PlayerIdentityPanel matchId={matchId} onResolved={setTarget} onBusyChange={setBindingBusy} />
 
-            <button type="submit" disabled={!acceptingJobs || createState === "loading" || !roster || playerSlot===""}>
+            <button type="submit" disabled={!acceptingJobs || createState === "loading" || !target || target.matchId!==matchId}>
               {createState === "loading"
                 ? <><LoaderCircle className="spin" aria-hidden="true" /> Резервируем разбор…</>
                 : <>Создать задание <ChevronRight aria-hidden="true" /></>}
@@ -438,7 +421,7 @@ export default function AnalysisWorkspace({
                 aria-current={selectedJob?.id === job.id ? "true" : undefined}
                 onClick={() => void loadDetail(job.id)}
               >
-                <span><strong>Матч {job.matchId}</strong><small>Слот {job.playerSlot} · {formatDate(job.createdAt)}</small></span>
+                <span><strong>Матч {job.matchId}</strong><small>Мой игрок · {formatDate(job.createdAt)}</small></span>
                 <span className={`analysis-state ${job.state}`}>{STATE_LABELS[job.state]}</span>
               </button>
             ))}

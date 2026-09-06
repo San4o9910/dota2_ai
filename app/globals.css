@@ -1045,3 +1045,9 @@ footer { font-size: 12px; }
 .map-image-credit { color:var(--muted);font-size:11px;line-height:1.5; }
 .map-image-credit a { text-decoration:underline;text-underline-offset:2px; }
 .replay-building.destroyed { opacity:1;border-style:solid;background:#181a1ef0;color:#f1b0a8; }
+.player-identity-panel { display: grid; gap: .65rem; margin-block: 1rem; min-width: 0; }
+.player-identity-panel label { font-size: 1rem; font-weight: 600; }
+.player-identity-panel input { width: 100%; min-height: 48px; border: 1px solid #3b4851; border-radius: 8px; padding: .75rem; color: #edf0ef; background: #151d23; font-size: 1rem; }
+.player-identity-panel input[readonly] { border-color: #4f7160; }
+.player-identity-panel .field-help, .player-identity-result small { font-size: .875rem; line-height: 1.55; color: #b9c3c9; }
+.player-identity-result { padding: .85rem; border-left: 3px solid #8eb397; background: #1a2824; font-size: 1rem; line-height: 1.6; }

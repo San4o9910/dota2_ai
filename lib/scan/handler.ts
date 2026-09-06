@@ -9,6 +9,8 @@ import {
 } from "@/lib/scan/storage";
 import { BoundedJsonError, readBoundedJson } from "@/lib/security/bounded-json";
 import { isSameOriginRequest } from "@/lib/security/same-origin";
+import { AnalysisRouteError } from "@/lib/analyses/errors";
+import type { PlayerMatchRequest, PlayerTarget } from "@/lib/dota/player-identity";
 
 export const MAX_SCAN_REQUEST_BYTES = 4 * 1024;
 
@@ -17,6 +19,7 @@ export type ScanHandlerDependencies = ScanServiceDependencies & {
   rateLimitSecret: string;
   now?: () => number;
   requestId?: () => string;
+  resolveTarget: (input:PlayerMatchRequest) => Promise<PlayerTarget>;
 };
 
 function response(
@@ -66,7 +69,7 @@ function safeAnalysisStatus(error: AnalysisError): number {
 }
 
 function errorResponse(error: unknown, requestId: string): Response {
-  const safeError = error instanceof ScanRouteError || error instanceof AnalysisError
+  const safeError = error instanceof ScanRouteError || error instanceof AnalysisError || error instanceof AnalysisRouteError
     ? error
     : scanUnavailable(error);
   const status = safeError instanceof AnalysisError
@@ -129,7 +132,8 @@ export async function handleScanPost(
     const parsed = ScanRequestSchema.safeParse(raw);
     if (!parsed.success) throw routeErrorFromBody(parsed.error);
 
-    const result = await runScan(parsed.data, {
+    const target = await dependencies.resolveTarget(parsed.data);
+    const result = await runScan({matchId:parsed.data.matchId,playerSlot:target.playerSlot}, {
       cache: dependencies.cache,
       fetch: dependencies.fetch,
       signal: request.signal,

@@ -78,6 +78,9 @@ export async function validateGroundedReport(
       throw groundingFailure("Ответ модели ссылается на неизвестное доказательство.");
     }
     const knownEvidence = referenced.filter((evidence) => evidence !== undefined);
+    if (playerSlot !== null && knownEvidence.some(evidence => evidence.kind === "player" && evidence.playerSlot !== playerSlot)) {
+      throw groundingFailure("Персональный разбор не может использовать показатели другого игрока как ваши.");
+    }
     for (const claim of item.claims) {
       if (!item.evidenceIds.includes(claim.evidenceId)) {
         throw groundingFailure("Числовое утверждение не ссылается на указанное доказательство.");

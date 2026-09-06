@@ -4,6 +4,7 @@ import { analysisErrorResponse, handleCreateAnalysis } from "@/lib/analyses/http
 import { getAnalysisRuntime } from "@/lib/analyses/runtime";
 import { decodeAnalysisCursor, D1AnalysisStore } from "@/lib/analyses/store";
 import { getCurrentAccount, getOrCreateCurrentAccount } from "@/lib/auth/current-account";
+import { D1PlayerBindingStore } from "@/lib/dota/player-binding";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
       account,
       store: new D1AnalysisStore(runtime.db),
       acceptingJobs: runtime.acceptingJobs,
+      resolveTarget: input => new D1PlayerBindingStore(runtime.db!).resolve(account.id,input,{signal:request.signal}),
       requestId: () => requestId,
     });
   } catch (error) {
@@ -86,4 +88,3 @@ export async function GET(request: Request) {
     return analysisErrorResponse(error, requestId);
   }
 }
-

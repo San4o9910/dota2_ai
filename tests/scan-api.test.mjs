@@ -79,6 +79,7 @@ function allowRateLimiter(overrides = {}) {
 function handlerDependencies(overrides = {}) {
   return {
     cache: memoryCache(),
+    resolveTarget:async input=>({matchId:input.matchId,playerSlot:0,accountId:1000,heroId:1,nickname:"Test player"}),
     rateLimiter: allowRateLimiter(),
     rateLimitSecret: RATE_SECRET,
     requestId: () => REQUEST_ID,
@@ -240,7 +241,7 @@ test("connecting identity comes only from CF-Connecting-IP and is HMACed", async
   assert.equal((await bodyOf(noCloudflareIdentity)).error.code, "SCAN_UNAVAILABLE");
 });
 
-test("first stage fetches only the fixed OpenDota GET route and returns exactly ten safe players", async () => {
+test("account-bound Scan fetches the fixed OpenDota route and returns one target preview", async () => {
   const upstream = makeOpenDotaMatch();
   upstream.players[0].kills = null;
   let providerRequest;
@@ -258,15 +259,11 @@ test("first stage fetches only the fixed OpenDota GET route and returns exactly 
   assert.equal(providerRequest.url, `https://api.opendota.com/api/matches/${MATCH_ID}`);
   assert.equal(providerRequest.init.method, "GET");
   assert.equal(providerRequest.init.redirect, "error");
-  assert.deepEqual(Object.keys(body).sort(), ["match", "players", "status"]);
-  assert.deepEqual(body.match, { matchId: MATCH_ID, durationSeconds: 1_800 });
-  assert.equal(body.status, "choose_player");
-  assert.equal(body.players.length, 10);
-  assert.deepEqual(Object.keys(body.players[0]).sort(), [
-    "assists", "deaths", "heroId", "kills", "playerSlot", "side",
-  ]);
-  assert.deepEqual(body.players.map((player) => player.playerSlot), [0, 1, 2, 3, 4, 128, 129, 130, 131, 132]);
-  assert.equal(body.players[0].kills, null);
+  assert.deepEqual(Object.keys(body).sort(), ["preview", "status"]);
+  assert.equal(body.status, "ready");
+  assert.equal(body.preview.playerSlot,0);
+  assert.equal(body.preview.matchId,MATCH_ID);
+  assert.equal(body.players,undefined);
   const serialized = JSON.stringify(body);
   for (const forbidden of ["personaname", "account_id", "SECRET PLAYER", "SECRET CHAT", "chat"]) {
     assert.equal(serialized.includes(forbidden), false, `response leaked ${forbidden}`);
@@ -274,7 +271,7 @@ test("first stage fetches only the fixed OpenDota GET route and returns exactly 
   assert.equal(cache.puts.length, 1);
 });
 
-test("second stage returns exactly one existing deterministic ScanPreview", async () => {
+test("repeated scans return the same deterministic target preview", async () => {
   const normalized = normalizeOpenDotaMatch(OpenDotaMatchSchema.parse(makeOpenDotaMatch()));
   const cache = memoryCache(normalized);
   let providerCalls = 0;
@@ -282,8 +279,8 @@ test("second stage returns exactly one existing deterministic ScanPreview", asyn
     cache,
     fetch: async () => { providerCalls += 1; throw new Error("cache should prevent fetch"); },
   });
-  const first = await handleScanPost(request({ matchId: MATCH_ID, playerSlot: 0 }), dependencies);
-  const second = await handleScanPost(request({ matchId: MATCH_ID, playerSlot: 0 }), dependencies);
+  const first = await handleScanPost(request({ matchId: MATCH_ID }), dependencies);
+  const second = await handleScanPost(request({ matchId: MATCH_ID }), dependencies);
   const left = await bodyOf(first);
   const right = await bodyOf(second);
 
@@ -499,13 +496,15 @@ test("cache and atomic counter SQL execute against the migrated SQLite contract"
   }
 });
 
-test("Scan implementation has no OpenAI, entitlement, account, or billing dependency", async () => {
+test("Scan preview avoids OpenAI and billing while requiring server identity resolution", async () => {
   const files = [
     "app/api/scan/route.ts",
     "lib/scan/handler.ts",
     "lib/scan/service.ts",
     "lib/scan/storage.ts",
   ];
+  const route = await readFile(new URL("../app/api/scan/route.ts",import.meta.url),"utf8");
+  assert.match(route,/requireApiAccount\(request,true\)/);
   const source = (await Promise.all(files.map((file) => readFile(new URL(`../${file}`, import.meta.url), "utf8")))).join("\n");
   for (const forbidden of ["lib/analysis/openai", "lib/billing/", "entitlement", "getChatGPTUser", "account_id", "personaname"]) {
     assert.equal(source.includes(forbidden), false, `Scan runtime depends on ${forbidden}`);
