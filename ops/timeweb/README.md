@@ -71,8 +71,8 @@ and explicitly keeps the worker stopped. `/livez` reports process liveness;
 Gemini inference works. Inference budgets are still request-count limits, not a
 global monetary cap. Do not enable an unattended queue before adding that cap.
 
-Outstanding after bootstrap: a Gemini image test from the VPS, private offserver
-backup/restore, domain and verified HTTPS, full website/auth/data migration from
+Outstanding after bootstrap: private offserver backup/restore, domain and
+verified HTTPS, full website/auth/data migration from
 Sites, exact `.dem` renderer integration and in-game quality validation. A green
 deployment is evidence for private infrastructure readiness only.
 
@@ -88,9 +88,45 @@ deployment is evidence for private infrastructure readiness only.
 - [Application CI](https://github.com/San4o9910/dota2_ai/actions/runs/34062124912)
   passed lint, type checking, tests, build, package checks and advisory lookup.
 - The first managed VM was created and its public IPv4 attached. Subsequent
-  attempts reuse that VM and address. SSH access was verified. These events
-  do not by themselves establish a running database or application.
+  attempts reuse that VM and address. [The deployment at 22:05 UTC](https://github.com/San4o9910/dota2_ai/actions/runs/34062851589)
+  passed on Timeweb: PostgreSQL 17, schema migrations, writable media and the
+  private API `/readyz`. The same PostgreSQL/API startup also passed in an
+  isolated GitHub runner before deployment. The public website remains on Sites.
+- [The final Timeweb check](https://github.com/San4o9910/dota2_ai/actions/runs/34063236763)
+  passed at 22:12 UTC on release `230bda147815d95401ca70b3f0d97ab2fb276750`.
+  A one-off worker container sent exactly four synthetic JPEGs to Gemini from
+  the VPS and verified all four frame IDs without invented player findings.
+  Usage: 4,825 input, 83 output and 151 thought tokens (5,059 total), one call.
+  The one-off container was removed; the unattended worker remains stopped.
+  An attempted-call record on the VPS prevents automatic repeats after an
+  ambiguous result. This is not a substitute for the global platform budget.
+- Across the runner and VPS checks, two inference requests were made. At the
+  published 2026 Standard rates their calculated token cost is $0.00904125 in
+  total; actual billing, credits and taxes must be checked with Google. These
+  synthetic checks do not establish match-analysis or coaching quality.
+  Rate source: https://ai.google.dev/gemini-api/docs/pricing
 - The 2,000 RUB Gemini test allowance is a total allowance, separate from
   recurring Timeweb charges. No global monetary limiter is implemented yet;
   unattended analysis remains disabled. A full match's cost must be measured
   on a real video fragment before accepting full-match jobs.
+
+## Operator status checks
+
+Deployment progress and sanitized failure codes are in the **Timeweb pilot
+deployment** GitHub Actions run. The API writes a generated request ID, route
+template, status and duration; it omits tokens, bodies, queries and raw paths.
+Docker rotates each service's logs at 10 MiB with three files retained.
+
+On the VPS console, inspect the deployed release without displaying secrets:
+
+```bash
+cd /opt/narma/current/services/video
+docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env ps --all
+docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env logs --tail 100 api
+curl --fail http://127.0.0.1:8080/readyz
+```
+
+Never print `video.env`, unfiltered `docker inspect` or the rendered Compose
+configuration into public logs. The database has no host port and the API is
+bound to loopback only. Domain/TLS, offserver backup/restore and full website,
+account and data migration remain launch gates; this is a private test server.
