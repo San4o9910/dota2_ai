@@ -1,0 +1,51 @@
+[
+  {
+    "artifact": "clarity-4.0.1",
+    "bytes": 595548,
+    "sha256": "445c129ddadf2906972108d82aa73b6e152b21ed3bfe1ed62612ec6f39ea9de8",
+    "url": "https://repo.maven.apache.org/maven2/com/skadistats/clarity/4.0.1/clarity-4.0.1.jar"
+  },
+  {
+    "artifact": "clarity-protobuf-6.1",
+    "bytes": 8606855,
+    "sha256": "021c45dbad3fe46dc99b3753db2f68df96fdc6cafbc7386e46684df5aca149ce",
+    "url": "https://repo.maven.apache.org/maven2/com/skadistats/clarity-protobuf/6.1/clarity-protobuf-6.1.jar"
+  },
+  {
+    "artifact": "fastutil-core-8.5.12",
+    "bytes": 6428331,
+    "sha256": "f31c20f5b06312f3d5e06e6160a32e274d819aa6cebf27528b26b6b5c0c1df19",
+    "url": "https://repo.maven.apache.org/maven2/it/unimi/dsi/fastutil-core/8.5.12/fastutil-core-8.5.12.jar"
+  },
+  {
+    "artifact": "snappy-java-1.1.10.4",
+    "bytes": 2112099,
+    "sha256": "55b30c94e5c4cc2d4b6976916098d0678a8a6cc7427fa8c875621bd94e731ac8",
+    "url": "https://repo.maven.apache.org/maven2/org/xerial/snappy/snappy-java/1.1.10.4/snappy-java-1.1.10.4.jar"
+  },
+  {
+    "artifact": "slf4j-api-2.0.7",
+    "bytes": 63635,
+    "sha256": "5d6298b93a1905c32cda6478808ac14c2d4a47e91535e53c41f7feeb85d946f4",
+    "url": "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-api/2.0.7/slf4j-api-2.0.7.jar"
+  },
+  {
+    "artifact": "slf4j-simple-2.0.7",
+    "bytes": 15972,
+    "sha256": "50eae3f1cc9a78a970970518e005d3f43d5cd3262d234f47ebdf3ca3f8bc01a7",
+    "url": "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-simple/2.0.7/slf4j-simple-2.0.7.jar"
+  },
+  {
+    "artifact": "gson-2.13.2",
+    "bytes": 289901,
+    "sha256": "dd0ce1b55a3ed2080cb70f9c655850cda86c206862310009dcb5e5c95265a5e0",
+    "url": "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.13.2/gson-2.13.2.jar"
+  },
+  {
+    "artifact": "ecj-3.37.0",
+    "bytes": 3257207,
+    "sha256": "cde026ff966b48b5e5f148b6f041ceff3cf4f85cf75155f4ec0f40e4ee14b545",
+    "url": "https://repo.maven.apache.org/maven2/org/eclipse/jdt/ecj/3.37.0/ecj-3.37.0.jar",
+    "buildOnly": true
+  }
+]

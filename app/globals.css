@@ -1065,5 +1065,8 @@ footer { font-size: 12px; }
 .player-identity-panel label { font-size: 1rem; font-weight: 600; }
 .player-identity-panel input,.player-identity-panel select { width: 100%; min-width:0; min-height: 48px; border: 1px solid #3b4851; border-radius: 8px; padding: .75rem; color: #edf0ef; background: #151d23; font-size: 1rem; }
 .player-identity-panel input[readonly] { border-color: #4f7160; }
+.video-results video { display:block;width:100%;max-height:70vh;margin:1rem 0;background:#080c0a; }
+.video-finding { border-top:1px solid var(--border);padding:1rem 0; }
+.video-finding p { max-width:80ch; }
 .player-identity-panel .field-help, .player-identity-result small { font-size: .875rem; line-height: 1.55; color: #b9c3c9; }
 .player-identity-result { padding: .85rem; border-left: 3px solid #8eb397; background: #1a2824; font-size: 1rem; line-height: 1.6; }

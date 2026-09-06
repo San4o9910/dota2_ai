@@ -1,0 +1,67 @@
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: narma
+      POSTGRES_USER: narma
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U narma -d narma"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    build: .
+    command: [python, -m, narma_video.db]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+    depends_on:
+      db: {condition: service_healthy}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  api:
+    build: .
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      VIDEO_SERVICE_TOKEN: ${VIDEO_SERVICE_TOKEN:?Set VIDEO_SERVICE_TOKEN}
+      VIDEO_STORAGE_PATH: /var/lib/narma/video
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: [media:/var/lib/narma/video]
+    tmpfs: [/tmp:size=64m,mode=1777]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    cpus: 1
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+  worker:
+    build: .
+    command: [python, -m, narma_video.worker]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      VIDEO_STORAGE_PATH: /var/lib/narma/video
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:?Select a supported vision model}
+      VIDEO_FRAME_BUDGET: ${VIDEO_FRAME_BUDGET:-3600}
+      VIDEO_REQUEST_BUDGET: ${VIDEO_REQUEST_BUDGET:-250}
+      VIDEO_OWNER_DAILY_REQUEST_BUDGET: ${VIDEO_OWNER_DAILY_REQUEST_BUDGET:-1000}
+    volumes: [media:/var/lib/narma/video]
+    tmpfs: [/tmp:size=192m,mode=1777]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 128
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+volumes:
+  database:
+  media:

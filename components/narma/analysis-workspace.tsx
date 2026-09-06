@@ -362,6 +362,7 @@ export default function AnalysisWorkspace({
           <small>ПОЛНЫЕ РАЗБОРЫ</small>
         </Link>
         <Link className="analysis-back" href="/replays">Загрузить .dem</Link>
+        <Link className="analysis-back" href="/videos">Разобрать видео</Link>
         <Link className="analysis-back" href="/account"><ArrowLeft size={17} /> Аккаунт</Link>
       </header>
 

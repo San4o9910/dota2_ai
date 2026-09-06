@@ -11,6 +11,8 @@ declare namespace Cloudflare {
     DB?: D1Database;
     REPLAYS?: R2Bucket;
     REPLAY_WORKER_TOKEN?: string;
+    VIDEO_SERVICE_ORIGIN?: string;
+    VIDEO_SERVICE_TOKEN?: string;
     APP_ENVIRONMENT?: string;
     APP_ORIGIN?: string;
     SCAN_RUNTIME_ENABLED?: string;

@@ -29,6 +29,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!services/video/.env.example
+__pycache__/
+.pytest_cache/
+*.pyc
 
 # vercel
 .vercel
