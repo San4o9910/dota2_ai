@@ -138,10 +138,10 @@ function openDotaFailure(
   });
 }
 
-export async function fetchOpenDotaMatch(
+async function fetchOpenDotaMatchPayload(
   matchIdInput: string,
   options: FetchOpenDotaMatchOptions = {},
-): Promise<OpenDotaMatch> {
+): Promise<unknown> {
   const matchId = parseMatchId(matchIdInput);
   const fetchImplementation = options.fetch ?? globalThis.fetch;
   if (typeof fetchImplementation !== "function") {
@@ -209,7 +209,41 @@ export async function fetchOpenDotaMatch(
       if (options.signal?.aborted) throw analysisCancelled(error);
       throw error;
     }
-    const parsed = OpenDotaMatchSchema.safeParse(raw);
+    return raw;
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+// Identity lookup needs a complete roster, not parsed combat/economy data.
+// Explicit slots remain authoritative even if the provider changes row order.
+const OpenDotaRosterSchema = z.object({
+  match_id: z.union([z.string().regex(MATCH_ID_PATTERN), z.number().int().positive().safe()]),
+  players: z.array(z.object({
+    player_slot: PlayerSlotSchema,
+    hero_id: z.number().int().positive().max(1024),
+  }).passthrough()).length(10),
+}).refine(match => new Set(match.players.map(player => player.player_slot)).size === 10,
+  "player slots must be unique");
+
+export async function fetchOpenDotaRoster(
+  matchIdInput: string,
+  options: FetchOpenDotaMatchOptions = {},
+) {
+  const matchId = parseMatchId(matchIdInput);
+  const parsed = OpenDotaRosterSchema.safeParse(await fetchOpenDotaMatchPayload(matchId, options));
+  if (!parsed.success || String(parsed.data.match_id) !== matchId) {
+    throw openDotaFailure("OPENDOTA_INVALID_RESPONSE", "OpenDota не вернул корректный состав этого матча.", false);
+  }
+  return parsed.data;
+}
+
+export async function fetchOpenDotaMatch(
+  matchIdInput: string,
+  options: FetchOpenDotaMatchOptions = {},
+): Promise<OpenDotaMatch> {
+    const matchId = parseMatchId(matchIdInput);
+    const parsed = OpenDotaMatchSchema.safeParse(await fetchOpenDotaMatchPayload(matchId, options));
     if (!parsed.success) {
       throw openDotaFailure(
         "OPENDOTA_INVALID_RESPONSE",
@@ -230,7 +264,4 @@ export async function fetchOpenDotaMatch(
       );
     }
     return parsed.data;
-  } finally {
-    timeout.cleanup();
-  }
 }

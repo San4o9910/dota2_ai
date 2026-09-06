@@ -52,8 +52,7 @@ test("renamed player is found by account ID; other matches fail before reserving
   await assert.rejects(new D1AnalysisStore(d1).create({userId:"owner",matchId:"8963624400",playerSlot:1,idempotencyKey:"forged:slot"}),error=>error.code==="DOTA_TARGET_MISMATCH");
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM analysis_jobs").get().n,0);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM entitlement_ledger").get().n,0);
-  const shared=sqlite.prepare("SELECT normalized_payload FROM source_matches WHERE match_id='8963624400'").get().normalized_payload;
-  assert.doesNotMatch(shared,/Player_0|account_id|personaname/);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM source_matches").get().n,0);
   sqlite.close();
 });
 test("analysis HTTP rejects client slots before any identity lookup or credit reservation",async()=>{

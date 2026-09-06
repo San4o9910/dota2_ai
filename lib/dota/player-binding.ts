@@ -1,6 +1,5 @@
-import { fetchOpenDotaMatch, type AnalysisFetch } from "@/lib/analysis/opendota";
-import { normalizeOpenDotaMatch } from "@/lib/analysis/normalizer";
-import { D1ScanMatchCache, D1FixedWindowRateLimiter } from "@/lib/scan/storage";
+import { fetchOpenDotaRoster, type AnalysisFetch } from "@/lib/analysis/opendota";
+import { D1FixedWindowRateLimiter } from "@/lib/scan/storage";
 import {canonicalSha256} from "@/lib/analysis/canonical-json";
 import { IdentityRosterSchema, extractIdentityRoster, selectIdentity, playerError, type PlayerMatchRequest, type PlayerTarget } from "@/lib/dota/player-identity";
 
@@ -37,9 +36,8 @@ export class D1PlayerBindingStore {
     let roster;
     if (replay) roster = IdentityRosterSchema.parse(JSON.parse(replay.identities));
     else {
-      const raw = await fetchOpenDotaMatch(input.matchId,options);
+      const raw = await fetchOpenDotaRoster(input.matchId,options);
       roster = extractIdentityRoster(raw.players);
-      await new D1ScanMatchCache(this.db).put(normalizeOpenDotaMatch(raw));
     }
     const selected = selectIdentity(roster,input.nickname,profile?.accountId);
     const nickname = selected.nickname?.trim() || profile?.nickname || input.nickname!;

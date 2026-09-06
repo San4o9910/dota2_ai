@@ -13,6 +13,8 @@ import type { D1AnalysisStore } from "@/lib/analyses/store";
 import { BoundedJsonError, readBoundedJson } from "@/lib/security/bounded-json";
 import { isSameOriginRequest } from "@/lib/security/same-origin";
 import type { PlayerMatchRequest, PlayerTarget } from "@/lib/dota/player-identity";
+import { AnalysisError } from "@/lib/analysis/errors";
+import { ScanRouteError } from "@/lib/scan/errors";
 
 export const MAX_ANALYSIS_REQUEST_BYTES = 4 * 1024;
 
@@ -33,7 +35,8 @@ export function analysisErrorResponse(
   error: unknown,
   requestId = crypto.randomUUID(),
 ) {
-  const safe = error instanceof AnalysisRouteError ? error : storageUnavailable(error);
+  const safe = error instanceof AnalysisRouteError || error instanceof AnalysisError || error instanceof ScanRouteError
+    ? error : storageUnavailable(error);
   const headers = safe.retryAfterSeconds === undefined
     ? undefined
     : { "Retry-After": String(safe.retryAfterSeconds) };

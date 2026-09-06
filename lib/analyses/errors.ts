@@ -86,7 +86,7 @@ export type AnalysisRouteErrorEnvelope = {
 };
 
 export function errorEnvelope(
-  error: Pick<AnalysisRouteError, "code" | "message" | "retryable">,
+  error: { code: string; message: string; retryable: boolean },
   requestId: string,
 ): AnalysisRouteErrorEnvelope {
   return {

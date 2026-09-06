@@ -5,6 +5,8 @@ import { isSameOriginRequest } from "@/lib/security/same-origin";
 import { BoundedJsonError } from "@/lib/security/bounded-json";
 import { ZodError } from "zod";
 import { AnalysisRouteError } from "@/lib/analyses/errors";
+import { AnalysisError } from "@/lib/analysis/errors";
+import { ScanRouteError } from "@/lib/scan/errors";
 
 export class AccountApiError extends Error { constructor(message:string,public status:number) {super(message);} }
 export async function requireApiAccount(request?:Request,create=false) {
@@ -19,9 +21,15 @@ export async function requireApiAccount(request?:Request,create=false) {
 }
 export function accountJson(body:unknown,status=200) {return Response.json(body,{status,headers:{"Cache-Control":"no-store"}});}
 export function accountApiError(error:unknown) {
-  if(error instanceof AnalysisRouteError) return accountJson({error:error.message,code:error.code},error.httpStatus);
+  if(error instanceof AnalysisRouteError || error instanceof AnalysisError || error instanceof ScanRouteError) {
+    const requestId=crypto.randomUUID();
+    if(error.httpStatus>=500) console.error(JSON.stringify({event:"account_api_failure",requestId,code:error.code,status:error.httpStatus}));
+    const response=accountJson({error:error.message,code:error.code,retryable:error.retryable,requestId},error.httpStatus);
+    if(error.retryAfterSeconds!==undefined)response.headers.set("Retry-After",String(error.retryAfterSeconds));
+    return response;
+  }
   if(error instanceof AccountApiError) return accountJson({error:error.message},error.status);
   if(error instanceof ZodError || error instanceof BoundedJsonError) return accountJson({error:"Проверьте данные запроса."},400);
-  const requestId=crypto.randomUUID();console.error(JSON.stringify({event:"account_api_failure",requestId}));
+  const requestId=crypto.randomUUID();console.error(JSON.stringify({event:"account_api_failure",requestId,code:"UNEXPECTED_ACCOUNT_ERROR",status:503}));
   return accountJson({error:"Не удалось сохранить изменения. Попробуйте ещё раз.",requestId},503);
 }

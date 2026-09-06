@@ -105,3 +105,21 @@ check (0high/critical,5moderate,1low); that is not a zero-advisory claim.
 - Local verification: lint and generated types passed; 155 unit/SQLite cases
   passed across the full run and targeted rerun after two stale test assertions
   were corrected. The production build and all 5 package tests passed.
+
+## Nickname lookup correction — 2026-09-06
+
+- Production logs confirmed 503 responses on the profile lookup endpoint; the
+  profile/target tables are present in the live database. The old error boundary
+  discarded dependency error codes, so those traces cannot identify the exact
+  OpenDota failure behind the reported request.
+- Profile lookup now validates only the requested match's complete player roster.
+  It does not require parsed combat statistics or populate the analysis cache.
+  Full analysis still requires its existing validated, parsed match data.
+- Account and analysis endpoints preserve safe provider error codes, messages
+  and retry headers. Server diagnostics include a code and request identifier;
+  provider response bodies, player identities and database details stay private.
+- Regression cases cover unparsed rosters, shuffled and invalid slots, wrong
+  matches, provider failures and timeouts, with no binding or credit reservation
+  on failure. Live OpenDota availability is separate from these local checks.
+- Verification passed: lint (two existing warnings), generated types, all 160
+  unit/SQLite cases, production build and all 5 package tests.
