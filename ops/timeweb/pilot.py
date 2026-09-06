@@ -16,6 +16,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from uuid import UUID
 
 from preflight import CheckError, NoRedirect, ORIGIN
 
@@ -96,6 +97,35 @@ def selected_project(cloud):
     raise CheckError("project_selection_required")
 
 
+def ensure_public_ip(cloud, server):
+    inventory = cloud.call("GET", "/api/v1/floating-ips")
+    ips = inventory.get("ips")
+    if not isinstance(ips, list) or inventory.get("meta", {}).get("total") != len(ips):
+        raise CheckError("floating_ip_inventory_incomplete")
+    attached = [item for item in ips if item.get("resource_type") == "server"
+                and item.get("resource_id") == server["id"]]
+    if len(attached) == 1:
+        event("existing_public_ip_binding", server_id=server["id"])
+        return
+    if attached:
+        raise CheckError("multiple_public_ip_bindings")
+    zone = server.get("availability_zone")
+    if zone != "nl-1":
+        raise CheckError("unexpected_server_availability_zone")
+    # Do not appropriate an address reserved for another purpose. A previous
+    # ambiguous/failed allocation must be reconciled before allocating again.
+    if any(item.get("availability_zone") == zone and item.get("resource_type") is None
+           and item.get("resource_id") is None for item in ips):
+        raise CheckError("unbound_public_ip_requires_reconciliation")
+    created = cloud.call("POST", "/api/v1/floating-ips", {
+        "availability_zone":zone, "is_ddos_guard":False})
+    ip_id = str(UUID(created["ip"]["id"]))
+    event("public_ip_created", ip_id=ip_id, server_id=server["id"])
+    cloud.call("POST", f"/api/v1/floating-ips/{ip_id}/bind", {
+        "resource_type":"server", "resource_id":server["id"]})
+    event("public_ip_binding_requested", ip_id=ip_id, server_id=server["id"])
+
+
 def main():
     cloud = Cloud()
     key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -168,11 +198,15 @@ runcmd:
                 cloud.call("POST", f"/api/v1/servers/{server_id}/ssh-keys", {"ssh_key_ids":[ssh_id]})
                 event("server_reused", server_id=server_id)
             host = None
+            ip_checked = False
             for attempt in range(50):
                 server = cloud.call("GET", f"/api/v1/servers/{server_id}")["server"]
                 host = address(server)
                 if host:
                     break
+                if server.get("status") == "on" and not ip_checked:
+                    ensure_public_ip(cloud, server)
+                    ip_checked = True
                 if attempt % 6 == 0:
                     event("waiting_for_public_ip", server_id=server_id)
                 time.sleep(10)
