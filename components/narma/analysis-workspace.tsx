@@ -29,6 +29,7 @@ import {
 
 type AnalysisWorkspaceProps = {
   initialMatchId?: string;
+  initialReplayId?: string;
   acceptingJobs: boolean;
   fulfillmentReady: boolean;
 };
@@ -137,6 +138,7 @@ function claimRows(item: AnalysisDetail["report"] extends infer Report
 
 export default function AnalysisWorkspace({
   initialMatchId = "",
+  initialReplayId = "",
   acceptingJobs,
   fulfillmentReady,
 }: AnalysisWorkspaceProps) {
@@ -388,7 +390,7 @@ export default function AnalysisWorkspace({
             />
             <small id="full-analysis-help">От восьми до двенадцати цифр из клиента Dota&nbsp;2.</small>
 
-            <PlayerIdentityPanel matchId={matchId} onResolved={setTarget} onBusyChange={setBindingBusy} />
+            <PlayerIdentityPanel matchId={matchId} initialReplayId={initialReplayId} onResolved={setTarget} onBusyChange={setBindingBusy} />
 
             <button type="submit" disabled={!acceptingJobs || createState === "loading" || !target || target.matchId!==matchId}>
               {createState === "loading"

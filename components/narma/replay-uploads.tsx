@@ -40,7 +40,7 @@ export default function ReplayUploads(){
       {!enabled&&<p>Хранилище реплеев пока не подключено к этой версии сайта.</p>}
       <p role="status">{notice}</p>
     </section>
-    <section className="surface replay-upload-panel"><h2>Ваши реплеи</h2>{uploads.length===0&&<p>Здесь появятся загруженные файлы.</p>}{uploads.map(item=><article key={item.id} className="replay-upload-row"><div><strong>{item.filename}</strong><p>{LABELS[item.state]??item.state} · {(item.sizeBytes/1024/1024).toFixed(1)} МБ</p></div>{item.state==="ready"&&<button type="button" onClick={()=>void open(item)}>Открыть карту</button>}<button type="button" disabled={busy} onClick={()=>void remove(item.id)}>Удалить</button></article>)}</section>
-    {detail&&<section className="surface replay-upload-panel"><MatchReplayPanel detail={detail} time={time} onSeek={setTime}/><Link href={`/analyses?match=${detail.job.matchId}`}>Выбрать героя и разобрать матч</Link></section>}
+    <section className="surface replay-upload-panel"><h2>Ваши реплеи</h2>{uploads.length===0&&<p>Здесь появятся загруженные файлы.</p>}{uploads.map(item=><article key={item.id} className="replay-upload-row"><div><strong>{item.filename}</strong><p>{LABELS[item.state]??item.state} · {(item.sizeBytes/1024/1024).toFixed(1)} МБ</p></div>{["uploaded","processing","ready","failed"].includes(item.state)&&item.filename.endsWith(".dem")&&<Link href={`/analyses?replay=${item.id}${item.matchId?`&match=${item.matchId}`:""}`}>Закрепить мой ник</Link>}{item.state==="ready"&&<button type="button" onClick={()=>void open(item)}>Открыть карту</button>}<button type="button" disabled={busy} onClick={()=>void remove(item.id)}>Удалить</button></article>)}</section>
+    {detail&&<section className="surface replay-upload-panel"><MatchReplayPanel detail={detail} time={time} onSeek={setTime}/><Link href={`/analyses?match=${detail.job.matchId}`}>Разобрать мой матч</Link></section>}
   </main>;
 }

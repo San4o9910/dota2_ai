@@ -164,6 +164,12 @@ async function fetchOpenDotaMatchPayload(
       });
     } catch (error) {
       if (options.signal?.aborted && !timeout.timedOut()) throw analysisCancelled(error);
+      // Log only a fixed category, never upstream bodies, URLs, player data or raw exception text.
+      const detail = error instanceof Error ? error.message.toLowerCase() : "";
+      const reason = timeout.timedOut() ? "timeout" : /dns|resolve|enotfound/.test(detail) ? "dns"
+        : /certificate|tls|ssl/.test(detail) ? "tls" : /redirect/.test(detail) ? "redirect"
+        : /illegal invocation/.test(detail) ? "runtime_receiver" : "network";
+      console.error(JSON.stringify({event:"opendota_transport_failure",reason}));
       throw openDotaFailure(
         "OPENDOTA_UNAVAILABLE",
         timeout.timedOut() ? "OpenDota не ответил вовремя." : "Не удалось связаться с OpenDota.",

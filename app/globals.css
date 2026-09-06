@@ -962,8 +962,15 @@ footer { font-size: 12px; }
 .replay-building::after,.replay-ward::after,.replay-camp::after { content:"";position:absolute;inset:-6px; }
 .replay-building.radiant { color:#9ee4a8; }
 .replay-building.dire { color:#ff9b8e; }
-.replay-building.destroyed { border-style:dashed;color:#d0d5d7;background:#14191ca8;opacity:.65;font-size:19px; }
-.replay-building.unknown { border-style:dotted;opacity:.7; }
+.replay-building { width:28px;height:24px;font-size:11px; }
+.replay-building.destroyed { border-style:dashed;color:#d0d5d7;background:#14191ce8; }
+.replay-building.unknown { border-style:solid;opacity:1; }
+.building-status { position:absolute;right:-7px;top:-8px;display:grid;place-items:center;width:14px;height:14px;border:1px solid currentColor;border-radius:50%;background:#101813;color:#e3e8df;font-size:11px; }
+.replay-building.offset-top { margin-top:-19px; }
+.replay-building.offset-bottom { margin-top:19px; }
+.replay-building.offset-top::before,.replay-building.offset-bottom::before { content:"";position:absolute;left:50%;width:1px;height:7px;background:currentColor;pointer-events:none; }
+.replay-building.offset-top::before { top:100%; }
+.replay-building.offset-bottom::before { bottom:100%; }
 .replay-building.ancient { width:27px;height:27px; }
 .replay-ward,.replay-camp { width:26px;height:26px;padding:0;border:0;border-radius:50%;background:none;box-shadow:none;filter:drop-shadow(0 1px 2px #000); }
 .replay-ward { z-index:4; }
@@ -990,7 +997,7 @@ footer { font-size: 12px; }
 .dynamic-events { display:flex;gap:8px;overflow:auto;padding:6px 0; }
 .dynamic-events button { flex-shrink:0;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:14px; }
 .training-save-status { font-size:14px;min-height:22px;color:var(--muted); }
-@media(max-width:600px) { .replay-building { width:18px;height:18px;font-size:11px; }.replay-ward { width:23px;height:23px; }.replay-camp { width:20px;height:20px; }.replay-map-toolbar { font-size:13px; } }
+@media(max-width:600px) { .replay-building { width:25px;height:22px;font-size:10px; }.replay-ward { width:23px;height:23px; }.replay-camp { width:20px;height:20px; }.replay-map-toolbar { font-size:13px; } }
 
 .tiled-map img {position:absolute;width:20%;height:20%;object-fit:fill;}
 
@@ -1056,7 +1063,7 @@ footer { font-size: 12px; }
 .replay-building.destroyed { opacity:1;border-style:solid;background:#181a1ef0;color:#f1b0a8; }
 .player-identity-panel { display: grid; gap: .65rem; margin-block: 1rem; min-width: 0; }
 .player-identity-panel label { font-size: 1rem; font-weight: 600; }
-.player-identity-panel input { width: 100%; min-height: 48px; border: 1px solid #3b4851; border-radius: 8px; padding: .75rem; color: #edf0ef; background: #151d23; font-size: 1rem; }
+.player-identity-panel input,.player-identity-panel select { width: 100%; min-width:0; min-height: 48px; border: 1px solid #3b4851; border-radius: 8px; padding: .75rem; color: #edf0ef; background: #151d23; font-size: 1rem; }
 .player-identity-panel input[readonly] { border-color: #4f7160; }
 .player-identity-panel .field-help, .player-identity-result small { font-size: .875rem; line-height: 1.55; color: #b9c3c9; }
 .player-identity-result { padding: .85rem; border-left: 3px solid #8eb397; background: #1a2824; font-size: 1rem; line-height: 1.6; }

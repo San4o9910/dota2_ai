@@ -8,6 +8,7 @@ export const PlayerMatchRequestSchema = z.object({
   matchId: z.string().regex(MATCH_ID_PATTERN),
   nickname: NicknameSchema.optional(),
 }).strict();
+export const ProfileBindingRequestSchema = PlayerMatchRequestSchema.extend({ replayId: z.string().uuid().optional() }).strict();
 export type PlayerMatchRequest = z.infer<typeof PlayerMatchRequestSchema>;
 export const IdentitySchema = z.object({
   playerSlot: PlayerSlotSchema,
@@ -34,7 +35,7 @@ export function extractIdentityRoster(players: Array<Record<string, unknown>>) {
     nickname: typeof player.personaname === "string" ? player.personaname.slice(0,128) : null,
   })));
 }
-export function selectIdentity(roster: PlayerIdentity[], nickname?: string, accountId?: number) {
+export function selectIdentity<T extends { nickname: string | null; accountId: number | null }>(roster: T[], nickname?: string, accountId?: number) {
   const matches = accountId === undefined
     ? roster.filter(player => player.nickname !== null && nicknameKey(player.nickname) === nicknameKey(nickname ?? ""))
     : roster.filter(player => player.accountId === accountId);

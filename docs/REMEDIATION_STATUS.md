@@ -1,4 +1,29 @@
-# Remediation status — 2026-09-05
+# Remediation status — 2026-09-06
+
+## Profile and map repair
+
+- The profile endpoint accepts an owned uploaded raw `.dem` as an alternative
+  to OpenDota. It reads a bounded Source 2 footer, decodes raw Snappy/protobuf,
+  checks the embedded match ID and binds the selected immutable account ID.
+  The roster stays private. Metadata order is never used as a player slot.
+- A successful metadata-only binding returns `target: null`; it does not mark
+  the replay ready, create an analysis target, or reserve a credit. Full parsing
+  or a valid OpenDota roster is still required to identify the canonical slot.
+- The upload page links to profile binding. The profile panel lets the user
+  choose OpenDota or their uploaded raw `.dem`. Uploading a file in chat does
+  not transfer it into the website's private replay bucket.
+- Tower labels retain T1/T2/T3/T4 after destruction. Unknown state uses a `?`
+  badge with a clickable label. Paired T4 labels are separated with leader lines.
+- The demo has placement-only ward records and incomplete building events;
+  it cannot truthfully display active ward lifetimes or all tower states.
+  The missing external replay worker and exact fog-of-war data remain blockers.
+- Production OpenDota transport failure was observed. A workerd experiment
+  ruled out the detached global-fetch hypothesis. Fixed-category transport logs
+  aid diagnosis without exposing player data or exception text. Live OpenDota
+  recovery is not claimed, and runtime flags remain disabled.
+- `youtube-full` supplies transcripts, not visual game understanding. A future
+  video pipeline can combine FFmpeg clips with Gemini video understanding and
+  verify observations against replay events; no such pipeline is deployed yet.
 
 The project remains a private pilot. It is not a certified paid production
 release. Version 4 was privately published with user authorization; the map

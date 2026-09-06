@@ -38,7 +38,9 @@ export default function ReplayMapView({data,time,perspective="all",structures=tr
           const state=buildingStateAt(b.key,data.buildings,time,data.buildingEventsComplete);
           const pos=worldToPercent(b.x,b.y);
           const label=`${b.side==="radiant" ? "Radiant" : "Dire"} · ${b.label} · ${state.state==="destroyed" ? `разрушена ${gameTimeLabel(state.destroyedAt!)}` : state.state==="standing" ? "стоит" : "нет полного журнала разрушений"}`;
-          return <button type="button" key={b.key} className={`replay-building ${b.side} ${state.state} ${b.kind}`} style={{left:`${pos.left}%`,top:`${pos.top}%`}} onClick={()=>setSelected(b.key)} title={label} aria-label={label} aria-pressed={selected===b.key}>{state.state==="destroyed" ? "×" : b.kind==="ancient" ? "A" : b.label.slice(1,2)}</button>;
+          const tier=b.kind==="ancient" ? "A" : b.label.split(" · ")[0];
+          const offset=b.key.includes("_tower4_") ? (b.key.endsWith("_top") ? "offset-top" : "offset-bottom") : "";
+          return <button type="button" key={b.key} className={`replay-building ${b.side} ${state.state} ${b.kind} ${offset}`} style={{left:`${pos.left}%`,top:`${pos.top}%`}} onClick={()=>setSelected(b.key)} title={label} aria-label={label} aria-pressed={selected===b.key}><span>{tier}</span>{state.state!=="standing"&&<span className="building-status" aria-hidden="true">{state.state==="destroyed" ? "×" : "?"}</span>}</button>;
         })}
         {!failed && visibleWards.map(w=>{
           const pos=worldToPercent(w.x,w.y);
@@ -51,7 +53,7 @@ export default function ReplayMapView({data,time,perspective="all",structures=tr
     </div>
     <div className="replay-map-legend">
       <span className="ward-radiant"><WardGlyph kind="observer"/>Radiant</span><span className="ward-dire"><WardGlyph kind="observer"/>Dire</span>
-      <span><WardGlyph kind="sentry"/>Sentry</span><span>× Разрушена</span>
+      <span><WardGlyph kind="sentry"/>Sentry</span><span>× Разрушена</span><span>? Состояние неизвестно</span>
       {camps&&<>{(["small","medium","large","ancient"] as const).map(tier=><span key={tier}><CampGlyph tier={tier}/>{CAMP_LABELS[tier]}</span>)}</>}
     </div>
     <div className="replay-map-detail" role="status">

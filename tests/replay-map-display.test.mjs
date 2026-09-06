@@ -14,6 +14,18 @@ const {MAP_CAMPS}=await vite.ssrLoadModule("/lib/replay/map-camps.ts");
 const {default:ReplayMapView}=await vite.ssrLoadModule("/components/narma/replay-map.tsx");
 const ward=(id,overrides={})=>({id,kind:"observer",side:"radiant",x:0,y:0,placedAt:100,removedAt:460,...overrides});
 
+test("tower tier labels survive unknown and destroyed states; paired T4 labels are separated",()=>{
+  const data={schemaVersion:"replay-map.v1",terrainVision:"unavailable",wardLifetimesComplete:false,buildingEventsComplete:false,
+    buildings:[{key:"npc_dota_goodguys_tower1_top",destroyedAt:100}],wards:[]};
+  const html=renderToStaticMarkup(createElement(ReplayMapView,{data,time:200,camps:false}));
+  for(const tier of ["T1","T2","T3","T4"])assert.ok(html.includes(`<span>${tier}</span>`));
+  assert.match(html,/replay-building radiant destroyed tower[^>]*><span>T1<\/span>/);
+  assert.equal((html.match(/tower offset-top/g)||[]).length,2);
+  assert.equal((html.match(/tower offset-bottom/g)||[]).length,2);
+  assert.doesNotMatch(html,/<button[^>]*replay-building[^>]*disabled/);
+  assert.match(html,/Состояние неизвестно/);
+});
+
 test("wards disappear exactly when removed and return only when rewinding into their lifetime",()=>{
   const wards=[ward("normal"),ward("dewarded",{removedAt:120}),ward("unknown",{removedAt:null}),ward("enemy",{side:"dire",kind:"sentry"})];
   const ids=(time,side="all")=>activeWardsAt(wards,time,side).map(w=>w.id);
