@@ -31,3 +31,7 @@ jobs:
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
         run: python3 ops/timeweb/preflight.py
+      - name: Verify Gemini key without generation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 ops/timeweb/gemini_preflight.py

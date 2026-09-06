@@ -72,7 +72,7 @@ def safe_preset(item):
 def main():
     token = os.environ.get("TIMEWEB_CLOUD_TOKEN", "").strip()
     report = {
-        "mode": "read_only", "budget_target_rub_per_month": 2000,
+        "mode": "read_only", "budget_target_rub_per_day": 100,
         "provisioning_performed": False,
         "notes": [
             "Preset prices are raw API values, not a verified final monthly quote.",
