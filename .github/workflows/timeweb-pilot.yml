@@ -8,6 +8,7 @@ on:
       - ops/timeweb/pilot.py
       - ops/timeweb/bootstrap.sh
       - ops/timeweb/write_secrets.py
+      - ops/timeweb/verify_gemini.py
   workflow_dispatch:
 
 permissions:
@@ -62,4 +63,5 @@ jobs:
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NARMA_VERIFY_GEMINI: "1"
         run: python3 ops/timeweb/pilot.py

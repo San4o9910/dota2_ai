@@ -73,6 +73,12 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
         stages = {"lock", "cloud_init", "packages", "docker_firewall", "stop_worker",
                   "build", "database_api", "readiness", "ready"}
         for line in (result.stdout + b"\n" + result.stderr).splitlines():
+            vision_state = re.fullmatch(rb"NARMA_GEMINI_CHECK:(passed|previously_passed|previous_attempt_unresolved|failed)", line)
+            if vision_state:
+                event("gemini_vps_check", state=vision_state[1].decode(), scope="synthetic_transport_only")
+            usage = re.fullmatch(rb"NARMA_GEMINI_USAGE:(total_input_tokens|total_output_tokens|total_thought_tokens|total_tokens):([0-9]{1,7})", line)
+            if usage:
+                event("gemini_vps_usage", metric=usage[1].decode(), tokens=int(usage[2]))
             match = re.fullmatch(rb"NARMA_BOOTSTRAP_(STAGE|FAILURE):([a-z_]+)(?::([0-9]{1,3}))?", line)
             if match and match[2].decode() in stages:
                 event("bootstrap_" + match[1].decode().lower(), stage=match[2].decode(),
@@ -96,7 +102,7 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
                 except (ValueError, TypeError):
                     pass
     if result.returncode:
-        phases = {"command", "release_directory", "source_transfer", "secret_install", "bootstrap"}
+        phases = {"command", "release_directory", "source_transfer", "secret_install", "bootstrap", "gemini_check"}
         safe_phase = phase if phase in phases else "command"
         raise CheckError("command_failed_" + safe_phase + "_exit_" + str(result.returncode))
     return result.stdout
@@ -282,6 +288,9 @@ runcmd:
             event("private_services_ready", server_id=server_id, release=sha,
                 public_application=False, worker_enabled=False,
                 ready_checks=["postgresql","schema","media","private_api"])
+            if os.environ.get("NARMA_VERIFY_GEMINI") == "1":
+                command(ssh+["python3 " + release + "/ops/timeweb/verify_gemini.py " + sha],
+                    timeout=210, bootstrap=True, phase="gemini_check")
         finally:
             if ssh_id is not None:
                 if server_id is not None:
