@@ -10,7 +10,7 @@ import urllib.request
 
 ORIGIN = "https://api.timeweb.cloud"
 ENDPOINTS = {
-    "servers": "/api/v1/servers?limit=1",
+    "servers": "/api/v1/servers?limit=100",
     "server_presets": "/api/v1/presets/servers",
     "storages_presets": "/api/v1/presets/storages",
 }
@@ -93,6 +93,18 @@ def main():
                 # This authenticated endpoint confirms server read access only.
                 # No names, IPs, IDs, balances, credentials or customer data leave it.
                 report["server_read_access"] = "ok"
+                pilot = [item for item in items if item.get("name") == "narma-vision-pilot-01"]
+                if len(pilot) == 1:
+                    item = pilot[0]
+                    report["narma_pilot"] = {
+                        "id":item.get("id"), "preset_id":item.get("preset_id"),
+                        "project_id":item.get("project_id"),
+                        "public_ipv4_present":any(ip.get("type") == "ipv4"
+                            for network in item.get("networks", []) if network.get("type") == "public"
+                            for ip in (network.get("ips") or [])),
+                        "status":item.get("status") if re.fullmatch(r"[A-Za-z_-]{1,40}", str(item.get("status", ""))) else "unknown",
+                        "schema_fields":sorted(item.keys()),
+                    }
             else:
                 report[name] = [safe_preset(item) for item in items[:500]]
                 report[name + "_truncated"] = len(items) > 500

@@ -64,6 +64,7 @@ class GeminiVision:
         response = self.client.interactions.create(model=self.model, input=content, system_instruction=SYSTEM, store=False,
             generation_config={"max_output_tokens":4096},
             response_format={"type":"text","mime_type":"application/json","schema":BatchResult.model_json_schema()})
+        self.last_usage = response.usage
         if not response.output_text or len(response.output_text)>100000:
             raise ValueError("GEMINI_RESPONSE_INVALID")
         return validate_result(json.loads(response.output_text), frames)
