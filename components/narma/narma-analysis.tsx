@@ -1,7 +1,5 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
-
 import {
   BrainCircuit,
   CheckCircle2,
@@ -21,7 +19,6 @@ import {
   Route,
   Sparkles,
   Swords,
-  Users,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -59,6 +56,7 @@ type MapMode = "coach" | "vision" | "full";
 const LAYERS: Array<{ key: LayerKey; label: string }> = [
   { key: "vision", label: "Варды" },
   { key: "structures", label: "Постройки" },
+  { key: "camps", label: "Лесные лагеря" },
 ];
 
 const ICONS: Record<AxisKey, typeof Route> = {
@@ -122,7 +120,7 @@ export default function NarmaAnalysis({
     vision: true,
     structures: true,
     objectives: true,
-    camps: false,
+    camps: true,
     creeps: false,
   });
   const showEstimatedMapData = useEstimatedMapData();
@@ -320,7 +318,7 @@ export default function NarmaAnalysis({
 
         <section className="data-scope surface" aria-label="Какие данные есть в разборе">
           <Database size={19} aria-hidden="true" />
-          <p><strong>Сейчас видно:</strong> экономика, объекты, варды и места смертей из OpenDota.</p>
+          <p><strong>Данные матча:</strong> экономика, объекты и места смертей из OpenDota.</p>
           <p><strong>Без replay .dem не видно:</strong> точные маршруты, нажатия, камеру и намерение игрока.</p>
         </section>
 
@@ -350,7 +348,7 @@ export default function NarmaAnalysis({
             </div>
 
             <div className="map-layout">
-              <ReplayMapView data={DEMO_REPLAY_MAP} time={time} perspective={mapMode === "vision" ? (selectedHero?.side === "D" ? "dire" : "radiant") : "all"} structures={layers.structures} wards={layers.vision} />
+              <ReplayMapView data={DEMO_REPLAY_MAP} time={time} perspective={mapMode === "vision" ? (selectedHero?.side === "D" ? "dire" : "radiant") : "all"} structures={layers.structures} wards={layers.vision} camps={layers.camps} />
 
               <aside className="map-controls">
                 <div className="control-title"><Layers3 size={16} /> Слои</div>
@@ -360,7 +358,7 @@ export default function NarmaAnalysis({
                     <span>{layer.label}</span>
                   </label>
                 ))}
-                <div className="map-data-note"><Database size={15} /><span><b>Из матча:</b> установки вардов и подтверждённые разрушения.<br /><b>Нет данных:</b> время снятия вардов и полный туман войны этого примера.</span></div>
+                <div className="map-data-note"><Database size={15} /><span><b>Из матча:</b> подтверждённые разрушения.<br /><b>Варды скрыты:</b> в примере нет времени их снятия.</span></div>
               </aside>
             </div>
 

@@ -954,22 +954,31 @@ footer { font-size: 12px; }
 .replay-map-toolbar { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:14px;padding:10px 0;color:var(--muted); }
 .replay-map-toolbar label { display:flex;gap:6px;align-items:center; }
 .replay-map-toolbar button { border:1px solid var(--border);border-radius:6px;padding:6px 10px;background:var(--surface);color:var(--text); }
-.replay-map-scroll { overflow:auto;max-width:100%;border-radius:10px; }
-.replay-map-stage { min-height:0;min-width:100%;border:0;border-radius:0; }
+.map-vision-status { margin:0 0 10px;color:var(--muted);font-size:12px;line-height:1.5; }
+.replay-map-scroll { overflow:auto;max-width:100%;border-radius:10px;padding:12px;background:#080f0d; }
+.replay-map-stage { min-height:0;min-width:100%;border:0;border-radius:0;overflow:visible; }
 .replay-map-stage .game-map { filter:none;object-fit:fill; }
-.replay-building,.replay-ward { position:absolute;transform:translate(-50%,-50%);z-index:3;display:grid;place-items:center;width:22px;height:22px;border:2px solid currentColor;border-radius:4px;background:#0b1116;font:700 12px/1 system-ui;box-shadow:0 1px 3px #000;cursor:pointer; }
-.replay-building::after,.replay-ward::after { content:"";position:absolute;inset:-6px; }
-.replay-building.radiant,.replay-ward.radiant { color:#9ee4a8; }
-.replay-building.dire,.replay-ward.dire { color:#ff9b8e; }
+.replay-building,.replay-ward,.replay-camp { position:absolute;transform:translate(-50%,-50%);z-index:3;display:grid;place-items:center;width:22px;height:22px;border:2px solid currentColor;border-radius:4px;background:#0b1116;font:700 12px/1 system-ui;box-shadow:0 1px 3px #000;cursor:pointer; }
+.replay-building::after,.replay-ward::after,.replay-camp::after { content:"";position:absolute;inset:-6px; }
+.replay-building.radiant { color:#9ee4a8; }
+.replay-building.dire { color:#ff9b8e; }
 .replay-building.destroyed { border-style:dashed;color:#d0d5d7;background:#14191ca8;opacity:.65;font-size:19px; }
-.replay-building.unknown,.replay-ward.unknown { border-style:dotted;opacity:.7; }
+.replay-building.unknown { border-style:dotted;opacity:.7; }
 .replay-building.ancient { width:27px;height:27px; }
-.replay-ward { width:17px;height:17px;border-radius:50%;font-size:12px; }
-.replay-ward.removed { opacity:.35; }
-.replay-building[aria-pressed="true"],.replay-ward[aria-pressed="true"] { outline:2px solid #fff;outline-offset:3px;z-index:5; }
+.replay-ward,.replay-camp { width:26px;height:26px;padding:0;border:0;border-radius:50%;background:none;box-shadow:none;filter:drop-shadow(0 1px 2px #000); }
+.replay-ward { z-index:4; }
+.replay-ward.radiant,.ward-radiant { color:#66ee52; }
+.replay-ward.dire,.ward-dire { color:#ff514f; }
+.replay-camp { width:23px;height:23px;z-index:2; }
+.replay-camp.radiant { color:#7af2ef; }
+.replay-camp.dire { color:#ff7479; }
+.map-ward-glyph,.map-camp-glyph { display:block;width:100%;height:100%;overflow:visible; }
+.replay-building[aria-pressed="true"],.replay-ward[aria-pressed="true"],.replay-camp[aria-pressed="true"],.replay-ward:focus-visible,.replay-camp:focus-visible { outline:2px solid #fff;outline-offset:3px;z-index:5; }
 .replay-map-detail { min-height:88px;font-size:14px;line-height:1.5;padding:8px 0; }
 .replay-map-detail p { margin:4px 0; }
 .replay-map-legend { display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:13px;color:var(--muted); }
+.replay-map-legend>span { display:inline-flex;align-items:center;gap:4px; }
+.replay-map-legend svg { width:22px;height:22px;flex-shrink:0; }
 .map-team-label { position:absolute;bottom:3%;left:3%;font-size:12px;letter-spacing:1px;color:#b3e6b5;text-shadow:0 1px 5px #000; }
 .map-team-label.dire { top:3%;right:3%;left:auto;bottom:auto;color:#ffb4a8; }
 .map-missing { padding:30px;color:var(--text); }
@@ -981,7 +990,7 @@ footer { font-size: 12px; }
 .dynamic-events { display:flex;gap:8px;overflow:auto;padding:6px 0; }
 .dynamic-events button { flex-shrink:0;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:14px; }
 .training-save-status { font-size:14px;min-height:22px;color:var(--muted); }
-@media(max-width:600px) { .replay-building { width:18px;height:18px;font-size:11px; }.replay-ward { width:15px;height:15px; }.replay-map-toolbar { font-size:13px; } }
+@media(max-width:600px) { .replay-building { width:18px;height:18px;font-size:11px; }.replay-ward { width:23px;height:23px; }.replay-camp { width:20px;height:20px; }.replay-map-toolbar { font-size:13px; } }
 
 .tiled-map img {position:absolute;width:20%;height:20%;object-fit:fill;}
 

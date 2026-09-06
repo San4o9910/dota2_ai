@@ -43,7 +43,7 @@ test("server-rendered demo separates pricing and states its data limits", async 
   assert.match(html, /Без replay \.dem не видно/);
   assert.match(html, /Пример разбора · Juggernaut/);
   assert.match(html, /интерпретация/);
-  assert.match(html, /Туман войны недоступен в сводке/);
+  assert.match(html, /туман войны недоступен: нет данных видимости территории/);
   assert.match(html, /role="region" aria-label="Прокручиваемый график[^<]+" tabindex="0"/);
   assert.match(html, /Gold \+ XP · одна шкала/);
   assert.match(html, /Общая шкала · Radiant выше нуля, Dire ниже/);

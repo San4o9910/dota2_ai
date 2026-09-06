@@ -2,8 +2,8 @@ game-map.jpg: © Valve Corporation. Uploaded by Buny154 to Liquipedia.
 https://liquipedia.net/commons/File:Game_map_7.41.jpg
 The game raster is not covered by the ISC notice below.
 
-Building coordinate data from leamare/dota-interactive-map
-Commit bc73d0e3ea6a421d43780a017aa92e0288c939b5
+Building coordinates and neutral camp metadata from leamare/dota-interactive-map
+Commit f3b4d42caab7fd2de0606ff8ed6088735a63cde1
 https://github.com/leamare/dota-interactive-map
 
 ISC License

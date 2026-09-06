@@ -37,8 +37,18 @@ not be reused for this camera raster. OpenDota grid first becomes world using
 
 ## State overlays
 
-Ward lifetimes use matching ehandle placement/removal entries. Before placement
-a ward is hidden. Without removal evidence its activity remains unknown.
+Ward lifetimes use matching ehandle placement/removal entries. A ward is drawn
+only inside [placedAt, removedAt), and disappears exactly on removal, whether
+destroyed or expired. Rewinding restores it inside that interval. Unknown
+lifetimes are hidden; they never become permanent placement-history markers.
+The placement-only demo therefore shows no ward markers. Selected ward details
+also disappear with the marker. There is no ward-history layer.
+
+Ward glyphs are vector eye symbols: Radiant green, Dire red. Observer and Sentry
+use distinct iris shapes. Neutral camps use triangle / one bar / two bars /
+outlined triangle glyphs for small, medium, large and ancient camps. All 28
+spawners and their difficulty/geographical side come from the pinned 7.41
+`npc_dota_neutral_spawner` data; these are locations, not a live creep census.
 Building kills use target keys, not the killer's team. Generic T4 deaths remain
 individually ambiguous after the first event and both destroyed after the next.
 Absent events do not prove standing buildings when the journal is incomplete.
@@ -46,3 +56,4 @@ Absent events do not prove standing buildings when the journal is incomplete.
 The raster contains static buildings/trees. Standing/destroyed/unknown replay
 states are separate visible markers. The image itself is not destructible world
 state. Exact team fog, dynamic trees and player camera remain unavailable.
+See `FOG_OF_WAR.md` for the inspected data and the implementation blocker.

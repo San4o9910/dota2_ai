@@ -123,3 +123,24 @@ check (0high/critical,5moderate,1low); that is not a zero-advisory claim.
   on failure. Live OpenDota availability is separate from these local checks.
 - Verification passed: lint (two existing warnings), generated types, all 160
   unit/SQLite cases, production build and all 5 package tests.
+
+## Ward and neutral-camp markers — 2026-09-06
+
+- Replaced text-dot wards with scalable vector eye glyphs. Radiant wards are
+  green, Dire red; Observer and Sentry have different iris shapes.
+- Removed ward history. Only confirmed active intervals are drawn, including
+  exact removal boundaries and rewind. Selected details disappear with their
+  markers. Unknown lifetimes are hidden, including the placement-only demo.
+- Added all 28 pinned 7.41 camp locations and their difficulty/geographical side.
+  Triangle/bar/outlined glyphs distinguish small, medium, large and ancient
+  camps. They identify locations, not currently living creeps. A map-frame
+  gutter prevents edge glyphs from being clipped on small screens.
+- Exact in-game fog remains unimplemented. Read-only replay/schema research did
+  not establish a terrain-mask exporter; the environment lacks the game-level
+  geometry and running Dota engine needed to verify reconstruction. The map
+  explicitly labels that limitation. `FOG_OF_WAR.md` records the evidence and
+  required next work; this release does not claim a functional fog integration.
+- Validation: lint/types passed; 164 unit/SQLite cases verified across the full
+  run and a targeted rerun after updating one obsolete fog-status text assertion.
+  The production build and all 5 package tests passed. No Dota-engine or browser
+  visual parity check is implied by these results.

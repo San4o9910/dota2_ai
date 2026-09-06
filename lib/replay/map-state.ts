@@ -44,6 +44,10 @@ export function wardStateAt(ward: MapWard, time: number) {
   return "unknown" as const;
 }
 
+export function activeWardsAt(wards: MapWard[], time: number, perspective: "all" | "radiant" | "dire" = "all") {
+  return wards.filter(ward => wardStateAt(ward,time) === "active" && (perspective === "all" || ward.side === perspective));
+}
+
 export type MapBuilding = { key: string; x: number; y: number; side: "radiant" | "dire"; label: string; kind: "tower" | "ancient" };
 // Positions from the pinned 7.41 mapdata referenced in docs/MAP_ASSET.md.
 const towerPositions: Array<[string, number, number, string]> = [
