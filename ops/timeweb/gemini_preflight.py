@@ -32,6 +32,8 @@ def main():
             result.update(key_access="ok", models=names,
                 preferred_model_listed="models/gemini-3.8-flash" in names,
                 list_truncated=bool(models.get("nextPageToken")))
+            if not result["preferred_model_listed"]:
+                result["error"] = "selected_gemini_model_not_listed"
         except urllib.error.HTTPError as error:
             result["error"] = "http_" + str(error.code)
         except (urllib.error.URLError, TimeoutError, OSError):

@@ -1,0 +1,242 @@
+"""Create/reuse exactly one NARMA pilot VM; deploy its private video service.
+
+Timeweb bills ordinary VMs hourly. No period purchase, balance top-up, resizing,
+paid deletion protection, DDoS or disk backups are requested here.
+"""
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+from preflight import CheckError, NoRedirect, ORIGIN
+
+NAME = "narma-vision-pilot-01"
+MARKER = "NARMA managed pilot San4o9910/dota2_ai 2026-09-06"
+PRESET = 6813
+MAX_VM_MONTH_EQUIVALENT = 2760
+
+
+def event(name, **values):
+    print(json.dumps({"event": name, **values}), flush=True)
+
+
+class Cloud:
+    def __init__(self):
+        self.token = os.environ.get("TIMEWEB_CLOUD_TOKEN", "").strip()
+        if not 20 <= len(self.token) <= 16384 or any(c.isspace() for c in self.token):
+            raise CheckError("missing_timeweb_secret")
+
+    def call(self, method, path, payload=None):
+        if method not in {"GET", "POST", "DELETE"} or not re.fullmatch(r"/api/v[12]/[a-z0-9/?=&-]+", path):
+            raise CheckError("invalid_cloud_request")
+        request = urllib.request.Request(ORIGIN + path, method=method,
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Authorization":"Bearer " + self.token,
+                "Content-Type":"application/json", "Accept":"application/json"})
+        try:
+            with urllib.request.build_opener(NoRedirect()).open(request, timeout=45) as response:
+                body = response.read(2*1024*1024+1)
+            if len(body) > 2*1024*1024:
+                raise CheckError("cloud_response_too_large")
+            return json.loads(body) if body.strip() else {}
+        except urllib.error.HTTPError as error:
+            # Do not log bodies: VM/S3 responses may contain passwords and keys.
+            raise CheckError("cloud_http_" + str(error.code) + "_" + method + "_" + path.split("?")[0]) from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            # No mutation retry. Reconcile named resources on the next run.
+            raise CheckError("cloud_request_outcome_unknown") from None
+        except (ValueError, UnicodeError):
+            raise CheckError("cloud_response_invalid") from None
+
+    def list(self, path, key):
+        value = self.call("GET", path).get(key)
+        if not isinstance(value, list):
+            raise CheckError("cloud_list_schema")
+        return value
+
+
+def command(argv, *, input=None, timeout=180):
+    # Never expose raw stdout/stderr from commands that may handle secrets.
+    result = subprocess.run(argv, input=input, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, timeout=timeout)
+    if result.returncode:
+        raise CheckError("command_failed_" + Path(argv[0]).name)
+    return result.stdout
+
+
+def address(server):
+    for network in server.get("networks", []):
+        if network.get("type") != "public":
+            continue
+        for value in network.get("ips", []):
+            if value.get("type") == "ipv4":
+                ip = ipaddress.ip_address(value["ip"])
+                if ip.version == 4 and ip.is_global:
+                    return str(ip)
+    return None
+
+
+def selected_project(cloud):
+    projects = cloud.list("/api/v1/projects?limit=100", "projects")
+    candidates = [p for p in projects if re.sub(r"[^a-z0-9]", "", str(p.get("name", "")).lower())
+                  in {"narma", "narmavision", "dota2ai"}]
+    if len(candidates) == 1:
+        return int(candidates[0]["id"])
+    if len(projects) == 1:
+        return int(projects[0]["id"])
+    raise CheckError("project_selection_required")
+
+
+def main():
+    cloud = Cloud()
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    sha = os.environ.get("GITHUB_SHA", "")
+    if not 20 <= len(key) <= 16384 or any(c.isspace() for c in key):
+        raise CheckError("missing_gemini_secret")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise CheckError("invalid_release")
+    preset = next((p for p in cloud.list("/api/v1/presets/servers", "server_presets")
+                   if p.get("id") == PRESET), None)
+    if not preset or preset.get("location") != "nl-1" or preset.get("cpu") != 4 or preset.get("ram") != 8192:
+        raise CheckError("pilot_preset_changed")
+    price = preset.get("price")
+    if type(price) not in (int, float) or not 0 < price <= MAX_VM_MONTH_EQUIVALENT:
+        raise CheckError("pilot_price_exceeds_authorized_target")
+    project = selected_project(cloud)
+    options = cloud.list("/api/v1/os/servers", "servers_os")
+    ubuntu = [item for item in options if str(item.get("name", "")).lower() == "ubuntu"
+              and str(item.get("version", "")) == "24.04"]
+    if len(ubuntu) != 1:
+        # Print only public OS catalog fields, never account resource details.
+        event("os_selection_required", options=[{k:i.get(k) for k in ("id","name","version")} for i in options])
+        raise CheckError("ubuntu_2404_selection_required")
+    servers = cloud.list("/api/v1/servers?limit=100", "servers")
+    candidates = [s for s in servers if s.get("name") == NAME]
+    if len(candidates) > 1 or (candidates and (candidates[0].get("comment") != MARKER
+                                              or candidates[0].get("project_id") != project)):
+        raise CheckError("existing_server_ownership_mismatch")
+    if len(servers) >= 100:
+        raise CheckError("server_inventory_needs_pagination")
+    event("pilot_plan", preset_id=PRESET, cpu=4, ram_mb=8192, disk_mb=preset.get("disk"),
+          vm_month_equivalent_rub=price, ipv4_month_estimate_rub=200,
+          server_and_ip_day_estimate_rub=round((price+200)/30, 2),
+          billing="hourly_balance_no_period_purchase", existing=bool(candidates))
+    server_id = int(candidates[0]["id"]) if candidates else None
+    if server_id is not None and candidates[0].get("preset_id") != PRESET:
+        raise CheckError("existing_server_configuration_unverified")
+    ssh_id = None
+    with tempfile.TemporaryDirectory(prefix="narma-pilot-") as tmp:
+        temporary = Path(tmp)
+        private = temporary/"key"
+        command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(private)])
+        public = private.with_suffix(".pub").read_text().strip()
+        try:
+            item = cloud.call("POST", "/api/v1/ssh-keys", {
+                "name":"narma-ci-" + os.environ.get("GITHUB_RUN_ID", "pilot"),
+                "body":public, "is_default":False})
+            ssh_id = int(item["ssh_key"]["id"])
+            if server_id is None:
+                cloud_init = """#cloud-config
+ssh_pwauth: false
+write_files:
+  - path: /etc/ssh/sshd_config.d/70-narma.conf
+    permissions: '0600'
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+runcmd:
+  - [systemctl, reload, ssh]
+"""
+                created = cloud.call("POST", "/api/v1/servers", {
+                    "name":NAME, "hostname":NAME, "comment":MARKER,
+                    "preset_id":PRESET, "os_id":ubuntu[0]["id"], "project_id":project,
+                    "is_ddos_guard":False, "is_local_network":False,
+                    "ssh_keys_ids":[ssh_id], "cloud_init":cloud_init})
+                server_id = int(created["server"]["id"])
+                event("server_created", server_id=server_id)
+            else:
+                cloud.call("POST", f"/api/v1/servers/{server_id}/ssh-keys", {"ssh_key_ids":[ssh_id]})
+                event("server_reused", server_id=server_id)
+            host = None
+            for attempt in range(50):
+                server = cloud.call("GET", f"/api/v1/servers/{server_id}")["server"]
+                host = address(server)
+                if host:
+                    break
+                if attempt % 6 == 0:
+                    event("waiting_for_public_ip", server_id=server_id)
+                time.sleep(10)
+            if not host:
+                raise CheckError("server_has_no_public_ipv4")
+            # First-connection trust is explicit. The ephemeral known_hosts file
+            # pins the first received host key for every subsequent SSH command.
+            # It is not claimed to be independently verified against the provider.
+            ssh = ["ssh", "-i", str(private), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+                "-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile="+str(temporary/"known_hosts"),
+                "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=15", "root@"+host]
+            for attempt in range(40):
+                try:
+                    command(ssh+["true"], timeout=15)
+                    break
+                except (CheckError, subprocess.TimeoutExpired):
+                    if attempt == 39:
+                        raise CheckError("ssh_not_ready") from None
+                    if attempt % 6 == 0:
+                        event("waiting_for_ssh", server_id=server_id)
+                    time.sleep(10)
+            event("ssh_ready", server_id=server_id)
+            release = "/opt/narma/releases/" + sha
+            command(ssh+["mkdir -p " + release], timeout=30)
+            archive = temporary/"source.tar.gz"
+            with tarfile.open(archive, "w:gz") as bundle:
+                for directory in (Path("services/video"), Path("ops/timeweb")):
+                    for path in directory.rglob("*"):
+                        if not path.is_file() or path.is_symlink():
+                            continue
+                        if any(p in {"__pycache__", ".venv", "private-output"} for p in path.parts):
+                            continue
+                        if path.name.startswith(".env") or path.suffix in {".key",".pem",".dem",".mp4",".mkv"}:
+                            continue
+                        bundle.add(path, arcname=str(path), recursive=False)
+            command(ssh+["tar --no-same-owner -xzf - -C " + release], input=archive.read_bytes(), timeout=120)
+            # Secrets cross SSH only; none enters cloud-init, the source archive,
+            # GitHub artifacts, command arguments or public logs.
+            secret_input = json.dumps({"gemini_key":key, "release":sha}).encode()
+            command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30)
+            event("installing_private_services", server_id=server_id, release=sha)
+            command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha], timeout=1200)
+            event("private_services_ready", server_id=server_id, release=sha,
+                public_application=False, worker_enabled=False,
+                ready_checks=["postgresql","schema","media","private_api"])
+        finally:
+            if ssh_id is not None:
+                if server_id is not None:
+                    try:
+                        cloud.call("DELETE", f"/api/v1/servers/{server_id}/ssh-keys/{ssh_id}")
+                    except CheckError:
+                        event("ephemeral_binding_cleanup_unconfirmed", server_id=server_id)
+                try:
+                    cloud.call("DELETE", f"/api/v1/ssh-keys/{ssh_id}")
+                except CheckError:
+                    event("ephemeral_key_cleanup_unconfirmed")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except CheckError as error:
+        event("pilot_failed", code=str(error))
+        sys.exit(1)
+    except Exception:
+        event("pilot_failed", code="unexpected_failure_no_sensitive_details_logged")
+        sys.exit(1)

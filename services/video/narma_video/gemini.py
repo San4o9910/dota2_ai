@@ -50,6 +50,9 @@ class GeminiVision:
         if not key or not self.model:
             raise RuntimeError("GEMINI_API_KEY and GEMINI_MODEL are required")
         self.client = genai.Client(api_key=key, http_options={"timeout":120000})
+        # google-genai 2.22.0 interactions otherwise retries up to three times.
+        # One SQL reservation must correspond to one physical provider request.
+        self.client.interactions.sdk_configuration.retry_config = None
 
     def analyze(self, frames, nickname, continuity=""):
         content = [{"type":"text", "text":json.dumps({"focus_nickname":nickname,"previous_continuity":continuity},ensure_ascii=False)}]
@@ -59,6 +62,7 @@ class GeminiVision:
                 {"type":"image", "mime_type":"image/jpeg", "data":base64.b64encode(frame["image"]).decode("ascii")},
             ])
         response = self.client.interactions.create(model=self.model, input=content, system_instruction=SYSTEM, store=False,
+            generation_config={"max_output_tokens":4096},
             response_format={"type":"text","mime_type":"application/json","schema":BatchResult.model_json_schema()})
         if not response.output_text or len(response.output_text)>100000:
             raise ValueError("GEMINI_RESPONSE_INVALID")

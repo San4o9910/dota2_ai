@@ -1,20 +1,57 @@
 import hashlib
 import hmac
+import json
 import math
 import os
 import re
 import shutil
+import tempfile
+import time
 from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .config import PART_BYTES, MAX_VIDEO_BYTES, job_directory, service_token
+from .config import PART_BYTES, MAX_VIDEO_BYTES, job_directory, media_root, service_token
 from .db import database
 
 app = FastAPI(title="NARMA video analysis", docs_url=None, redoc_url=None, openapi_url=None)
+
+@app.middleware("http")
+async def access_log(request: Request, call_next):
+    request_id = str(uuid4())
+    started = time.monotonic()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        route = request.scope.get("route")
+        # Route templates only: never a raw URL, query, header or request body.
+        print(json.dumps({"event":"http_request", "request_id":request_id,
+            "method":request.method if request.method in {"GET","POST","PUT","DELETE","HEAD","OPTIONS","PATCH"} else "OTHER",
+            "route":getattr(route, "path", "unmatched"), "status":status,
+            "duration_ms":round((time.monotonic()-started)*1000)}), flush=True)
+
+@app.get("/livez")
+def live():
+    return {"status":"alive"}
+
+@app.get("/readyz")
+def ready():
+    try:
+        service_token()
+        with database() as connection:
+            connection.execute("SELECT 1 FROM video_jobs LIMIT 1")
+        with tempfile.TemporaryFile(dir=media_root()) as handle:
+            handle.write(b"ready"); handle.flush()
+        return {"status":"ready", "checks":["config","postgresql","schema","media"]}
+    except Exception:
+        return JSONResponse({"status":"not_ready"}, status_code=503)
 
 def principal(authorization: Annotated[str | None, Header()] = None, x_narma_owner: Annotated[str | None, Header()] = None):
     # This is a private application-to-service boundary. Only the authenticated

@@ -1,3 +1,8 @@
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
 services:
   db:
     image: postgres:17-bookworm
@@ -13,6 +18,9 @@ services:
       timeout: 5s
       retries: 20
     restart: unless-stopped
+    mem_limit: 1536m
+    cpus: 1
+    logging: *logging
   migrate:
     build: .
     command: [python, -m, narma_video.db]
@@ -23,6 +31,8 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    logging: *logging
   api:
     build: .
     environment:
@@ -40,7 +50,15 @@ services:
     depends_on:
       migrate: {condition: service_completed_successfully}
     restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=15).close()"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 20s
   worker:
+    profiles: [analysis]
     build: .
     command: [python, -m, narma_video.worker]
     environment:
@@ -62,6 +80,7 @@ services:
     depends_on:
       migrate: {condition: service_completed_successfully}
     restart: unless-stopped
+    logging: *logging
 volumes:
   database:
   media:

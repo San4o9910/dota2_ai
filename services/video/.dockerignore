@@ -1,5 +1,14 @@
 .env
+.env.*
+*.key
+*.pem
 __pycache__
-.pytest_cache
-tests
 *.pyc
+**/__pycache__
+.pytest_cache
+.venv
+private-output
+tests
+*.dem
+*.mp4
+*.mkv

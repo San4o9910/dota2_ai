@@ -1,0 +1,45 @@
+name: Timeweb pilot deployment
+
+on:
+  push:
+    branches: [codex/replay-map-hardening-8ea829a]
+    paths:
+      - .github/workflows/timeweb-pilot.yml
+      - ops/timeweb/pilot.py
+      - ops/timeweb/bootstrap.sh
+      - ops/timeweb/write_secrets.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timeweb-pilot-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.repository == 'San4o9910/dota2_ai' &&
+      github.ref == 'refs/heads/codex/replay-map-hardening-8ea829a'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out exact release
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Verify Gemini key without generation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 ops/timeweb/gemini_preflight.py
+      - name: Validate source and build Docker image before provisioning
+        run: |
+          python3 -m compileall -q services/video/narma_video ops/timeweb
+          bash -n ops/timeweb/bootstrap.sh
+          docker build --tag narma-video-check services/video
+      - name: Create or reuse one hourly billed pilot and start private services
+        env:
+          TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 ops/timeweb/pilot.py
