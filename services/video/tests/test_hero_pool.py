@@ -19,7 +19,8 @@ def projected(index, *, outcome="win", position=3, hero=HERO, **changes):
     row = {"job_id": str(uuid4()), "account_id": 1000, "match_id": str(8900000000 + index),
         "uploaded_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "hero": hero,
         "outcome": outcome, "position": position, "focus": None, "reflection": None, "note": "",
-        "metrics": {"duration_seconds": 2400, "confirmed_dead_seconds": 120, "total_earned_gold": 24000},
+        "metrics": {"duration_seconds": 2400, "confirmed_dead_seconds": 120,
+            "deaths": 2, "confirmed_death_intervals": 2, "total_earned_gold": 24000},
         "checkpoint": {"time": 600, "last_hits": index * 10, "net_worth": 4000 + index * 100, "deaths": 0},
         "unclosed_death_intervals": 0, "deaths": [], "items": [], "engine_build": None}
     return dict(row, **changes)
@@ -92,6 +93,25 @@ def test_mixed_known_builds_or_known_and_unknown_do_not_compare():
         assert result["trends"]["status"] == "insufficient"
         assert result["trends"]["metrics"] == []
         assert len(result["matches"]) == 6
+
+
+def test_missing_or_partial_life_telemetry_is_not_zero_downtime():
+    for deaths, pairs, seconds in ((2, 0, 0), (2, 1, 60), (2, None, 120),
+                                   (None, 2, 120), (2, 3, 120), (2, 2, 0), (0, 0, 10)):
+        row = projected(1)
+        row["metrics"].update(deaths=deaths, confirmed_death_intervals=pairs,
+                              confirmed_dead_seconds=seconds)
+        assert pool.build_pool([row])["matches"][0]["metrics"]["dead_pct"] is None
+    row = projected(1, unclosed_death_intervals=1)
+    assert pool.build_pool([row])["matches"][0]["metrics"]["dead_pct"] is None
+    row = projected(1)
+    row["metrics"].update(deaths=0, confirmed_death_intervals=0, confirmed_dead_seconds=0)
+    assert pool.build_pool([row])["matches"][0]["metrics"]["dead_pct"] == 0
+    # A missing recent observation cannot manufacture an improving trend.
+    rows = [projected(i) for i in range(1, 7)]
+    rows[-1]["metrics"].update(confirmed_death_intervals=0, confirmed_dead_seconds=0)
+    result = pool.build_pool(rows, hero=HERO, position=3)
+    assert "dead_pct" not in {metric["key"] for metric in result["trends"]["metrics"]}
 
 
 def with_observations(index):

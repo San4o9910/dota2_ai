@@ -67,7 +67,7 @@ SELECT r.id AS job_id, r.account_id, r.match_id, r.created_at AS uploaded_at,
          'item', i->'item', 'label', i->'label', 'time', i->'time', 'event_id', i->'event_id',
          'first_active_inventory_time', i->'first_active_inventory_time',
          'first_use_time', i#>'{realization,first_use_time}',
-         'first_use_event_id', i#>'{realization,first_use_event_id})), '[]'::jsonb)
+         'first_use_event_id', i#>'{realization,first_use_event_id}')), '[]'::jsonb)
      FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.result_payload#>'{insights,items}')='array'
          THEN r.result_payload#>'{insights,items}' ELSE '[]'::jsonb END) i) AS items,
     n.position, n.focus, n.reflection, coalesce(n.note, '') AS note
@@ -121,13 +121,22 @@ def _normalize(row):
     # A very old sample, or a game ending before ten minutes, is not a 10m value.
     valid_checkpoint = duration is not None and duration >= 600 and sample_time is not None and 565 <= sample_time <= 600
     dead = _number(metrics.get("confirmed_dead_seconds"))
+    death_count, paired_count = metrics.get("deaths"), metrics.get("confirmed_death_intervals")
+    # Compare whole-match dead time only when every scoreboard death has one
+    # closed life-state interval. Partial/missing telemetry must not look like
+    # reduced downtime. A genuine zero needs explicit zero counts and seconds.
+    complete_life_data = (type(death_count) is int and death_count >= 0
+        and type(paired_count) is int and paired_count == death_count
+        and type(row.get("unclosed_death_intervals")) is int
+        and row["unclosed_death_intervals"] == 0
+        and dead is not None and ((death_count == 0 and dead == 0) or (death_count > 0 and dead > 0)))
     earned = _number(metrics.get("total_earned_gold"))
     available = {
         "lh10": _number(checkpoint.get("last_hits")) if valid_checkpoint else None,
         "nw10": _number(checkpoint.get("net_worth")) if valid_checkpoint else None,
         "deaths10": _number(checkpoint.get("deaths")) if valid_checkpoint else None,
         "dead_pct": round(dead * 100 / duration, 2) if duration and dead is not None and dead <= duration
-            and row.get("unclosed_death_intervals") == 0 else None,
+            and complete_life_data else None,
         "gpm": round(earned * 60 / duration, 1) if duration and earned is not None else None,
     }
     uploaded = row.get("uploaded_at")
