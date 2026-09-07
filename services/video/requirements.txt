@@ -1,0 +1,6 @@
+fastapi==0.141.1
+uvicorn==0.52.4
+psycopg[binary]==3.3.5
+google-genai==2.22.0
+pillow==12.3.0
+pydantic==2.13.5

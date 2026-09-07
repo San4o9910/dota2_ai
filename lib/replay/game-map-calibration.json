@@ -1,0 +1,134 @@
+{
+  "patch": "7.41",
+  "sourcePage": "https://liquipedia.net/commons/File:Game_map_7.41.jpg",
+  "originalUrl": "https://liquipedia.net/commons/images/0/07/Game_map_7.41.jpg",
+  "thumbnailUrl": "https://liquipedia.net/commons/images/thumb/0/07/Game_map_7.41.jpg/2166px-Game_map_7.41.jpg",
+  "thumbnailWidth": 2166,
+  "thumbnailHeight": 2048,
+  "originalWidth": 8909,
+  "originalHeight": 8424,
+  "uploader": "Buny154",
+  "uploadDate": "2026-07-10T12:37:00Z",
+  "licenseNotice": "Copyright Valve Corporation. Liquipedia says Valve gave it permission to use Dota 2 images on that wiki. This is not an ISC or CC asset.",
+  "mapDataSource": "https://raw.githubusercontent.com/leamare/dota-interactive-map/f3b4d42caab7fd2de0606ff8ed6088735a63cde1/assets/data/741/mapdata.json",
+  "calibrationMethod": "Approximate manual ground-anchor locations on the original server thumbnail; independent least-squares x/y scale and translation, no rotation. Anchors read to approximately 3–5px; this is display calibration, not pixel-exact game coordinate certification.",
+  "coefficients": {
+    "pixelXScale": 0.1112410929658031,
+    "pixelXOffset": 1055.2606396150288,
+    "pixelYScale": -0.11164212900641522,
+    "pixelYOffset": 1079.8155559442366
+  },
+  "bounds": {
+    "left": -9486.248395091094,
+    "right": 9984.97345514599,
+    "top": 9672.115406202867,
+    "bottom": -8672.21408864506
+  },
+  "anchors": [
+    {
+      "id": "radiant_top_t1",
+      "worldX": -6336,
+      "worldY": 1856,
+      "pixelX": 349,
+      "pixelY": 872,
+      "residualPixels": 1.5603080005893315
+    },
+    {
+      "id": "radiant_top_t2",
+      "worldX": -6501,
+      "worldY": -872,
+      "pixelX": 331,
+      "pixelY": 1178,
+      "residualPixels": 1.3654412006405034
+    },
+    {
+      "id": "radiant_mid_t1",
+      "worldX": -1544,
+      "worldY": -1408,
+      "pixelX": 882,
+      "pixelY": 1238,
+      "residualPixels": 1.802195114627993
+    },
+    {
+      "id": "radiant_bottom_t3",
+      "worldX": -3952,
+      "worldY": -6112,
+      "pixelX": 617,
+      "pixelY": 1759,
+      "residualPixels": 3.453127862109406
+    },
+    {
+      "id": "dire_top_t3",
+      "worldX": 3552,
+      "worldY": 5776,
+      "pixelX": 1448,
+      "pixelY": 432,
+      "residualPixels": 3.8120736896692593
+    },
+    {
+      "id": "dire_top_t1",
+      "worldX": -5275,
+      "worldY": 6036,
+      "pixelX": 466,
+      "pixelY": 408,
+      "residualPixels": 3.2092349136111396
+    },
+    {
+      "id": "dire_top_t2",
+      "worldX": -128,
+      "worldY": 6016,
+      "pixelX": 1040,
+      "pixelY": 410,
+      "residualPixels": 2.0902529603868008
+    },
+    {
+      "id": "dire_mid_t1",
+      "worldX": 524,
+      "worldY": 652,
+      "pixelX": 1119,
+      "pixelY": 1007,
+      "residualPixels": 5.4490845068058835
+    },
+    {
+      "id": "radiant_ancient",
+      "worldX": -5920,
+      "worldY": -5352,
+      "pixelX": 400,
+      "pixelY": 1680,
+      "residualPixels": 4.238122775694967
+    },
+    {
+      "id": "dire_ancient",
+      "worldX": 5528,
+      "worldY": 5000,
+      "pixelX": 1670,
+      "pixelY": 520,
+      "residualPixels": 1.6174985663838073
+    }
+  ],
+  "holdoutAnchors": [
+    {
+      "id": "northwest_twin_gate",
+      "worldX": -6458,
+      "worldY": 7599,
+      "pixelX": 333,
+      "pixelY": 230,
+      "residualPixels": 4.127613940582581
+    },
+    {
+      "id": "southeast_twin_gate",
+      "worldX": 6426,
+      "worldY": -7314,
+      "pixelX": 1770,
+      "pixelY": 1899,
+      "residualPixels": 2.6356578800342287
+    }
+  ],
+  "thumbnailSha256": "3f60db1ca1a1397c7a7e3fb3bd78c81370aacb17088e7b9518d62314ba31ca35",
+  "warnings": [
+    "Terrain bitmap world extents from previous implementation cannot be reused for this raster.",
+    "Keep natural aspect ratio 2166/2048 or apply matching normalization to both background and markers.",
+    "Do not claim exact fog of war from this static game raster.",
+    "The image captures static structures and trees; destroyed buildings need a clear overlay/state marker."
+  ]
+}

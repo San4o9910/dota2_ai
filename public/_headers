@@ -1,0 +1,11 @@
+# Static files can bypass the Worker, so repeat the low-risk response headers
+# here. Keep these values in sync with config/security-headers.mjs.
+/*
+  Content-Security-Policy-Report-Only: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.cloudflare.steamstatic.com; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:
+  Strict-Transport-Security: max-age=31536000
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()
+
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -1,33 +1,70 @@
 import { env } from "cloudflare:workers";
 
 import type { YooKassaCredentials } from "@/lib/payments/yookassa";
+import {
+  parsePaymentRuntime,
+  type PaymentGate,
+  type PaymentRuntimeEnvironment,
+} from "@/lib/payments/runtime-config";
 
-type PaymentEnvironment = {
-  ANALYSIS_FULFILLMENT_ENABLED?: string;
-  PAYMENTS_ENABLED?: string;
-  YOOKASSA_SHOP_ID?: string;
-  YOOKASSA_SECRET_KEY?: string;
-};
-
-function paymentEnvironment() {
-  return env as unknown as PaymentEnvironment;
+function runtimeConfig() {
+  return parsePaymentRuntime(env as unknown as PaymentRuntimeEnvironment);
 }
 
 export function paymentsEnabled() {
-  const runtime = paymentEnvironment();
-  return runtime.PAYMENTS_ENABLED === "true"
-    && runtime.ANALYSIS_FULFILLMENT_ENABLED === "true"
-    && Boolean(runtime.YOOKASSA_SHOP_ID)
-    && Boolean(runtime.YOOKASSA_SECRET_KEY);
+  return runtimeConfig().paymentsEnabled;
 }
 
-export function getYooKassaCredentials(): YooKassaCredentials {
-  const runtime = paymentEnvironment();
-  if (!paymentsEnabled()) {
-    throw new Error("Payments are not enabled");
+export function paymentSettlementEnabled() {
+  return runtimeConfig().settlementEnabled;
+}
+
+export function analysisRuntimeEnabled() {
+  return runtimeConfig().analysisRuntimeEnabled;
+}
+
+export function analysisFulfillmentEnabled() {
+  return runtimeConfig().analysisFulfillmentEnabled;
+}
+
+export function getPaymentRuntimeIdentity() {
+  const config = runtimeConfig();
+  if (!config.environment || !config.appOrigin || !config.paymentMode || !config.shopId) {
+    throw new Error("Payment runtime identity is not configured");
   }
   return {
-    shopId: runtime.YOOKASSA_SHOP_ID!,
-    secretKey: runtime.YOOKASSA_SECRET_KEY!,
+    environment: config.environment,
+    appOrigin: config.appOrigin,
+    paymentMode: config.paymentMode,
+    providerShopId: config.shopId,
   };
+}
+
+export function getPaymentSettlementIdentity() {
+  const config = runtimeConfig();
+  if (!config.environment || !config.paymentMode || !config.shopId) {
+    throw new Error("Payment settlement identity is not configured");
+  }
+  return {
+    environment: config.environment,
+    paymentMode: config.paymentMode,
+    providerShopId: config.shopId,
+  };
+}
+
+export function getYooKassaCredentials(
+  gate: PaymentGate = "checkout",
+): YooKassaCredentials {
+  const config = runtimeConfig();
+  const gateEnabled = gate === "checkout"
+    ? config.paymentsEnabled
+    : config.settlementEnabled;
+  if (!gateEnabled || !config.shopId || !config.secretKey) {
+    throw new Error(
+      gate === "checkout"
+        ? "Payment checkout is not enabled"
+        : "Payment settlement is not enabled",
+    );
+  }
+  return { shopId: config.shopId, secretKey: config.secretKey };
 }

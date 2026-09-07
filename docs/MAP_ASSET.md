@@ -1,46 +1,59 @@
-# Локальный ассет карты Dota 2
+# Original game map and replay coordinates
 
-NARMA VISION использует карту из установленного клиента, но не публикует графику Valve в GitHub.
+The displayed background is the original7.41 game raster uploaded by Buny154
+on10July2026 to [Liquipedia](https://liquipedia.net/commons/File:Game_map_7.41.jpg).
+It matches the demo's patch. The7.39 image in the user's screenshot is a visual
+reference, not the source for7.41 gameplay overlays.
 
-## Быстрый вариант через Source 2 Viewer
+- Bundled: `public/maps/7.41/game-map.jpg`,2166×2048,1,048,406bytes.
+- [Original server thumbnail](https://liquipedia.net/commons/images/thumb/0/07/Game_map_7.41.jpg/2166px-Game_map_7.41.jpg)
+- [Full raster](https://liquipedia.net/commons/images/0/07/Game_map_7.41.jpg),8909×8424.
+- SHA256: `3f60db1ca1a1397c7a7e3fb3bd78c81370aacb17088e7b9518d62314ba31ca35`.
+- Image credit: Buny154/Liquipedia, ©Valve Corporation. The page describes Valve's
+  permission for Liquipedia; it is not an ISC or CC-licensed raster. Do not
+  conflate the raster with the ISC coordinate data attributed in LICENSE.txt.
 
-1. Установите [Source 2 Viewer](https://s2v.app).
-2. Откройте Dota 2 через Game Explorer или файл:
+The image is copied without redrawing, color changes or local resampling.
+The old generated terrain-color canvas is removed. Keep natural aspect2166/2048.
 
-   ```text
-   <SteamLibrary>/steamapps/common/dota 2 beta/game/dota/pak01_dir.vpk
-   ```
+## Display calibration
 
-3. В VPK найдите `materials/overviews/dota.vmat_c`.
-4. Откройте материал и перейдите к связанной текстуре minimap/overview.
-5. Экспортируйте текстуру в PNG без изменения ориентации.
-6. Сохраните результат как:
+`lib/replay/game-map-calibration.json` retains source URLs, image hash, ten
+measured tower/ancient anchors, two independent Twin Gate check points and fit
+residuals. `map-state.ts` applies the same transform to all overlays:
 
-   ```text
-   public/generated/dota/7.41/minimap.png
-   ```
+```
+pixelX = 0.1112410929658031 * worldX + 1055.2606396150288
+pixelY = -0.11164212900641522 * worldY + 1079.8155559442366
+leftPercent = pixelX / 2166 * 100
+topPercent = pixelY / 2048 * 100
+```
 
-7. Запустите `npm run dev` и проверьте, что подписи Roshan, Tormentor, Wisdom и Twin Gates совпадают с изображением.
+Fit RMS3.15pixels; largest anchor residual5.45pixels. Independent gate checks
+are4.13/2.64pixels. This is approximate display calibration, not a claim of
+pixel-exact game-coordinate extraction. Old terrain bounds(-10464…10400) must
+not be reused for this camera raster. OpenDota grid first becomes world using
+`(grid-128)*128`.
 
-## Почему файла нет в Git
+## State overlays
 
-Репозиторий публичный. Экспорт содержит графику Valve, поэтому папка `public/generated/dota/` намеренно исключена из Git. В коде остаются только координаты объектов и логика слоёв.
+Ward lifetimes use matching ehandle placement/removal entries. A ward is drawn
+only inside [placedAt, removedAt), and disappears exactly on removal, whether
+destroyed or expired. Rewinding restores it inside that interval. Unknown
+lifetimes are hidden; they never become permanent placement-history markers.
+The placement-only demo therefore shows no ward markers. Selected ward details
+also disappear with the marker. There is no ward-history layer.
 
-## Координаты
+Ward glyphs are vector eye symbols: Radiant green, Dire red. Observer and Sentry
+use distinct iris shapes. Neutral camps use triangle / one bar / two bars /
+outlined triangle glyphs for small, medium, large and ancient camps. All 28
+spawners and their difficulty/geographical side come from the pinned 7.41
+`npc_dota_neutral_spawner` data; these are locations, not a live creep census.
+Building kills use target keys, not the killer's team. Generic T4 deaths remain
+individually ambiguous after the first event and both destroyed after the next.
+Absent events do not prove standing buildings when the journal is incomplete.
 
-Статические координаты взяты из:
-
-- [dota-interactive-map, mapdata 7.41](https://github.com/leamare/dota-interactive-map/blob/bc73d0e3ea6a421d43780a017aa92e0288c939b5/assets/data/741/mapdata.json)
-- лицензия исходного fixture: ISC;
-- преобразование мира в проценты задаётся одной функцией `worldToPercent`.
-
-Match-specific координаты вардов и смертей берутся из parsed payload OpenDota.
-
-## Чего этот слой пока не обещает
-
-- положение каждого живого героя в любую секунду;
-- положение каждого lane creep;
-- HP, mana и cooldown по каждому тику;
-- точные зоны видимости с учётом деревьев и высот.
-
-Эти данные потребуют локального разбора полного `.dem`; до этого интерфейс явно подписывает расчётные элементы как модель.
+The raster contains static buildings/trees. Standing/destroyed/unknown replay
+states are separate visible markers. The image itself is not destructible world
+state. Exact team fog, dynamic trees and player camera remain unavailable.
+See `FOG_OF_WAR.md` for the inspected data and the implementation blocker.

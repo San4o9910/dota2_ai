@@ -1,0 +1,73 @@
+name: Timeweb pilot deployment
+
+on:
+  push:
+    branches: [codex/replay-map-hardening-8ea829a]
+    paths:
+      - .github/workflows/timeweb-pilot.yml
+      - ops/timeweb/**
+      - services/video/**
+      - services/replay/**
+      - .dockerignore
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timeweb-pilot-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.repository == 'San4o9910/dota2_ai' &&
+      github.ref == 'refs/heads/codex/replay-map-hardening-8ea829a'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out exact release
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Verify Gemini key without generation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 ops/timeweb/gemini_preflight.py
+      - name: Validate source and build Docker image before provisioning
+        run: |
+          python3 -m compileall -q services/video/narma_video ops/timeweb
+          bash -n ops/timeweb/bootstrap.sh
+          docker build --tag narma-video-check services/video
+          docker run --rm narma-video-check python -c "import narma_video.api, narma_video.worker, narma_video.db; print('Runtime imports passed')"
+          docker build --tag narma-replay-check --file services/replay/Dockerfile .
+          docker run --rm narma-replay-check python -c "from narma_video.replay_worker import parser_home; parser_home(); print('Full replay parser installed')"
+      - name: Start PostgreSQL and private API in an isolated local test
+        env:
+          POSTGRES_PASSWORD: narma_ci_only
+          DATABASE_URL: postgresql://narma:narma_ci_only@db:5432/narma
+          VIDEO_SERVICE_TOKEN: local_ci_fixture_token_0000000000000000000000000000000000000000
+          GEMINI_API_KEY: unused_offline_ci_fixture
+          GEMINI_MODEL: gemini-3.8-flash
+        run: |
+          compose=(docker compose --project-name narma-video-ci --file services/video/compose.yaml)
+          trap 'docker compose --project-name narma-video-ci --file services/video/compose.yaml down --volumes >/dev/null' EXIT
+          "${compose[@]}" up --build -d db migrate api
+          for attempt in {1..30}; do
+            if "${compose[@]}" exec -T api python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=15).close()"; then
+              echo 'PostgreSQL, migrations and private API passed'
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "${ready:-0}" = 1
+          docker run --rm --user root --network narma-video-ci_default \
+            --env TEST_DATABASE_URL="$DATABASE_URL" \
+            --volume "$PWD/services/video/tests:/app/tests:ro" narma-video-check \
+            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest tests -q'
+      - name: Create or reuse one hourly billed pilot and start private services
+        env:
+          TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 ops/timeweb/pilot.py

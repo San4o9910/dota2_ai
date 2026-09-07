@@ -1,6 +1,12 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
-import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
+import {
+  DEFAULT_DEVICE_SIZES,
+  DEFAULT_IMAGE_SIZES,
+  handleImageOptimization,
+  isImageOptimizationPath,
+} from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { retiredSiteResponse } from "../config/standalone-destination.mjs";
 
 interface Env {
   ASSETS: Fetcher;
@@ -27,9 +33,11 @@ interface ExecutionContext {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const retired = retiredSiteResponse(request);
+    if (retired) return retired;
     const url = new URL(request.url);
 
-    if (url.pathname === "/_vinext/image") {
+    if (isImageOptimizationPath(url.pathname)) {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
       return handleImageOptimization(request, {
         fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),

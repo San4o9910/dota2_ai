@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Type generation only. The nonstandard filename and lack of entrypoint,
+  // account, routes, and bindings make this unsuitable for deployment.
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"]
+}
