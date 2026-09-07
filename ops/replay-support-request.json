@@ -1,1 +1,8 @@
-{"action":"inspect","expected_release":"8305600893cf7dbe9c81b8d96b31383f052428e4"}
+{
+  "action": "retry",
+  "expected_release": "c8a15da3eb9983466ec43817f78c0191eced302b",
+  "job_id": "354d95b9-2bb7-4700-923d-796566a7cc01",
+  "source_sha256": "db9df23273bdac450a027ff11992428e6610403de78301c86e9adbe26320e0bc",
+  "expected_failure_code": "REPLAY_PARSE_FAILED",
+  "expected_attempt": 1
+}

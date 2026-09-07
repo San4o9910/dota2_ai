@@ -1,7 +1,8 @@
 """Inspect an existing pilot through ephemeral SSH; never provisions resources.
 
 Only safe operational categories leave the host. Raw parser output stays in its
-owner's private directory. Inspection does not change job state or call Gemini.
+owner's private directory. Inspection does not change job state or call Gemini. Explicit recovery queues
+one identified failed upload and preserves its attempts and existing AI budget.
 """
 import json
 from pathlib import Path
@@ -41,6 +42,8 @@ def limits():
  resource.setrlimit(resource.RLIMIT_CPU,(295,300));resource.setrlimit(resource.RLIMIT_FSIZE,(50*1024**2,50*1024**2));resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 start=time.monotonic()
 args=['java','-Xms256m','-Xmx2g','-XX:ActiveProcessorCount=2','-Dorg.slf4j.simpleLogger.defaultLogLevel=warn','-cp','/opt/narma/replay/target/classes:/opt/narma/replay/target/dependency/*','vision.narma.replay.ReplayProbe',str(source),str(output/'events.jsonl')]
+if pathlib.Path('/opt/narma/replay/native/libsnappyjava.so').is_file():
+ args[1:1]=['-Dorg.xerial.snappy.lib.path=/opt/narma/replay/native','-Dorg.xerial.snappy.lib.name=libsnappyjava.so']
 with (output/'summary.json').open('wb') as out,(output/'parser.log').open('wb') as err:
  try:code=subprocess.run(args,stdout=out,stderr=err,stdin=subprocess.DEVNULL,env={'PATH':'/usr/local/bin:/usr/bin:/bin','LANG':'C.UTF-8','TMPDIR':'/tmp'},preexec_fn=limits,timeout=310).returncode
  except subprocess.TimeoutExpired:code=124
@@ -61,6 +64,71 @@ if code==0:
 for filename in ('events.jsonl','summary.json'):(output/filename).unlink(missing_ok=True)
 '''.replace('import hashlib,json,os,pathlib,re,resource,shutil,subprocess,time', 'import hashlib,json,os,pathlib,re,resource,shutil,subprocess,tempfile,time')
 
+RECOVERY = r'''
+import hashlib,json,re,time
+from uuid import UUID
+from narma_video.db import database
+from narma_video.replay_jobs import replay_directory,get_replay
+from narma_video.replay_worker import verify_runtime
+
+def recovery_row(request,lock=False):
+ with database() as c:
+  row=c.execute("SELECT * FROM replay_jobs WHERE id=%s AND state<>'deleted'"+(' FOR UPDATE' if lock else ''),(request['job_id'],)).fetchone()
+  if not row:raise ValueError('REPLAY_RECOVERY_NOT_FOUND')
+  profile=c.execute('SELECT account_id FROM portal_dota_profiles WHERE owner_id=%s',(row['owner_id'],)).fetchone()
+  if not profile or profile['account_id']!=row['account_id'] or row['source_sha256']!=request['source_sha256']:
+   raise ValueError('REPLAY_RECOVERY_SOURCE_OR_PLAYER_MISMATCH')
+ return row
+
+def queue_retry(request):
+ UUID(request['job_id'])
+ if not re.fullmatch('[0-9a-f]{64}',request['source_sha256']) or type(request['expected_attempt']) is not int or not 1<=request['expected_attempt']<3:
+  raise ValueError('REPLAY_RECOVERY_REQUEST_INVALID')
+ verify_runtime()
+ row=recovery_row(request)
+ source=replay_directory(row['id'])/'source.dem'
+ with source.open('rb') as stream:
+  if source.stat().st_size!=row['size_bytes'] or hashlib.file_digest(stream,'sha256').hexdigest()!=request['source_sha256']:
+   raise ValueError('REPLAY_RECOVERY_SOURCE_CHANGED')
+ with database() as c:
+  row=c.execute("SELECT * FROM replay_jobs WHERE id=%s AND state<>'deleted' FOR UPDATE",(request['job_id'],)).fetchone()
+  if not row:raise ValueError('REPLAY_RECOVERY_NOT_FOUND')
+  if row['state'] in ('queued','processing','ready'):return row
+  if (row['state']!='failed' or row['failure_code']!=request['expected_failure_code'] or row['attempt']!=request['expected_attempt']
+      or row['lease_token'] is not None or row['source_sha256']!=request['source_sha256']):
+   raise ValueError('REPLAY_RECOVERY_STATE_CHANGED')
+  # Preserve attempts, identity, source, provider ledger and the global allowance.
+  row=c.execute("UPDATE replay_jobs SET state='queued',progress=0,failure_code=NULL,updated_at=now() WHERE id=%s RETURNING *",(row['id'],)).fetchone()
+ return row
+
+def recover(request):
+ row=queue_retry(request)
+ print(json.dumps({'event':'replay_recovery_queued','job_id':str(row['id']),'state':row['state'],'attempts_preserved':row['attempt']}),flush=True)
+ deadline=time.monotonic()+300
+ previous=None
+ while time.monotonic()<deadline:
+  row=recovery_row(request)
+  signal=(row['state'],row['progress'])
+  if signal!=previous:
+   print(json.dumps({'event':'replay_recovery_state','job_id':str(row['id']),'state':row['state'],'progress':row['progress'],'failure_code':row['failure_code']}),flush=True)
+   previous=signal
+  if row['state']=='ready':
+   detail=get_replay(row['id'],row['owner_id']); report=detail['report']
+   assert (report['match_id']==row['match_id'] and report['player']['account_id']==row['account_id']
+    and report['coverage']['source_sha256']==row['source_sha256'] and report['coverage']['complete'] is True
+    and report['coverage']['final_tick']==report['coverage']['playback_ticks'])
+   with database() as c:
+    calls=c.execute('SELECT billing_status,charged_microusd FROM video_provider_calls WHERE replay_job_id=%s ORDER BY id',(row['id'],)).fetchall()
+   print(json.dumps({'event':'replay_recovery_complete','job_id':str(row['id']),'owner_report_available':detail['replay']['state']=='ready',
+    'complete':True,'player_and_source_verified':True,'final_tick':report['coverage']['final_tick'],'evidence_count':len(report['evidence']),
+    'coaching_status':report.get('coaching',{}).get('status'),'coaching_failure_code':report.get('coaching',{}).get('failure_code'),
+    'provider_calls':calls}),flush=True)
+   return
+  if row['state']=='failed':raise ValueError('REPLAY_RECOVERY_FAILED_AGAIN')
+  time.sleep(5)
+ raise ValueError('REPLAY_RECOVERY_WAIT_TIMEOUT')
+'''
+
 REMOTE = r'''
 import json,pathlib,re,subprocess,sys
 payload=json.loads(sys.stdin.read())
@@ -76,14 +144,14 @@ result=subprocess.run(compose+['exec','-T','replay-worker','python','-c',payload
 for line in result.stdout.splitlines():
  try:item=json.loads(line)
  except ValueError:continue
- if item.get('event') in ('replay_jobs_state','replay_environment','replay_probe_skipped','replay_source_missing','replay_source_integrity','replay_parser_probe','replay_report_probe'):print(json.dumps(item),flush=True)
+ if item.get('event') in ('replay_jobs_state','replay_environment','replay_probe_skipped','replay_source_missing','replay_source_integrity','replay_parser_probe','replay_report_probe','replay_recovery_queued','replay_recovery_state','replay_recovery_complete','replay_recovery_failed'):print(json.dumps(item),flush=True)
 if result.returncode:raise SystemExit('SUPPORT_PROBE_FAILED')
 '''
 
 
 def main():
     request = json.loads((Path(__file__).parent/'replay-support-request.json').read_text())
-    if request.get('action') != 'inspect' or not re.fullmatch('[0-9a-f]{40}',request.get('expected_release','')):
+    if request.get('action') not in ('inspect','retry') or not re.fullmatch('[0-9a-f]{40}',request.get('expected_release','')):
         raise CheckError('support_request_invalid')
     cloud = Cloud()
     server = cloud.call('GET', f'/api/v1/servers/{SERVER}')['server']
@@ -109,11 +177,14 @@ def main():
             # The remote script is source code from this reviewed checkout. JSON
             # travels on stdin; no secret, replay, or prompt enters command text.
             import shlex
-            body=json.dumps({'expected_release':request['expected_release'],'probe':PROBE}).encode()
-            output=command(ssh+['python3 -c '+shlex.quote(REMOTE)],input=body,timeout=390)
-            for line in output.splitlines():
+            probe=PROBE if request['action']=='inspect' else RECOVERY+'\nrecover(json.loads('+repr(json.dumps(request))+'))'
+            body=json.dumps({'expected_release':request['expected_release'],'probe':probe}).encode()
+            import subprocess
+            result=subprocess.run(ssh+['python3 -c '+shlex.quote(REMOTE)],input=body,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=390)
+            for line in result.stdout.splitlines():
                 item=json.loads(line)
                 if item.get('event','').startswith('replay_'):print(json.dumps(item),flush=True)
+            if result.returncode:raise CheckError('support_probe_failed')
         finally:
             if ssh_id is not None:
                 try:cloud.call('DELETE',f'/api/v1/servers/{SERVER}/ssh-keys/{ssh_id}')
