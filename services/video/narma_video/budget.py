@@ -112,9 +112,11 @@ def settle(call_id, usage):
         raise ValueError('VIDEO_BUDGET_RECONCILIATION_REQUIRED')
 
 
-def status():
-    with database() as connection:
-        row = connection.execute("SELECT *,expires_at>now() AND expires_at<='2027-01-01T00:00:00Z'::timestamptz AS price_valid FROM video_ai_budget WHERE id=1").fetchone()
+def status(connection=None):
+    if connection is None:
+        with database() as connection:
+            return status(connection)
+    row = connection.execute("SELECT *,expires_at>now() AND expires_at<='2027-01-01T00:00:00Z'::timestamptz AS price_valid FROM video_ai_budget WHERE id=1").fetchone()
     if not row:
         return {'enabled':False,'reason':'not_configured'}
     valid = row['enabled'] and row['price_valid'] and row['model']==MODEL and row['price_policy']==POLICY and 0<row['limit_microusd']<=MAX_ALLOWANCE

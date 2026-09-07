@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import tarfile
@@ -69,6 +70,16 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
     # Never expose raw stdout/stderr from commands that may handle secrets.
     result = subprocess.run(argv, input=input, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, timeout=timeout)
+    if result.returncode:
+        for line in result.stdout.splitlines():
+            if line.startswith(b'{"event": "https_failure"'):
+                item=json.loads(line)
+                if re.fullmatch('https_[a-z_]{1,80}',item.get('code','')):
+                    event('https_failure',code=item['code'])
+            elif line.startswith(b'{"event": "video_'):
+                item=json.loads(line)
+                if item.get('event') in ('video_pipeline_failure','video_activation_failure') and re.fullmatch('[A-Za-z_]{1,100}',item.get('code','')):
+                    event(item['event'],code=item['code'])
     if bootstrap:
         stages = {"lock", "cloud_init", "packages", "docker_firewall", "stop_worker",
                   "build", "database_api", "readiness", "ready"}
@@ -118,6 +129,32 @@ def address(server):
                 if ip.version == 4 and ip.is_global:
                     return str(ip)
     return None
+
+def ensure_https(ssh,release,hostname,host):
+    if {x[4][0] for x in socket.getaddrinfo(hostname,80,type=socket.SOCK_STREAM)}!={host}:
+        raise CheckError('https_public_dns_mismatch')
+    def remote(action):
+        output=command(ssh+['python3 '+release+'/ops/timeweb/https.py '+action],timeout=1000)
+        result=json.loads(output)
+        if result.get('state')!='passed':
+            raise CheckError('https_step_failed')
+        event('https_configuration',step=action.split()[0],state='passed')
+    remote('prepare '+shlex.quote(hostname)+' '+shlex.quote(host))
+    opener=urllib.request.build_opener(NoRedirect())
+    with opener.open('http://'+hostname+'/.well-known/acme-challenge/narma-probe',timeout=20) as response:
+        if response.read(256)!=('narma-acme-'+host+'\n').encode():
+            raise CheckError('https_public_challenge_mismatch')
+    remote('issue')
+    with opener.open('https://'+hostname+'/livez',timeout=20) as response:
+        if json.loads(response.read(4096)).get('status')!='alive':
+            raise CheckError('https_public_health_failed')
+    try:
+        opener.open('https://'+hostname+'/v1/videos',timeout=20)
+        raise CheckError('https_unauthenticated_access')
+    except urllib.error.HTTPError as error:
+        if error.code!=401:
+            raise CheckError('https_auth_check_failed') from None
+    event('https_public_endpoint',origin='https://'+hostname,certificate_verified=True,anonymous_api_status=401)
 
 
 def selected_project(cloud):
@@ -268,6 +305,8 @@ runcmd:
             domains = cloud.call("GET", "/api/v1/domains?limit=100")
             event("technical_domain_inventory", domains=[{"fqdn":d.get("fqdn"),"linked_ip":d.get("linked_ip")}
                 for d in domains.get("domains",[]) if d.get("is_technical") is True and d.get("linked_ip")==host])
+            technical=[d.get('fqdn') for d in domains.get('domains',[]) if d.get('is_technical') is True and d.get('linked_ip')==host]
+            hostname=technical[0] if len(technical)==1 else 'narma-'+host.replace('.','-')+'.sslip.io'
             release = "/opt/narma/releases/" + sha
             command(ssh+["mkdir -p " + release], timeout=30, phase="release_directory")
             archive = temporary/"source.tar.gz"
@@ -299,6 +338,23 @@ runcmd:
             if os.environ.get("NARMA_VERIFY_GEMINI") == "1":
                 command(ssh+["python3 " + release + "/ops/timeweb/verify_gemini.py " + sha],
                     timeout=210, bootstrap=True, phase="gemini_check")
+            ensure_https(ssh,release,hostname,host)
+            output=command(ssh+['python3 '+release+'/ops/timeweb/activate_video.py '+sha],timeout=360)
+            activated=json.loads(output)
+            if activated.get('event')!='video_pipeline_ready':
+                raise CheckError('video_pipeline_not_ready')
+            event('video_pipeline_ready',frames=4,scope='synthetic_transport_only',worker_enabled=True)
+            handoff=Path('ops/timeweb/bridge-handoff.json')
+            if handoff.exists():
+                expected=json.loads(handoff.read_text())
+                if expected.get('server_id')!=server_id or expected.get('project_id')!=project:
+                    raise CheckError('bridge_handoff_target_mismatch')
+                output=command(ssh+['python3 '+release+'/ops/timeweb/bridge_handoff.py '+sha+' '+os.environ['GITHUB_RUN_ID']],timeout=30)
+                encrypted=json.loads(output)
+                if encrypted.get('event')!='encrypted_site_bridge' or not re.fullmatch('[A-Za-z0-9+/=]{684}',encrypted.get('ciphertext','')):
+                    raise CheckError('bridge_handoff_invalid')
+                event('encrypted_site_bridge',ciphertext=encrypted['ciphertext'],key_fingerprint=encrypted['key_fingerprint'],
+                    release=sha,run_id=os.environ['GITHUB_RUN_ID'],server_id=server_id)
         finally:
             if ssh_id is not None:
                 if server_id is not None:

@@ -63,7 +63,7 @@ class GeminiVision:
                 {"type":"image", "mime_type":"image/jpeg", "data":base64.b64encode(frame["image"]).decode("ascii")},
             ])
         response = self.client.interactions.create(model=self.model, input=content, system_instruction=SYSTEM, store=False,
-            generation_config={"max_output_tokens":4096},
+            generation_config={"max_output_tokens":4096,"thinking_level":"low"},
             response_format={"type":"text","mime_type":"application/json","schema":BatchResult.model_json_schema()})
         self.last_usage = response.usage
         if not response.output_text or len(response.output_text)>100000:

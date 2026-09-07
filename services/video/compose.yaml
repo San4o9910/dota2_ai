@@ -39,6 +39,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       VIDEO_SERVICE_TOKEN: ${VIDEO_SERVICE_TOKEN:?Set VIDEO_SERVICE_TOKEN}
       VIDEO_STORAGE_PATH: /var/lib/narma/video
+      VIDEO_FRAME_BUDGET: ${VIDEO_FRAME_BUDGET:-3600}
     ports: ["127.0.0.1:8080:8080"]
     volumes: [media:/var/lib/narma/video]
     tmpfs: ["/tmp:size=64m,mode=1777"]

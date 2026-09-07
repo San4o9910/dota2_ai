@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .config import PART_BYTES, MAX_VIDEO_BYTES, job_directory, media_root, service_token
 from .db import database
+from . import budget
 
 app = FastAPI(title="NARMA video analysis", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -86,7 +87,10 @@ def videos(owner: Owner):
     with database() as connection:
         rows = connection.execute("SELECT * FROM video_jobs WHERE owner_id=%s AND state<>'deleted' ORDER BY created_at DESC LIMIT 30", (owner,)).fetchall()
         worker = connection.execute("SELECT 1 FROM video_workers WHERE last_seen>now()-interval '5 minutes' LIMIT 1").fetchone()
-    return {"videos": [public(row) for row in rows], "worker_ready": bool(worker), "max_bytes": MAX_VIDEO_BYTES}
+    allowance=budget.status()
+    return {"videos": [public(row) for row in rows], "worker_ready": bool(worker), "max_bytes": MAX_VIDEO_BYTES,
+        "frame_budget":int(os.environ.get('VIDEO_FRAME_BUDGET','3600')),
+        "budget_available":allowance['enabled'] and allowance['available_microusd']>=budget.RESERVATION}
 
 @app.post("/v1/videos", status_code=201)
 def create_video(body: CreateVideo, owner: Owner):
@@ -101,6 +105,9 @@ def create_video(body: CreateVideo, owner: Owner):
             if existing["state"] == "deleted":
                 raise HTTPException(409, "Видео удалено. Начните новую загрузку.")
             return {"video": public(existing), "part_bytes": PART_BYTES}
+        allowance=budget.status(connection)
+        if not allowance['enabled'] or allowance['available_microusd']<budget.RESERVATION:
+            raise HTTPException(503, "Тестовый бюджет видеоанализа исчерпан или приостановлен. Сохранённые результаты доступны.")
         limits = connection.execute("SELECT count(*) FILTER (WHERE created_at>now()-interval '1 day') AS daily, coalesce(sum(size_bytes) FILTER(WHERE storage_deleted_at IS NULL),0) AS stored FROM video_jobs WHERE owner_id=%s", (owner,)).fetchone()
         if limits["daily"] >= 4 or limits["stored"] + body.size_bytes > 8 * 1024**3:
             raise HTTPException(429, "Лимит видео исчерпан. Удалите ненужные файлы или повторите позже.")

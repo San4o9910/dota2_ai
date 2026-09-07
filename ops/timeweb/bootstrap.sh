@@ -29,7 +29,7 @@ compose=(docker compose --project-name narma-video --env-file /opt/narma/secrets
 mark_stage stop_worker
 "${compose[@]}" --profile analysis stop worker
 mark_stage build
-"${compose[@]}" build
+"${compose[@]}" --profile analysis build
 mark_stage database_api
 "${compose[@]}" up -d db migrate api
 mark_stage readiness

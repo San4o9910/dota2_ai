@@ -38,8 +38,8 @@ else:
     values["VIDEO_SERVICE_TOKEN"] = secrets.token_hex(32)
     values["DATABASE_URL"] = "postgresql://narma:" + values["POSTGRES_PASSWORD"] + "@db:5432/narma"
 values.update(GEMINI_API_KEY=key, GEMINI_MODEL="gemini-3.8-flash",
-    VIDEO_FRAME_BUDGET="120", VIDEO_REQUEST_BUDGET="10",
-    VIDEO_OWNER_DAILY_REQUEST_BUDGET="10")
+    VIDEO_FRAME_BUDGET="3600", VIDEO_REQUEST_BUDGET="250",
+    VIDEO_OWNER_DAILY_REQUEST_BUDGET="250")
 temporary = path.with_suffix(".new")
 temporary.write_text("".join(name+"="+value+"\n" for name,value in values.items()))
 temporary.chmod(0o600)

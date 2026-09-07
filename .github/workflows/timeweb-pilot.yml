@@ -5,10 +5,8 @@ on:
     branches: [codex/replay-map-hardening-8ea829a]
     paths:
       - .github/workflows/timeweb-pilot.yml
-      - ops/timeweb/pilot.py
-      - ops/timeweb/bootstrap.sh
-      - ops/timeweb/write_secrets.py
-      - ops/timeweb/verify_gemini.py
+      - ops/timeweb/**
+      - services/video/**
   workflow_dispatch:
 
 permissions:

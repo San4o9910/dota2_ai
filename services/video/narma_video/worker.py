@@ -5,6 +5,7 @@ import os
 import shutil
 import time
 from uuid import uuid4
+from uuid import UUID
 
 from psycopg.types.json import Jsonb
 from .config import job_directory
@@ -30,14 +31,14 @@ def cleanup_deleted():
         except OSError:
             pass  # Preserve quota reservation until removal actually succeeds.
 
-def claim():
+def claim(job_id=None):
     with database() as connection:
         connection.execute("UPDATE video_jobs SET state='failed',failure_code='ATTEMPTS_EXHAUSTED',lease_token=NULL,lease_expires_at=NULL WHERE state='processing' AND lease_expires_at<now() AND attempt>=3")
         token=uuid4()
         return connection.execute("""UPDATE video_jobs SET state='processing',attempt=attempt+1,lease_token=%s,
             lease_expires_at=now()+interval '10 minutes',updated_at=now()
             WHERE id=(SELECT id FROM video_jobs WHERE (state='queued' OR (state='processing' AND lease_expires_at<now()))
-              AND attempt<3 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *""", (token,)).fetchone()
+              AND attempt<3 AND (%s::uuid IS NULL OR id=%s::uuid) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *""", (token,job_id,job_id)).fetchone()
 
 def renew(job):
     with database() as connection:
@@ -108,10 +109,12 @@ def run_job(job, vision):
             raise ValueError("VIDEO_FRAME_COVERAGE_MISMATCH")
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument("--once",action="store_true");args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument("--once",action="store_true");parser.add_argument('--job-id',type=UUID);args=parser.parse_args()
+    if args.job_id and not args.once:
+        parser.error('--job-id requires --once')
     vision=GeminiVision()  # Fail before claiming jobs when credentials are absent.
     while True:
-        cleanup_deleted(); heartbeat(vision.model); job=claim()
+        cleanup_deleted(); heartbeat(vision.model); job=claim(args.job_id)
         if job:
             try:
                 run_job(job,vision)
