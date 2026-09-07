@@ -32,6 +32,18 @@ def main():
     marker=Path('/opt/narma/checks/video-pipeline-v1.json');marker.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     if marker.exists():
         if json.loads(marker.read_text()).get('state')!='passed':
+            snippet="""import json
+from narma_video.db import database
+with database() as c:
+ rows=c.execute("SELECT usage,billing_status FROM video_provider_calls WHERE owner_id='narma_system_pipeline_check' ORDER BY id DESC LIMIT 1").fetchall()
+for row in rows:
+ u=row['usage'] or {}; clean={k:v for k,v in u.items() if k.startswith('total_') and (type(v) is int or v is None)}
+ for k in ('input_tokens_by_modality','output_tokens_by_modality','cached_tokens_by_modality','tool_use_tokens_by_modality','grounding_tool_count'):
+  if isinstance(u.get(k),list): clean[k]=[{a:v for a,v in item.items() if a in ('tokens','count','modality','type') and (type(v) is int or v in ('text','image','audio','video','document','google_search','google_maps','retrieval'))} for item in u[k] if isinstance(item,dict)]
+ print(json.dumps({'event':'provider_usage_diagnostic','keys':sorted(u.keys()),'usage':clean,'billing_status':row['billing_status']}))
+"""
+            diagnostic=run(compose+['exec','-T','api','python','-c',snippet])
+            print(diagnostic.decode().strip(),flush=True)
             raise RuntimeError('video_pipeline_previous_attempt_unresolved')
     else:
         job=str(uuid4())
