@@ -1,0 +1,36 @@
+name: Timeweb daily PostgreSQL backup and restore drill
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: timeweb-pilot-deployment
+  cancel-in-progress: false
+jobs:
+  backup:
+    if: github.repository == 'San4o9910/dota2_ai'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: 017bb830ca654b91bff28e35b69b9dc9b1109cd8
+      - name: Prepare bounded backup runtime before loading credentials
+        run: |
+          python3 -m venv /tmp/narma-backup-env
+          /tmp/narma-backup-env/bin/pip install boto3==1.43.89
+          docker pull postgres:17-bookworm
+          python3 -m py_compile ops/timeweb/backup.py
+          mkdir -m 700 /tmp/narma-terraform
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://releases.hashicorp.com/terraform/1.16.1/terraform_1.16.1_linux_amd64.zip \
+            --output /tmp/narma-terraform/terraform.zip
+          echo '745d33b4b02b7980c62a38ec1beea24ee084ea8caf3f503c200554bd9a0cbe49  /tmp/narma-terraform/terraform.zip' | sha256sum --check
+          unzip -q /tmp/narma-terraform/terraform.zip terraform -d /tmp/narma-terraform
+      - name: Backup live database and restore downloaded copy in isolation
+        env:
+          TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+        run: /tmp/narma-backup-env/bin/python ops/timeweb/backup.py
