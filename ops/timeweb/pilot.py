@@ -106,6 +106,15 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
             if match and match[2].decode() in stages:
                 event("bootstrap_" + match[1].decode().lower(), stage=match[2].decode(),
                       exit_code=int(match[3]) if match[3] else None)
+            if line.startswith(b'{"event": "build_diagnostic"'):
+                try:
+                    item = json.loads(line)
+                    if item.get('code') in {'dependency_rate_limited','dependency_network','dependency_denied',
+                            'dependency_missing','dependency_integrity','source_missing','compile_error',
+                            'disk_full','memory_limit','unclassified'}:
+                        event('build_diagnostic', code=item['code'])
+                except (ValueError, TypeError):
+                    pass
             if line.startswith(b'{"event": "container_'):
                 try:
                     item = json.loads(line)

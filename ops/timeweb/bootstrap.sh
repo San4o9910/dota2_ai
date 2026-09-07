@@ -30,7 +30,12 @@ mark_stage stop_worker
 "${compose[@]}" --profile analysis stop worker
 "${compose[@]}" --profile analysis stop replay-worker
 mark_stage build
-"${compose[@]}" --profile analysis build
+build_log="$release/build.log"
+install -m 600 /dev/null "$build_log"
+if ! BUILDKIT_PROGRESS=plain "${compose[@]}" --profile analysis build >"$build_log" 2>&1; then
+  python3 "$release/ops/timeweb/diagnose_build.py" "$build_log"
+  false
+fi
 mark_stage database_api
 "${compose[@]}" up -d db migrate api
 mark_stage readiness

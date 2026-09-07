@@ -26,6 +26,7 @@ def download(item):
         return target
     temporary = target.with_suffix(".download")
     subprocess.run(["curl", "-fsSL", "--proto", "=https", "--connect-timeout", "10", "--max-time", "120",
+                    "--retry", "3", "--retry-delay", "2", "--retry-max-time", "45",
                     item["url"], "-o", str(temporary)], check=True)
     if temporary.stat().st_size != item["bytes"] or digest(temporary) != item["sha256"]:
         temporary.unlink()
