@@ -1,11 +1,11 @@
-name: Gemini vision smoke
+name: Gemini credential check without inference
 
 on:
   push:
     branches: [codex/replay-map-hardening-8ea829a]
     paths:
       - .github/workflows/gemini-vision-check.yml
-      - ops/timeweb/vision_smoke.py
+      - ops/timeweb/gemini_preflight.py
   workflow_dispatch:
 
 permissions:
@@ -26,9 +26,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Build pinned Python service image
-        run: docker build --tag narma-vision-smoke services/video
-      - name: One bounded vision request on four synthetic frames
+      - name: Verify model access without spending the analysis allowance
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: docker run --rm --env GEMINI_API_KEY --env PYTHONPATH=/app --volume "$PWD/ops/timeweb:/checks:ro" narma-vision-smoke python /checks/vision_smoke.py
+        run: python3 ops/timeweb/gemini_preflight.py

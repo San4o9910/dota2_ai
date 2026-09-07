@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 from uuid import uuid4
 
@@ -114,8 +115,31 @@ for row in rows:
                 raise RuntimeError('video_pipeline_playback_failed')
         call('/v1/videos/'+job,'DELETE')
         temporary=marker.with_suffix('.new');temporary.write_text(json.dumps({'state':'passed','job':job,'release':sha,'frames':4}));temporary.replace(marker)
+    # A successful `up -d` does not prove the worker survived initialization.
+    # Require a heartbeat produced after this activation, not the probe's row.
+    fixture_check="""from narma_video.db import database
+with database() as c:
+ row=c.execute("SELECT count(*) AS n FROM video_jobs WHERE owner_id='narma_system_pipeline_check' AND state IN ('queued','processing')").fetchone()
+ print(row['n'])
+"""
+    if run(compose+['exec','-T','api','python','-c',fixture_check],timeout=20).strip()!=b'0':
+        raise RuntimeError('video_fixture_still_pending')
+    heartbeat_query="""from narma_video.db import database
+with database() as c:
+ row=c.execute("SELECT last_seen::text FROM video_workers WHERE id='vision' AND model='gemini-3.8-flash'").fetchone()
+ print(row['last_seen'] if row else '')
+"""
+    previous_heartbeat=run(compose+['exec','-T','api','python','-c',heartbeat_query],timeout=20).strip()
     run(compose+['--profile','analysis','up','-d','--no-deps','worker'])
-    print(json.dumps({'event':'video_pipeline_ready','frames':4,'scope':'synthetic_transport_only','worker_enabled':True}),flush=True)
+    deadline=time.monotonic()+45
+    while time.monotonic()<deadline:
+        current_heartbeat=run(compose+['exec','-T','api','python','-c',heartbeat_query],timeout=10).strip()
+        running=run(compose+['--profile','analysis','ps','--status','running','--services'],timeout=10).splitlines()
+        if current_heartbeat and current_heartbeat!=previous_heartbeat and b'worker' in running and call('/v1/videos').get('worker_ready'):
+            print(json.dumps({'event':'video_pipeline_ready','frames':4,'scope':'synthetic_transport_only','worker_enabled':True,'fresh_worker_heartbeat':True}),flush=True)
+            return
+        time.sleep(2)
+    raise RuntimeError('video_worker_heartbeat_timeout')
 
 if __name__=='__main__':
     try: main()

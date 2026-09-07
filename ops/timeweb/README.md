@@ -1,5 +1,9 @@
 # Timeweb: initial access and budget check
 
+> Historical bootstrap record. Current configuration, global Gemini allowance,
+> HTTPS and verified backup/recovery procedures are documented in
+> [TIMEWEB_PILOT_OPERATIONS.md](../../docs/TIMEWEB_PILOT_OPERATIONS.md).
+
 Owner's updated target: **about 100 RUB/day for Timeweb using ordinary hourly
 billing, with no prepaid monthly/yearly period purchase**, and **2,000 RUB total
 for initial Gemini tests**. This supersedes the earlier 2,000/month hosting target.

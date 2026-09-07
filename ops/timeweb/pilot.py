@@ -341,15 +341,18 @@ runcmd:
             event("global_video_allowance", enabled=state.get("enabled"),
                 limit_microusd=state.get("limit_microusd"),spent_microusd=state.get("spent_microusd"),
                 reserved_microusd=state.get("reserved_microusd"))
-            if os.environ.get("NARMA_VERIFY_GEMINI") == "1":
-                command(ssh+["python3 " + release + "/ops/timeweb/verify_gemini.py " + sha],
-                    timeout=210, bootstrap=True, phase="gemini_check")
+            # The activation probe below goes through the same durable budget as jobs.
+            # Legacy direct image checks are retained only as historical source.
             ensure_https(ssh,release,hostname,host)
             output=command(ssh+['python3 '+release+'/ops/timeweb/activate_video.py '+sha],timeout=360)
             activated=json.loads(output)
-            if activated.get('event')!='video_pipeline_ready':
+            if activated.get('event')!='video_pipeline_ready' or activated.get('fresh_worker_heartbeat') is not True:
                 raise CheckError('video_pipeline_not_ready')
-            event('video_pipeline_ready',frames=4,scope='synthetic_transport_only',worker_enabled=True)
+            event('video_pipeline_ready',frames=4,scope='synthetic_transport_only',worker_enabled=True,fresh_worker_heartbeat=True)
+            state=json.loads(command(ssh+["cd " + release + "/services/video && docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env exec -T api python -m narma_video.budget"],timeout=30))
+            event('post_activation_allowance',enabled=state.get('enabled'),
+                limit_microusd=state.get('limit_microusd'),spent_microusd=state.get('spent_microusd'),
+                reserved_microusd=state.get('reserved_microusd'))
             handoff=Path('ops/timeweb/bridge-handoff.json')
             if handoff.exists():
                 expected=json.loads(handoff.read_text())
