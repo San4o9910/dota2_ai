@@ -61,6 +61,39 @@ Local verification: 209 service tests and six subtests passed, one native replay
 runtime test skipped; 21 deployment regressions passed. The local database was
 PGlite with a test-only prepared-statement compatibility adapter, not the
 production PostgreSQL runtime. JavaScript syntax and whitespace checks passed.
-Local Chromium installation timed out, so browser and accessibility verification
-must pass the existing CI gate alongside real PostgreSQL and Docker builds
-before deployment. Deployment outcome will be recorded after completion.
+Local Chromium installation timed out; CI subsequently passed mobile/desktop
+interaction and accessibility checks. The actual 390 px and 1440 px pool
+screenshots were also inspected without a blocking visual finding. Docker
+builds, the isolated replay runtime check and the real PostgreSQL suite passed
+(209 tests passed, one optional test skipped).
+
+### Confirmed deployment, 2026-09-07 20:57 UTC
+
+- Installed release: `35095e7ee00acd5b16fdd5a0b3d371358d644357`.
+- [Workflow 34160970073](https://github.com/San4o9910/dota2_ai/actions/runs/34160970073),
+  job `101862571813`: success. Source tree:
+  `b8ef71804641a0b61277826b8f5419ae9743ddf3`.
+- Live page: <https://narma-72-56-98-68.sslip.io/hero-pool>.
+  Existing VM 9037783 and project 2655641 were retained; no infrastructure or
+  budget change was requested.
+- Migrations and readiness passed. Replay worker has a fresh heartbeat; video
+  worker remains stopped. HTTPS certificate verified; anonymous pool and Hermes
+  APIs return 401, and the pool page and liveness endpoint return 200.
+- Owner-scoped live verification found one owner, one distinct saved match,
+  one hero and one known outcome. Outcome totals and deduplication passed.
+  The existing match was included without refresh or upload; this sample does
+  not support a longitudinal comparison yet.
+- Provider call count did not increase during the pool check. Allowance before
+  and after activation was identical: limit 10,000,000 microUSD, settled spend
+  112,713 microUSD and reserved 3,600,000 microUSD. Existing reservations remain
+  intact. No synthetic inference or coaching retry was performed.
+- Hermes remains an offline evidence exchange; automatic runtime integration
+  is not activated. Previously lost coaching text is not recovered.
+
+The authoritative branch is `San4o9910/dota2_ai` /
+`codex/replay-map-hardening-8ea829a`. The working checkout's local merge commits
+have different hashes but the same release tree; do not publish a legacy Sites
+origin or overwrite concurrent work. Documentation-only updates do not trigger
+deployment. This record supersedes the earlier release details in
+`HERO_POOL_OPERATIONS.md` and points to `HERMES_INTEGRATION.md` for current
+exchange contracts and remaining runtime work.

@@ -1,5 +1,11 @@
 # Hero pool release
 
+This document records the initial pool release. For the current extended pool,
+date-based chronology, retained coaching and Hermes exchange, see
+[HERO_POOL_RELEASE.md](HERO_POOL_RELEASE.md) and
+[HERMES_INTEGRATION.md](HERMES_INTEGRATION.md). The initial deployment below
+remains historical evidence rather than the currently installed release.
+
 The standalone Timeweb portal now has a `/hero-pool` page and authenticated
 `GET /api/hero-pool`, `PUT /api/hero-pool/matches/{match_id}` routes. A read-only
 `GET /api/hero-pool/coach-context` prepares a selected hero and position for a
