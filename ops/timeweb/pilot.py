@@ -45,20 +45,32 @@ class Cloud:
             data=json.dumps(payload).encode() if payload is not None else None,
             headers={"Authorization":"Bearer " + self.token,
                 "Content-Type":"application/json", "Accept":"application/json"})
-        try:
-            with urllib.request.build_opener(NoRedirect()).open(request, timeout=45) as response:
-                body = response.read(2*1024*1024+1)
-            if len(body) > 2*1024*1024:
-                raise CheckError("cloud_response_too_large")
-            return json.loads(body) if body.strip() else {}
-        except urllib.error.HTTPError as error:
-            # Do not log bodies: VM/S3 responses may contain passwords and keys.
-            raise CheckError("cloud_http_" + str(error.code) + "_" + method + "_" + path.split("?")[0]) from None
-        except (urllib.error.URLError, TimeoutError, OSError):
-            # No mutation retry. Reconcile named resources on the next run.
-            raise CheckError("cloud_request_outcome_unknown") from None
-        except (ValueError, UnicodeError):
-            raise CheckError("cloud_response_invalid") from None
+        attempts = 3 if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.build_opener(NoRedirect()).open(request, timeout=45) as response:
+                    body = response.read(2*1024*1024+1)
+                if len(body) > 2*1024*1024:
+                    raise CheckError("cloud_response_too_large")
+                return json.loads(body) if body.strip() else {}
+            except urllib.error.HTTPError as error:
+                # Read-only retries are bounded. Never repeat an ambiguous mutation.
+                status = error.code
+                error.close()
+                if attempt + 1 < attempts and status in {429, 500, 502, 503, 504}:
+                    time.sleep((2, 4)[attempt])
+                    continue
+                # Do not log bodies: VM/S3 responses may contain passwords and keys.
+                raise CheckError("cloud_http_" + str(status) + "_" + method + "_" + path.split("?")[0]) from None
+            except (urllib.error.URLError, TimeoutError):
+                if attempt + 1 < attempts:
+                    time.sleep((2, 4)[attempt])
+                    continue
+                raise CheckError("cloud_request_outcome_unknown") from None
+            except OSError:
+                raise CheckError("cloud_request_outcome_unknown") from None
+            except (ValueError, UnicodeError):
+                raise CheckError("cloud_response_invalid") from None
 
     def list(self, path, key):
         value = self.call("GET", path).get(key)
@@ -282,13 +294,6 @@ def main():
     if type(price) not in (int, float) or not 0 < price <= MAX_VM_MONTH_EQUIVALENT:
         raise CheckError("pilot_price_exceeds_authorized_target")
     project = selected_project(cloud)
-    options = cloud.list("/api/v1/os/servers", "servers_os")
-    ubuntu = [item for item in options if str(item.get("name", "")).lower() == "ubuntu"
-              and str(item.get("version", "")) == "24.04"]
-    if len(ubuntu) != 1:
-        # Print only public OS catalog fields, never account resource details.
-        event("os_selection_required", options=[{k:i.get(k) for k in ("id","name","version")} for i in options])
-        raise CheckError("ubuntu_2404_selection_required")
     servers = cloud.list("/api/v1/servers?limit=100", "servers")
     candidates = [s for s in servers if s.get("name") == NAME]
     if len(candidates) > 1 or (candidates and (candidates[0].get("comment") != MARKER
@@ -303,6 +308,14 @@ def main():
     server_id = int(candidates[0]["id"]) if candidates else None
     if server_id is not None and candidates[0].get("preset_id") != PRESET:
         raise CheckError("existing_server_configuration_unverified")
+    if server_id is None:
+        # An existing, ownership-checked server does not depend on the OS catalog.
+        options = cloud.list("/api/v1/os/servers", "servers_os")
+        ubuntu = [item for item in options if str(item.get("name", "")).lower() == "ubuntu"
+                  and str(item.get("version", "")) == "24.04"]
+        if len(ubuntu) != 1:
+            event("os_selection_required", options=[{k:i.get(k) for k in ("id","name","version")} for i in options])
+            raise CheckError("ubuntu_2404_selection_required")
     ssh_id = None
     with tempfile.TemporaryDirectory(prefix="narma-pilot-") as tmp:
         temporary = Path(tmp)
