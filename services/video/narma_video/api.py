@@ -49,6 +49,7 @@ def ready():
         with database() as connection:
             connection.execute("SELECT 1 FROM video_jobs LIMIT 1")
             connection.execute("SELECT 1 FROM replay_jobs LIMIT 1")
+            connection.execute("SELECT 1 FROM hero_pool_match_notes LIMIT 1")
         with tempfile.TemporaryFile(dir=media_root()) as handle:
             handle.write(b"ready"); handle.flush()
         return {"status":"ready", "checks":["config","postgresql","schema","media"]}
@@ -232,6 +233,7 @@ app.mount('/assets',StaticFiles(directory=STATIC_ROOT),name='portal-assets')
 @app.get('/videos')
 @app.get('/replays')
 @app.get('/account')
+@app.get('/hero-pool')
 def portal_page():
     return FileResponse(STATIC_ROOT/'index.html',media_type='text/html',headers={'Cache-Control':'no-store'})
 

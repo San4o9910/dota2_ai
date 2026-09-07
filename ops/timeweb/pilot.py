@@ -506,7 +506,8 @@ runcmd:
                     or activated.get('synthetic_paid_calls')!=0):
                 raise CheckError('replay_pipeline_not_ready')
             event('replay_pipeline_ready',worker_enabled=True,fresh_worker_heartbeat=True,
-                video_worker_stopped=True,synthetic_paid_calls=0)
+                video_worker_stopped=True,synthetic_paid_calls=0,
+                hero_pool=activated.get('hero_pool'))
             state=json.loads(command(ssh+["cd " + release + "/services/video && docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env exec -T api python -m narma_video.budget"],timeout=30))
             event('post_activation_allowance',enabled=state.get('enabled'),
                 limit_microusd=state.get('limit_microusd'),spent_microusd=state.get('spent_microusd'),

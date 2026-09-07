@@ -442,6 +442,7 @@ def build_report(events_path, summary_path, job):
         "item_usage": sorted(item_usage.values(), key=lambda value: (-value["casts"], value["name"])),
         "evidence": evidence, "inventory": inventory, "findings": findings,
         "coverage": {"complete": True, "source_sha256": digest, "parser": summary.get("parser"),
+            "engine_build": summary.get("build") if type(summary.get("build")) is int else None,
             "final_tick": final_tick, "playback_ticks": summary["playbackTicks"], "events_read": total_events,
             "economy_samples": len(economy), "stats_observed_until": seconds(observed_until),
             "unclosed_death_intervals": len(began), "limits": limits}}

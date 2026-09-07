@@ -28,7 +28,8 @@ class LocalHTTPS(http.client.HTTPSConnection):
 
 
 def anonymous_checks(hostname):
-    checks = [('/livez', 200), ('/api/session', 200), ('/api/replays', 401), ('/v1/videos', 401)]
+    checks = [('/livez', 200), ('/hero-pool', 200), ('/api/session', 200),
+              ('/api/replays', 401), ('/api/hero-pool', 401), ('/v1/videos', 401)]
     for path, expected in checks:
         connection = LocalHTTPS(hostname, timeout=10, context=ssl.create_default_context())
         try:
@@ -64,11 +65,26 @@ SCHEMA_CHECK = '''import json
 from narma_video.db import database
 with database() as c:
  names={r['name'] for r in c.execute('SELECT name FROM video_schema_migrations').fetchall()}
- assert {'005_replay_analysis.sql','006_replay_shared_ai_budget.sql'}<=names
+ assert {'005_replay_analysis.sql','006_replay_shared_ai_budget.sql','007_hero_pool.sql'}<=names
  assert c.execute("SELECT to_regclass('public.replay_jobs') AS r").fetchone()['r']
  assert c.execute("SELECT to_regclass('public.replay_workers') AS r").fetchone()['r']
  assert c.execute("SELECT 1 FROM pg_constraint WHERE conname='provider_call_exactly_one_job' AND conrelid='video_provider_calls'::regclass").fetchone()
  print('REPLAY_SCHEMA_OK')
+'''
+
+POOL_CHECK = '''import json
+from narma_video.db import database
+from narma_video.hero_pool import get_pool
+with database() as c:
+ owners=c.execute('SELECT owner_id FROM portal_dota_profiles').fetchall()
+counts=[]
+for owner in owners:
+ pool=get_pool(owner['owner_id'])
+ assert pool['schema_version']=='narma.hero-pool.v1'
+ assert len({m['match_id'] for m in pool['matches']})==len(pool['matches'])
+ assert pool['summary']['wins']+pool['summary']['losses']+pool['summary']['unknown']==pool['summary']['matches']
+ counts.append({'matches':pool['summary']['matches'],'heroes':len(pool['heroes'])})
+print(json.dumps({'verified':True,'owners':len(owners),'counts':counts}))
 '''
 
 
@@ -142,6 +158,9 @@ def activate(sha, hostname):
         if any(item and item['running'] for item in (inspect_service(service) for service in SERVICES)):
             raise RuntimeError('replay_previous_worker_still_running')
         run(compose(config) + ['exec', '-T', 'api', 'python', '-c', SCHEMA_CHECK])
+        pool_status = json.loads(run(compose(config) + ['exec', '-T', 'api', 'python', '-c', POOL_CHECK]))
+        if pool_status.get('verified') is not True:
+            raise RuntimeError('replay_hero_pool_check_failed')
         after = json.loads(run(compose(config) + ['exec', '-T', 'api', 'python', '-c', DATABASE_STATE]))
         verify_preserved(snapshot.get('before'), after)
         # Compose's default image name is project-service. Confirm it exists so
@@ -171,6 +190,7 @@ with database() as c:
                 return {'event': 'replay_pipeline_ready', 'worker_enabled': True, 'fresh_worker_heartbeat': True,
                         'video_worker_stopped': True, 'schema_verified': True, 'parser_runtime_verified': True,
                         'existing_account_and_budget_preserved': snapshot.get('before') is not None,
+                        'hero_pool': pool_status,
                         'synthetic_paid_calls': 0, 'anonymous_replays_status': 401}
             time.sleep(2)
         raise RuntimeError('replay_worker_heartbeat_timeout')

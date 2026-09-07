@@ -244,12 +244,19 @@ def complete_replay(job_id, owner_id):
 
 def delete_replay(job_id, owner_id):
     with database() as connection:
-        row = connection.execute("SELECT id FROM replay_jobs WHERE id=%s AND owner_id=%s FOR UPDATE", (job_id, owner_id)).fetchone()
+        connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner_id,))
+        row = connection.execute("SELECT id,account_id,match_id FROM replay_jobs WHERE id=%s AND owner_id=%s FOR UPDATE", (job_id, owner_id)).fetchone()
         if not row:
             reject(404, "REPLAY_NOT_FOUND", "Разбор не найден.")
         connection.execute("""UPDATE replay_jobs SET state='deleted',result_payload=NULL,
             lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=%s""", (job_id,))
         connection.execute("DELETE FROM replay_parts WHERE job_id=%s", (job_id,))
+        connection.execute("""DELETE FROM hero_pool_match_notes n
+            WHERE n.owner_id=%s AND n.account_id=%s AND n.match_id=%s
+              AND NOT EXISTS (SELECT 1 FROM replay_jobs r
+                  WHERE r.owner_id=n.owner_id AND r.account_id=n.account_id
+                    AND r.match_id=n.match_id AND r.state<>'deleted')""",
+            (owner_id, row["account_id"], row["match_id"]))
     try:
         if replay_directory(job_id).exists():
             shutil.rmtree(replay_directory(job_id))

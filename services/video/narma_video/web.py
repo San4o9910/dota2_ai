@@ -17,9 +17,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
@@ -33,6 +34,15 @@ SESSION_SECONDS = 7 * 24 * 3600
 MAX_REPLAY_BYTES = 512 * 1024**2
 UPLOAD_GLOBAL_BYTES = 2 * MAX_REPLAY_BYTES
 PORTAL_LOCK = 643847209
+
+
+class HeroPoolMatchNote(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    position: int | None = Field(default=None, ge=1, le=5)
+    focus: Literal["item_plan", "farm_checkpoint", "safe_return"] | None = None
+    reflection: Literal["done", "partial", "not_done"] | None = None
+    note: str = Field(default="", max_length=500)
+
 _DUMMY_SALT = b"narma-login-dummy-salt-v1"
 _KDF_SLOTS = threading.BoundedSemaphore(2)
 
@@ -333,6 +343,31 @@ def attach_web(app):
     @router.get("/profile")
     def profile(account=Depends(account_required)):
         return {"profile": profile_for(account["owner_id"])}
+
+    @router.get("/hero-pool")
+    def hero_pool(hero: str | None = None, position: str | None = None,
+                  account=Depends(account_required)):
+        from .hero_pool import get_pool
+        return get_pool(account["owner_id"], hero=hero, position=position)
+
+    @router.put("/hero-pool/matches/{match_id}", dependencies=[Depends(csrf)])
+    async def hero_pool_note(match_id: str, request: Request,
+                             account=Depends(account_required)):
+        from .hero_pool import update_match
+        body = await json_body(request, HeroPoolMatchNote)
+        return await run_in_threadpool(update_match, account["owner_id"], match_id,
+                                       **body.model_dump())
+
+    @router.get("/hero-pool/coach-context")
+    def hero_coach_context(hero: str, position: int = Query(ge=1, le=5),
+                           account=Depends(account_required)):
+        from .hero_pool import get_pool
+        from .hero_coach_context import build_hero_coach_context
+        pool = get_pool(account["owner_id"], hero=hero, position=position)
+        try:
+            return build_hero_coach_context(pool, hero=hero, position=position)
+        except ValueError:
+            reject(409, "HERO_COACH_CONTEXT", "Пока нет подходящей истории для этого героя и позиции.")
 
     @router.post("/profile/replay", dependencies=[Depends(csrf)])
     async def replay(request: Request, account=Depends(account_required)):
