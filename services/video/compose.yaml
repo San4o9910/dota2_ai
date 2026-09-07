@@ -85,6 +85,29 @@ services:
       migrate: {condition: service_completed_successfully}
     restart: unless-stopped
     logging: *logging
+  replay-worker:
+    profiles: [analysis]
+    build:
+      context: ../..
+      dockerfile: services/replay/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      VIDEO_STORAGE_PATH: /var/lib/narma/video
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:?Select a supported model}
+      REPLAY_PARSER_HOME: /opt/narma/replay
+    volumes: [media:/var/lib/narma/video]
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 3g
+    cpus: 2
+    pids_limit: 128
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    logging: *logging
 volumes:
   database:
   media:

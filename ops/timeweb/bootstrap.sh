@@ -28,6 +28,7 @@ cd "$release/services/video"
 compose=(docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env)
 mark_stage stop_worker
 "${compose[@]}" --profile analysis stop worker
+"${compose[@]}" --profile analysis stop replay-worker
 mark_stage build
 "${compose[@]}" --profile analysis build
 mark_stage database_api

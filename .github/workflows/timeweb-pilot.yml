@@ -7,6 +7,8 @@ on:
       - .github/workflows/timeweb-pilot.yml
       - ops/timeweb/**
       - services/video/**
+      - services/replay/**
+      - .dockerignore
   workflow_dispatch:
 
 permissions:
@@ -38,6 +40,8 @@ jobs:
           bash -n ops/timeweb/bootstrap.sh
           docker build --tag narma-video-check services/video
           docker run --rm narma-video-check python -c "import narma_video.api, narma_video.worker, narma_video.db; print('Runtime imports passed')"
+          docker build --tag narma-replay-check --file services/replay/Dockerfile .
+          docker run --rm narma-replay-check python -c "from narma_video.replay_worker import parser_home; parser_home(); print('Full replay parser installed')"
       - name: Start PostgreSQL and private API in an isolated local test
         env:
           POSTGRES_PASSWORD: narma_ci_only
@@ -66,5 +70,4 @@ jobs:
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          NARMA_VERIFY_GEMINI: "1"
         run: python3 ops/timeweb/pilot.py

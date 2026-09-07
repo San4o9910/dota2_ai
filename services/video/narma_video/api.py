@@ -18,7 +18,7 @@ from .config import PART_BYTES, MAX_VIDEO_BYTES, job_directory, media_root, serv
 from .db import database
 from . import budget
 
-app = FastAPI(title="NARMA video analysis", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="NARMA match analysis", docs_url=None, redoc_url=None, openapi_url=None)
 
 @app.middleware("http")
 async def access_log(request: Request, call_next):
@@ -48,6 +48,7 @@ def ready():
         service_token()
         with database() as connection:
             connection.execute("SELECT 1 FROM video_jobs LIMIT 1")
+            connection.execute("SELECT 1 FROM replay_jobs LIMIT 1")
         with tempfile.TemporaryFile(dir=media_root()) as handle:
             handle.write(b"ready"); handle.flush()
         return {"status":"ready", "checks":["config","postgresql","schema","media"]}
@@ -218,6 +219,8 @@ def delete_video(job_id: UUID, owner: Owner):
 # service's owner header as an end-user identity.
 from .web import attach_web
 attach_web(app)
+from .replay_jobs import attach_replays
+attach_replays(app)
 
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles

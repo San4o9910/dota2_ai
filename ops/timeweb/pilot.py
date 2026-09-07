@@ -76,6 +76,12 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
                 item=json.loads(line)
                 if re.fullmatch('https_[a-z_]{1,80}',item.get('code','')):
                     event('https_failure',code=item['code'])
+            elif line.startswith(b'{"event": "replay_activation_'):
+                item=json.loads(line)
+                if item.get('event')=='replay_activation_failure' and re.fullmatch('replay_[a-z_]{1,100}',item.get('code','')):
+                    event('replay_activation_failure',code=item['code'])
+                elif item.get('event')=='replay_activation_rollback' and all(x in ('worker','replay-worker') for x in item.get('restored_services',[])):
+                    event('replay_activation_rollback',restored_services=item['restored_services'])
             elif line.startswith(b'{"event": "video_'):
                 item=json.loads(line)
                 if item.get('event') in ('video_pipeline_failure','video_activation_failure') and re.fullmatch('[A-Za-z_]{1,100}',item.get('code','')):
@@ -103,7 +109,7 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
             if line.startswith(b'{"event": "container_'):
                 try:
                     item = json.loads(line)
-                    if item.get("event") == "container_status" and item.get("service") in {"db","migrate","api","worker"}:
+                    if item.get("event") == "container_status" and item.get("service") in {"db","migrate","api","worker","replay-worker"}:
                         state = item.get("state")
                         health = item.get("health")
                         event("container_status", service=item["service"],
@@ -337,11 +343,11 @@ runcmd:
             command(ssh+["mkdir -p " + release], timeout=30, phase="release_directory")
             archive = temporary/"source.tar.gz"
             with tarfile.open(archive, "w:gz") as bundle:
-                for directory in (Path("services/video"), Path("ops/timeweb")):
+                for directory in (Path("services/video"), Path("services/replay"), Path("ops/timeweb")):
                     for path in directory.rglob("*"):
                         if not path.is_file() or path.is_symlink():
                             continue
-                        if any(p in {"__pycache__", ".venv", "private-output"} for p in path.parts):
+                        if any(p in {"__pycache__", ".venv", "private-output", "target", "tooling"} for p in path.parts):
                             continue
                         if path.name.startswith(".env") or path.suffix in {".key",".pem",".dem",".mp4",".mkv"}:
                             continue
@@ -352,7 +358,17 @@ runcmd:
             secret_input = json.dumps({"gemini_key":key, "release":sha}).encode()
             command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
             event("installing_private_services", server_id=server_id, release=sha)
-            command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha], timeout=1200, bootstrap=True, phase="bootstrap")
+            command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
+            try:
+                command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha], timeout=1200, bootstrap=True, phase="bootstrap")
+                ensure_https(ssh,release,hostname,host)
+            except Exception:
+                try:
+                    command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+' --rollback-only'],timeout=150)
+                    event('previous_worker_restored_after_bootstrap_failure')
+                except Exception:
+                    event('previous_worker_restore_unconfirmed')
+                raise
             event("private_services_ready", server_id=server_id, release=sha,
                 public_application=False, worker_enabled=False,
                 ready_checks=["postgresql","schema","media","private_api"])
@@ -361,14 +377,15 @@ runcmd:
             event("global_video_allowance", enabled=state.get("enabled"),
                 limit_microusd=state.get("limit_microusd"),spent_microusd=state.get("spent_microusd"),
                 reserved_microusd=state.get("reserved_microusd"))
-            # The activation probe below goes through the same durable budget as jobs.
-            # Legacy direct image checks are retained only as historical source.
-            ensure_https(ssh,release,hostname,host)
-            output=command(ssh+['python3 '+release+'/ops/timeweb/activate_video.py '+sha],timeout=360)
+            # Start only the verified local replay worker. No synthetic paid job.
+            output=command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname],timeout=360)
             activated=json.loads(output)
-            if activated.get('event')!='video_pipeline_ready' or activated.get('fresh_worker_heartbeat') is not True:
-                raise CheckError('video_pipeline_not_ready')
-            event('video_pipeline_ready',frames=4,scope='synthetic_transport_only',worker_enabled=True,fresh_worker_heartbeat=True)
+            if (activated.get('event')!='replay_pipeline_ready'
+                    or activated.get('fresh_worker_heartbeat') is not True
+                    or activated.get('synthetic_paid_calls')!=0):
+                raise CheckError('replay_pipeline_not_ready')
+            event('replay_pipeline_ready',worker_enabled=True,fresh_worker_heartbeat=True,
+                video_worker_stopped=True,synthetic_paid_calls=0)
             state=json.loads(command(ssh+["cd " + release + "/services/video && docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env exec -T api python -m narma_video.budget"],timeout=30))
             event('post_activation_allowance',enabled=state.get('enabled'),
                 limit_microusd=state.get('limit_microusd'),spent_microusd=state.get('spent_microusd'),

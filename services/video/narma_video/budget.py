@@ -9,7 +9,14 @@ RESERVATION = 1_200_000
 MAX_ALLOWANCE = 10_000_000
 
 
-def reserve(connection, job, frames, model):
+def reserve(connection, job, frames, model, *, replay=False):
+    if type(replay) is not bool:
+        raise ValueError('VIDEO_BUDGET_CALL_KIND_INVALID')
+    # Serialize the shared per-owner cap for every caller, including replay jobs.
+    connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))',(job['owner_id'],))
+    daily=connection.execute("SELECT count(*) AS calls FROM video_provider_calls WHERE owner_id=%s AND created_at>now()-interval '1 day'",(job['owner_id'],)).fetchone()
+    if daily['calls'] >= 250:
+        raise ValueError('VIDEO_REQUEST_BUDGET_EXCEEDED')
     row = connection.execute("SELECT *,expires_at>now() AND expires_at<='2027-01-01T00:00:00Z'::timestamptz AS price_valid FROM video_ai_budget WHERE id=1 FOR UPDATE").fetchone()
     if not row or not row['enabled']:
         raise ValueError('VIDEO_GLOBAL_BUDGET_DISABLED')
@@ -19,10 +26,17 @@ def reserve(connection, job, frames, model):
         raise ValueError('VIDEO_GLOBAL_BUDGET_INVALID')
     if row['spent_microusd'] + row['reserved_microusd'] + RESERVATION > row['limit_microusd']:
         raise ValueError('VIDEO_GLOBAL_BUDGET_EXCEEDED')
-    call = connection.execute("""INSERT INTO video_provider_calls
-        (job_id,owner_id,first_frame,last_frame,budget_id,model,price_policy,reserved_microusd,billing_status)
-        VALUES (%s,%s,%s,%s,1,%s,%s,%s,'reserved') RETURNING id""",
-        (job['id'],job['owner_id'],frames[0]['frame_id'],frames[-1]['frame_id'],MODEL,POLICY,RESERVATION)).fetchone()
+    if replay:
+        # Static SQL branch: callers cannot supply a table or column name.
+        call = connection.execute("""INSERT INTO video_provider_calls
+            (replay_job_id,call_kind,owner_id,first_frame,last_frame,budget_id,model,price_policy,reserved_microusd,billing_status)
+            VALUES (%s,'replay',%s,0,0,1,%s,%s,%s,'reserved') RETURNING id""",
+            (job['id'],job['owner_id'],MODEL,POLICY,RESERVATION)).fetchone()
+    else:
+        call = connection.execute("""INSERT INTO video_provider_calls
+            (job_id,owner_id,first_frame,last_frame,budget_id,model,price_policy,reserved_microusd,billing_status)
+            VALUES (%s,%s,%s,%s,1,%s,%s,%s,'reserved') RETURNING id""",
+            (job['id'],job['owner_id'],frames[0]['frame_id'],frames[-1]['frame_id'],MODEL,POLICY,RESERVATION)).fetchone()
     connection.execute("UPDATE video_ai_budget SET reserved_microusd=reserved_microusd+%s,updated_at=now() WHERE id=1",(RESERVATION,))
     return call['id']
 

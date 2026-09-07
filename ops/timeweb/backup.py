@@ -22,6 +22,29 @@ DESCRIPTION='NARMA PostgreSQL backups VPS 9037783 project 2655641'
 PREFIX='postgres/9037783/'
 MAX_DUMP=1024**3-16*1024**2  # Seven retained copies + next copy + manifests fit within 8 GiB.
 
+# Conditional queries preserve the ability to restore earlier pilot snapshots.
+REPLAY_RESTORE_SQL="""SELECT json_build_object(
+    'tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('replay_jobs','replay_parts','replay_workers')),
+    'jobs',(SELECT count(*) FROM replay_jobs),
+    'orphan_jobs',(SELECT count(*) FROM replay_jobs j LEFT JOIN portal_accounts a ON a.owner_id=j.owner_id WHERE a.owner_id IS NULL),
+    'orphan_parts',(SELECT count(*) FROM replay_parts p LEFT JOIN replay_jobs j ON j.id=p.job_id WHERE j.id IS NULL),
+    'invalid_ready_identity',(SELECT count(*) FROM replay_jobs j WHERE j.state='ready' AND (
+        j.result_payload->>'match_id' IS DISTINCT FROM j.match_id
+        OR j.result_payload->'player'->>'account_id' IS DISTINCT FROM j.account_id::text))
+);"""
+PROVIDER_RESTORE_SQL="""SELECT json_build_object(
+    'invalid_call_jobs',(SELECT count(*) FROM video_provider_calls c
+        LEFT JOIN video_jobs v ON v.id=c.job_id
+        LEFT JOIN replay_jobs r ON r.id=c.replay_job_id
+        WHERE CASE c.call_kind
+            WHEN 'video' THEN c.job_id IS NULL OR c.replay_job_id IS NOT NULL
+                OR v.id IS NULL OR c.owner_id IS DISTINCT FROM v.owner_id
+            WHEN 'replay' THEN c.job_id IS NOT NULL OR c.replay_job_id IS NULL
+                OR r.id IS NULL OR c.owner_id IS DISTINCT FROM r.owner_id
+                OR c.first_frame<>0 OR c.last_frame<>0
+            ELSE true END)
+);"""
+
 def bucket(cloud):
     plans=cloud.list('/api/v1/presets/storages','storages_presets')
     plan=next((p for p in plans if p.get('id')==PRESET),None)
@@ -96,6 +119,16 @@ def verify_restore(dump):
             if portal['tables']!=5 or portal['accounts']>1 or portal['orphan_sessions'] or portal['orphan_profiles']:
                 raise CheckError('backup_portal_restore_invariants_failed')
             state['portal']=portal
+        if state['migrations']>=5:
+            replay=json.loads(command(['docker','exec','-i',name,'psql','-U','drill','-d','narma_restore_drill','-v','ON_ERROR_STOP=1','-At'],input=REPLAY_RESTORE_SQL.encode()).decode().splitlines()[0])
+            if replay['tables']!=3 or replay['orphan_jobs'] or replay['orphan_parts'] or replay['invalid_ready_identity']:
+                raise CheckError('backup_replay_restore_invariants_failed')
+            state['replay']=replay
+        if state['migrations']>=6:
+            provider=json.loads(command(['docker','exec','-i',name,'psql','-U','drill','-d','narma_restore_drill','-v','ON_ERROR_STOP=1','-At'],input=PROVIDER_RESTORE_SQL.encode()).decode().splitlines()[0])
+            if provider['invalid_call_jobs']:
+                raise CheckError('backup_provider_restore_invariants_failed')
+            state['provider']=provider
         event('backup_restore_verified',**state)
         return state
     finally:
