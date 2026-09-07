@@ -54,11 +54,16 @@ jobs:
           for attempt in {1..30}; do
             if "${compose[@]}" exec -T api python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=15).close()"; then
               echo 'PostgreSQL, migrations and private API passed'
-              exit 0
+              ready=1
+              break
             fi
             sleep 2
           done
-          exit 1
+          test "${ready:-0}" = 1
+          docker run --rm --user root --network narma-video-ci_default \
+            --env TEST_DATABASE_URL="$DATABASE_URL" \
+            --volume "$PWD/services/video/tests:/app/tests:ro" narma-video-check \
+            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest tests -q'
       - name: Create or reuse one hourly billed pilot and start private services
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}

@@ -11,6 +11,7 @@ from .config import job_directory
 from .db import database
 from .frames import probe, decode, batches
 from .gemini import GeminiVision
+from . import budget as ai_budget
 
 def heartbeat(model):
     with database() as connection:
@@ -57,7 +58,7 @@ def save_batch(job, frames, result):
             (job["id"],frames[0]["frame_id"],frames[-1]["frame_id"],frames[0]["pts_seconds"],frames[-1]["pts_seconds"],Jsonb(payload)))
         connection.execute("UPDATE video_jobs SET processed_frames=%s,updated_at=now(),lease_expires_at=now()+interval '10 minutes' WHERE id=%s", (frames[-1]["frame_id"]+1,job["id"]))
 
-def reserve_provider_call(job, frames):
+def reserve_provider_call(job, frames, model):
     # Reserve before dispatch. Crashes and provider failures still consume budget.
     job_limit=int(os.environ.get('VIDEO_REQUEST_BUDGET','250'))
     daily_limit=int(os.environ.get('VIDEO_OWNER_DAILY_REQUEST_BUDGET','1000'))
@@ -69,7 +70,7 @@ def reserve_provider_call(job, frames):
         limits=connection.execute("SELECT count(*) FILTER(WHERE job_id=%s) AS job_calls,count(*) FILTER(WHERE created_at>now()-interval '1 day') AS daily_calls FROM video_provider_calls WHERE owner_id=%s",(job['id'],job['owner_id'])).fetchone()
         if limits['job_calls']>=job_limit or limits['daily_calls']>=daily_limit:
             raise ValueError('VIDEO_REQUEST_BUDGET_EXCEEDED')
-        connection.execute("INSERT INTO video_provider_calls(job_id,owner_id,first_frame,last_frame) VALUES (%s,%s,%s,%s)",(job['id'],job['owner_id'],frames[0]['frame_id'],frames[-1]['frame_id']))
+        return ai_budget.reserve(connection,job,frames,model)
 
 def run_job(job, vision):
     source=job_directory(job["id"])/"source"
@@ -90,8 +91,13 @@ def run_job(job, vision):
     decoded=decode(source,metadata)
     try:
         for group in batches(decoded,after_frame=job["processed_frames"]-1):
-            renew(job); heartbeat(vision.model); reserve_provider_call(job,group)
-            result=vision.analyze(group,job["nickname"],continuity)
+            renew(job); heartbeat(vision.model)
+            call_id=reserve_provider_call(job,group,vision.model)
+            vision.last_usage=None
+            try:
+                result=vision.analyze(group,job["nickname"],continuity)
+            finally:
+                ai_budget.settle(call_id,vision.last_usage)
             save_batch(job,group,result)
             continuity=result.continuity
     finally:

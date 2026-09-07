@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from narma_video.frames import probe, decode, batches
 from narma_video.gemini import validate_result
 from narma_video import worker
+from narma_video import budget
 from narma_video.api import app
 from narma_video.db import migrate, database
 
@@ -58,7 +59,10 @@ def api(monkeypatch,tmp_path):
     monkeypatch.setenv('VIDEO_SERVICE_TOKEN','test-only-'+'x'*40)
     monkeypatch.setenv('VIDEO_FRAME_BUDGET','3600')
     monkeypatch.setenv('VIDEO_REQUEST_BUDGET','250')
+    monkeypatch.setenv('VIDEO_OWNER_DAILY_REQUEST_BUDGET','1000')
     migrate();migrate()  # Migrations must be idempotent.
+    with database() as conn:
+        conn.execute("UPDATE video_ai_budget SET enabled=true,model='gemini-3.8-flash',price_policy='gemini-3.8-flash-standard-2026-09-07',expires_at='2027-01-01T00:00:00Z',limit_microusd=10000000,spent_microusd=0,reserved_microusd=0,frozen_reason=NULL WHERE id=1")
     owner='test_'+uuid4().hex
     client=TestClient(app)
     client.headers.update({'Authorization':'Bearer test-only-'+'x'*40,'X-Narma-Owner':owner})
@@ -80,13 +84,14 @@ def upload(api,clip):
     return job
 
 class FakeVision:
-    model='test-vision'
+    model='gemini-3.8-flash'
     def __init__(self,fail_on=None):
         self.seen=[];self.fail_on=fail_on
     def analyze(self,frames,nickname,continuity):
         assert nickname=='player_test'
         if self.fail_on==len(self.seen):
             raise ConnectionError('synthetic provider outage')
+        self.last_usage={'total_input_tokens':100,'total_output_tokens':30,'total_thought_tokens':20,'total_tokens':150}
         self.seen.append([f['frame_id'] for f in frames])
         return validate_result({'reviewed_frame_ids':self.seen[-1],'focus_player_visible':True,'findings':[
             {'frame_id':frames[0]['frame_id'],'observation':'SYNTHETIC TEST ONLY','advice':'','confidence':'low'}],'continuity':'test'},frames)
@@ -134,3 +139,87 @@ def test_request_budget_stops_before_paid_dispatch(api,clip,monkeypatch):
         worker.run_job(claimed,model)
     assert len(model.seen)==1
     assert client.get(f'/v1/videos/{job_id}').json()['video']['processed_frames']==16
+
+def test_global_budget_serializes_competing_transactions(api,clip):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    job_id=upload(api,clip);job=worker.claim()
+    with database() as conn:
+        conn.execute('UPDATE video_ai_budget SET limit_microusd=%s WHERE id=1',(budget.RESERVATION,))
+    barrier=Barrier(2)
+    def attempt():
+        barrier.wait(timeout=10)
+        try:
+            with database() as conn:
+                budget.reserve(conn,job,[{'frame_id':0}],budget.MODEL)
+            return 'reserved'
+        except ValueError as error:
+            return str(error)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures=[pool.submit(attempt) for _ in range(2)]
+        assert sorted(f.result(timeout=30) for f in futures)==['VIDEO_GLOBAL_BUDGET_EXCEEDED','reserved']
+    assert budget.status()['reserved_microusd']==budget.RESERVATION
+
+def test_unknown_usage_retains_reservation_and_settlement_is_idempotent(api,clip):
+    upload(api,clip);job=worker.claim()
+    call=worker.reserve_provider_call(job,[{'frame_id':0}],budget.MODEL)
+    budget.settle(call,None)
+    assert budget.status()['reserved_microusd']==budget.RESERVATION
+    usage={'total_input_tokens':100,'total_output_tokens':30,'total_thought_tokens':20,'total_tokens':150}
+    budget.settle(call,usage)  # An uncertain attempt cannot be silently refunded later.
+    assert budget.status()['reserved_microusd']==budget.RESERVATION
+    second=worker.reserve_provider_call(job,[{'frame_id':0}],budget.MODEL)
+    budget.settle(second,usage);budget.settle(second,usage)
+    assert budget.status()['spent_microusd']==263
+    assert budget.status()['reserved_microusd']==budget.RESERVATION
+
+@pytest.mark.parametrize('extra',[
+    {'total_thought_tokens':-1}, {'total_output_tokens':True}, {'total_tokens':201},
+    {'grounding_tool_count':[{'type':'google_search','count':1}]},
+    {'new_billable_field':1}, {'input_tokens_by_modality':[{'modality':'audio','tokens':100}]},
+])
+def test_invalid_usage_freezes_budget_without_refund(api,clip,extra):
+    upload(api,clip);job=worker.claim()
+    call=worker.reserve_provider_call(job,[{'frame_id':0}],budget.MODEL)
+    usage={'total_input_tokens':100,'total_output_tokens':100,'total_thought_tokens':0,'total_tokens':200,**extra}
+    with pytest.raises(ValueError,match='RECONCILIATION'):
+        budget.settle(call,usage)
+    assert not budget.status()['enabled']
+    assert budget.status()['reserved_microusd']==budget.RESERVATION
+    with database() as conn:
+        assert conn.execute('SELECT usage FROM video_provider_calls WHERE id=%s',(call,)).fetchone()['usage']==usage
+
+def test_usage_accounted_despite_invalid_result_and_expired_lease(api,clip):
+    upload(api,clip);job=worker.claim()
+    class InvalidOutput(FakeVision):
+        def analyze(self,*args):
+            self.last_usage={'total_input_tokens':100,'total_output_tokens':100,'total_thought_tokens':0,'total_tokens':200}
+            with database() as conn:
+                conn.execute("UPDATE video_jobs SET lease_expires_at=now()-interval '1 second' WHERE id=%s",(job['id'],))
+            raise ValueError('GEMINI_RESPONSE_INVALID')
+    with pytest.raises(ValueError,match='RESPONSE_INVALID'):
+        worker.run_job(job,InvalidOutput())
+    assert budget.status()['spent_microusd']==450
+    assert budget.status()['reserved_microusd']==0
+
+@pytest.mark.parametrize('change',[
+    "expires_at=now()-interval '1 second'", "expires_at='2028-01-01'", "model='other'", "limit_microusd=10000001",
+])
+def test_bad_policy_rejects_before_provider(api,clip,change):
+    upload(api,clip);job=worker.claim()
+    with database() as conn:
+        conn.execute('UPDATE video_ai_budget SET '+change+' WHERE id=1')
+    model=FakeVision()
+    with pytest.raises(ValueError,match='BUDGET'):
+        worker.run_job(job,model)
+    assert not model.seen
+    assert budget.status()['reserved_microusd']==0
+
+def test_usage_bounds_breach_is_durably_frozen(api,clip):
+    upload(api,clip);job=worker.claim()
+    call=worker.reserve_provider_call(job,[{'frame_id':0}],budget.MODEL)
+    with pytest.raises(ValueError,match='RECONCILIATION'):
+        budget.settle(call,{'total_input_tokens':100,'total_output_tokens':500000,'total_thought_tokens':0,'total_tokens':500100})
+    state=budget.status()
+    assert not state['enabled'] and state['spent_microusd']==1875075
+    assert state['reserved_microusd']==0

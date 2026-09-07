@@ -55,6 +55,7 @@ class GeminiVision:
         self.client.interactions.sdk_configuration.retry_config = None
 
     def analyze(self, frames, nickname, continuity=""):
+        self.last_usage = None
         content = [{"type":"text", "text":json.dumps({"focus_nickname":nickname,"previous_continuity":continuity},ensure_ascii=False)}]
         for frame in frames:
             content.extend([

@@ -265,6 +265,9 @@ runcmd:
                         event("waiting_for_ssh", server_id=server_id)
                     time.sleep(10)
             event("ssh_ready", server_id=server_id)
+            domains = cloud.call("GET", "/api/v1/domains?limit=100")
+            event("technical_domain_inventory", domains=[{"fqdn":d.get("fqdn"),"linked_ip":d.get("linked_ip")}
+                for d in domains.get("domains",[]) if d.get("is_technical") is True and d.get("linked_ip")==host])
             release = "/opt/narma/releases/" + sha
             command(ssh+["mkdir -p " + release], timeout=30, phase="release_directory")
             archive = temporary/"source.tar.gz"
@@ -288,6 +291,11 @@ runcmd:
             event("private_services_ready", server_id=server_id, release=sha,
                 public_application=False, worker_enabled=False,
                 ready_checks=["postgresql","schema","media","private_api"])
+            budget_output=command(ssh+["cd " + release + "/services/video && docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env exec -T api python -m narma_video.budget"],timeout=30)
+            state=json.loads(budget_output)
+            event("global_video_allowance", enabled=state.get("enabled"),
+                limit_microusd=state.get("limit_microusd"),spent_microusd=state.get("spent_microusd"),
+                reserved_microusd=state.get("reserved_microusd"))
             if os.environ.get("NARMA_VERIFY_GEMINI") == "1":
                 command(ssh+["python3 " + release + "/ops/timeweb/verify_gemini.py " + sha],
                     timeout=210, bootstrap=True, phase="gemini_check")
