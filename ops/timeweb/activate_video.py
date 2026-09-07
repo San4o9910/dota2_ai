@@ -17,6 +17,9 @@ def main():
     compose=['docker','compose','--project-name','narma-video','--env-file','/opt/narma/secrets/video.env','--file',str(root/'compose.yaml')]
     def run(args,timeout=120):
         result=subprocess.run(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
+        for line in result.stdout.splitlines():
+            if line.startswith(b'{"event": "video_provider_failure"'):
+                print(line.decode(),flush=True)
         if result.returncode:
             raise RuntimeError('video_activation_command_failed')
         return result.stdout
@@ -30,6 +33,26 @@ def main():
         with urllib.request.urlopen(request,timeout=30) as response:
             return json.loads(response.read(1024*1024))
     marker=Path('/opt/narma/checks/video-pipeline-generate-content-v1.json');marker.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if marker.exists():
+        previous=json.loads(marker.read_text())
+        retry=marker.with_suffix('.diagnostic-retry')
+        if previous.get('state')=='attempted' and not retry.exists():
+            old_job=previous['job'];state=call('/v1/videos/'+old_job)['video']
+            if state['state']=='queued' and state['failure_code']=='VIDEO_PROVIDER_OR_PROCESS_FAILURE':
+                with retry.open('x') as file:
+                    file.write('One retry with sanitized provider diagnostics; previous reservation retained.\n');file.flush();os.fsync(file.fileno())
+                name='narma-pipeline-retry-'+uuid4().hex
+                try:
+                    run(compose+['--profile','analysis','run','--rm','--no-deps','--name',name,'worker','python','-m','narma_video.worker','--once','--job-id',old_job],timeout=210)
+                finally:
+                    subprocess.run(['docker','rm','--force',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
+                result=call('/v1/videos/'+old_job)
+                if result['video']['state']=='ready' and result['video']['processed_frames']==4 and result['video']['frame_count']==4 and not any(b['payload']['findings'] or b['payload']['focus_player_visible'] for b in result['batches']):
+                    request=urllib.request.Request('http://127.0.0.1:8080/v1/videos/'+old_job+'/source',headers={'Authorization':'Bearer '+token,'X-Narma-Owner':'narma_system_pipeline_check','Range':'bytes=0-31'})
+                    with urllib.request.urlopen(request,timeout=20) as response:
+                        if response.status!=206 or len(response.read(64))!=32: raise RuntimeError('video_pipeline_playback_failed')
+                    call('/v1/videos/'+old_job,'DELETE')
+                    temporary=marker.with_suffix('.new');temporary.write_text(json.dumps({'state':'passed','job':old_job,'release':sha,'frames':4,'previous_attempt_reserved':True}));temporary.replace(marker)
     if marker.exists():
         if json.loads(marker.read_text()).get('state')!='passed':
             snippet="""import json
@@ -47,7 +70,7 @@ for row in rows:
   if isinstance(value,dict): return {k:numeric_shape(v,depth+1) for k,v in list(value.items())[:20] if re.fullmatch('[a-zA-Z_]{1,100}',k)}
   return {'type':type(value).__name__,'length':len(value) if isinstance(value,str) else None}
  import re
- for k in ('model_invocation_token_counts','raw_prompt_token'):
+ for k in ('model_invocation_token_counts','raw_prompt_token','unrecognized_generate_content_usage'):
   if k in u: clean[k]=numeric_shape(u[k])
  print(json.dumps({'event':'provider_usage_diagnostic','keys':sorted(u.keys()),'usage':clean,'billing_status':row['billing_status']}))
 """

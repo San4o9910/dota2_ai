@@ -80,6 +80,8 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
                 item=json.loads(line)
                 if item.get('event') in ('video_pipeline_failure','video_activation_failure') and re.fullmatch('[A-Za-z_]{1,100}',item.get('code','')):
                     event(item['event'],code=item['code'])
+                elif item.get('event')=='video_provider_failure':
+                    event('video_provider_failure',error_class=item.get('class'),status=item.get('status'),category=item.get('category'))
             elif line.startswith(b'{"event": "provider_usage_diagnostic"'):
                 # Already reduced to token counters and known modality enums on the VPS.
                 item=json.loads(line)

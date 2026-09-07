@@ -122,6 +122,21 @@ def main():
                 # Provider errors may contain request data. Never log raw exceptions.
                 known=isinstance(error,ValueError) and str(error).startswith(("VIDEO_","GEMINI_"))
                 code=str(error) if known else "VIDEO_PROVIDER_OR_PROCESS_FAILURE"
+                provider_status=getattr(error,'code',None)
+                if type(provider_status) is not int or not 100<=provider_status<=599:
+                    provider_status=None
+                # Class/status and fixed categories diagnose integration errors without
+                # logging provider text, prompts, headers or API keys.
+                category='unknown'
+                description=str(error).lower()
+                for pattern,label in [('service_tier','service_tier'),('servicetier','service_tier'),
+                    ('thinking_level','thinking_level'),('thinkinglevel','thinking_level'),
+                    ('response_json_schema','response_schema'),('responsejsonschema','response_schema'),
+                    ('api key','api_key'),('permission','permission'),('quota','quota'),
+                    ('not found','not_found'),('timed out','timeout')]:
+                    if pattern in description: category=label;break
+                print(json.dumps({'event':'video_provider_failure','class':type(error).__name__,
+                    'status':provider_status,'category':category}),flush=True)
                 print(json.dumps({"event":"video_attempt_failed","id":str(job["id"]),"code":code}),flush=True)
                 with database() as connection:
                     connection.execute("UPDATE video_jobs SET state=%s,failure_code=%s,lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=%s AND state='processing' AND lease_token=%s", ("failed" if known or job["attempt"]>=3 else "queued",code,job["id"],job["lease_token"]))
