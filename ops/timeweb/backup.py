@@ -50,8 +50,14 @@ def bucket(cloud):
     if result.get('status')!='created':
         raise CheckError('backup_bucket_not_ready')
     if result.get('is_allow_auto_upgrade') is not False:
-        event('backup_auto_upgrade_status',bucket_id=result['id'],disabled=False)
-        raise CheckError('backup_auto_upgrade_must_be_disabled')
+        if result.get('is_allow_auto_upgrade') is not True:
+            raise CheckError('backup_auto_upgrade_state_unknown')
+        from disable_s3_expansion import disable_expansion
+        disable_expansion(result,cloud.token)
+        result=cloud.call('GET',f"/api/v1/storages/buckets/{int(result['id'])}")['bucket']
+        if result.get('is_allow_auto_upgrade') is not False:
+            raise CheckError('backup_auto_upgrade_must_be_disabled')
+        event('backup_auto_upgrade_status',bucket_id=result['id'],disabled=True)
     return result
 
 def verify_restore(dump):
@@ -71,14 +77,15 @@ def verify_restore(dump):
             result=subprocess.run(['docker','exec','-i',name,'pg_restore','--username=drill','--dbname=narma_restore_drill',
                 '--no-owner','--no-acl','--single-transaction','--exit-on-error','--no-password'],stdin=source,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=300)
         if result.returncode: raise CheckError('backup_restore_failed')
-        sql="""SELECT json_build_object('tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('video_schema_migrations','video_jobs','video_parts','video_batches','video_workers','video_provider_calls','video_ai_budget')),
+        sql="""SELECT json_build_object('tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('video_schema_migrations','video_jobs','video_parts','video_batches','video_workers','video_provider_calls','video_ai_budget','video_budget_operations')),
             'migrations',(SELECT count(*) FROM video_schema_migrations),'jobs',(SELECT count(*) FROM video_jobs),
             'calls',(SELECT count(*) FROM video_provider_calls),'allowance',(SELECT limit_microusd FROM video_ai_budget WHERE id=1),
             'orphans',(SELECT count(*) FROM video_batches b LEFT JOIN video_jobs j ON j.id=b.job_id WHERE j.id IS NULL));
             UPDATE video_ai_budget SET enabled=false,frozen_reason='RESTORE_REQUIRES_SPEND_RECONCILIATION' WHERE id=1;"""
         output=command(['docker','exec','-i',name,'psql','-U','drill','-d','narma_restore_drill','-v','ON_ERROR_STOP=1','-At'],input=sql.encode())
         state=json.loads(output.decode().splitlines()[0])
-        if state['tables']!=7 or state['migrations']<2 or state['orphans']!=0 or state['allowance']>10000000:
+        expected_tables=8 if state['migrations']>=3 else 7
+        if state['tables']!=expected_tables or state['migrations']<2 or state['orphans']!=0 or state['allowance']>10000000:
             raise CheckError('backup_restore_invariants_failed')
         event('backup_restore_verified',**state)
         return state
@@ -96,10 +103,8 @@ def backup(cloud,ssh,temporary):
     if result.returncode or not 16<dump.stat().st_size<=MAX_DUMP:
         raise CheckError('backup_dump_failed_or_oversized')
     with dump.open('rb') as file: digest=hashlib.file_digest(file,'sha256').hexdigest()
-    hostname=destination['hostname']
-    if not re.fullmatch(r'[a-z0-9.-]+\.twcstorage\.ru',hostname):
-        raise CheckError('backup_endpoint_unverified')
-    client=boto3.client('s3',endpoint_url='https://'+hostname,region_name='ru-1',
+    # Timeweb's documented regional SDK endpoint, independent of display hostname formatting.
+    client=boto3.client('s3',endpoint_url='https://s3.twcstorage.ru',region_name='ru-1',
         aws_access_key_id=destination['access_key'],aws_secret_access_key=destination['secret_key'],
         config=Config(connect_timeout=15,read_timeout=60,retries={'total_max_attempts':2},s3={'addressing_style':'path'}))
     name=destination['name']

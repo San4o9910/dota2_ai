@@ -29,7 +29,7 @@ def main():
         request=urllib.request.Request('http://127.0.0.1:8080'+path,method=method,data=body,headers=headers)
         with urllib.request.urlopen(request,timeout=30) as response:
             return json.loads(response.read(1024*1024))
-    marker=Path('/opt/narma/checks/video-pipeline-v1.json');marker.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    marker=Path('/opt/narma/checks/video-pipeline-generate-content-v1.json');marker.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     if marker.exists():
         if json.loads(marker.read_text()).get('state')!='passed':
             snippet="""import json

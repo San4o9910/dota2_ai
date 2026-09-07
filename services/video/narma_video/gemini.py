@@ -1,9 +1,9 @@
-import base64
 import json
 import os
 from typing import Literal
 
 from google import genai
+from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field
 
 class Finding(BaseModel):
@@ -49,23 +49,73 @@ class GeminiVision:
         self.model = os.environ.get("GEMINI_MODEL", "")
         if not key or not self.model:
             raise RuntimeError("GEMINI_API_KEY and GEMINI_MODEL are required")
-        self.client = genai.Client(api_key=key, http_options={"timeout":120000})
-        # google-genai 2.22.0 interactions otherwise retries up to three times.
-        # One SQL reservation must correspond to one physical provider request.
-        self.client.interactions.sdk_configuration.retry_config = None
+        self.client = genai.Client(api_key=key,http_options=types.HttpOptions(
+            timeout=120000,retry_options=types.HttpRetryOptions(attempts=1)))
 
     def analyze(self, frames, nickname, continuity=""):
         self.last_usage = None
-        content = [{"type":"text", "text":json.dumps({"focus_nickname":nickname,"previous_continuity":continuity},ensure_ascii=False)}]
+        content = [types.Part.from_text(text=json.dumps({"focus_nickname":nickname,"previous_continuity":continuity},ensure_ascii=False))]
         for frame in frames:
             content.extend([
-                {"type":"text", "text":json.dumps({k:frame[k] for k in ("frame_id","pts","time_base","video_seconds")})},
-                {"type":"image", "mime_type":"image/jpeg", "data":base64.b64encode(frame["image"]).decode("ascii")},
+                types.Part.from_text(text=json.dumps({k:frame[k] for k in ("frame_id","pts","time_base","video_seconds")})),
+                types.Part.from_bytes(data=frame['image'],mime_type='image/jpeg'),
             ])
-        response = self.client.interactions.create(model=self.model, input=content, system_instruction=SYSTEM, store=False,
-            generation_config={"max_output_tokens":4096,"thinking_level":"low"},
-            response_format={"type":"text","mime_type":"application/json","schema":BatchResult.model_json_schema()})
-        self.last_usage = response.usage
-        if not response.output_text or len(response.output_text)>100000:
+        response=self.client.models.generate_content(model=self.model,contents=content,config=types.GenerateContentConfig(
+            system_instruction=SYSTEM,max_output_tokens=4096,candidate_count=1,service_tier='standard',
+            thinking_config=types.ThinkingConfig(thinking_level='low'),
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            response_mime_type='application/json',response_json_schema=BatchResult.model_json_schema(),
+            should_return_http_response=True))
+        # Read raw metadata: the SDK's typed converter silently drops unknown fields.
+        body=response.sdk_http_response.body
+        if not body or len(body)>1024*1024:
             raise ValueError("GEMINI_RESPONSE_INVALID")
-        return validate_result(json.loads(response.output_text), frames)
+        raw=json.loads(body)
+        usage=raw.get('usageMetadata')
+        self.last_usage={'unrecognized_generate_content_usage':usage}
+        self.last_usage=generate_usage(usage)
+        candidates=raw.get('candidates',[])
+        if len(candidates)!=1 or candidates[0].get('finishReason')!='STOP':
+            raise ValueError('GEMINI_RESPONSE_INVALID')
+        parts=candidates[0].get('content',{}).get('parts',[])
+        output=''.join(p['text'] for p in parts if isinstance(p.get('text'),str) and not p.get('thought'))
+        if not output or len(output)>100000:
+            raise ValueError('GEMINI_RESPONSE_INVALID')
+        return validate_result(json.loads(output),frames)
+
+def generate_usage(raw):
+    if not isinstance(raw,dict):
+        raise ValueError('GEMINI_USAGE_UNSUPPORTED')
+    counters={'promptTokenCount':'total_input_tokens','candidatesTokenCount':'total_output_tokens',
+        'responseTokenCount':'total_output_tokens','thoughtsTokenCount':'total_thought_tokens',
+        'totalTokenCount':'total_tokens','cachedContentTokenCount':'total_cached_tokens',
+        'toolUsePromptTokenCount':'total_tool_use_tokens'}
+    details={'promptTokensDetails':'input_tokens_by_modality','cacheTokensDetails':'cached_tokens_by_modality',
+        'candidatesTokensDetails':'output_tokens_by_modality','responseTokensDetails':'output_tokens_by_modality',
+        'toolUsePromptTokensDetails':'tool_use_tokens_by_modality'}
+    if set(raw)-set(counters)-set(details)-{'trafficType','serviceTier'}:
+        raise ValueError('GEMINI_USAGE_UNSUPPORTED')
+    if raw.get('trafficType') not in (None,'ON_DEMAND') or raw.get('serviceTier') not in (None,'standard','unspecified'):
+        raise ValueError('GEMINI_USAGE_UNSUPPORTED')
+    result={}
+    for source,target in counters.items():
+        value=raw.get(source)
+        if value is None: continue
+        if target in result and result[target]!=value: raise ValueError('GEMINI_USAGE_UNSUPPORTED')
+        result[target]=value
+    if result.get('total_thought_tokens') is None and type(result.get('total_input_tokens')) is int and type(result.get('total_output_tokens')) is int and result.get('total_tokens')==result['total_input_tokens']+result['total_output_tokens']:
+        result['total_thought_tokens']=0
+    for source,target in details.items():
+        if raw.get(source) is not None:
+            if not isinstance(raw[source],list): raise ValueError('GEMINI_USAGE_UNSUPPORTED')
+            entries=[]
+            for item in raw[source]:
+                if not isinstance(item,dict) or set(item)-{'modality','tokenCount'} or item.get('modality') not in ('TEXT','IMAGE'):
+                    raise ValueError('GEMINI_USAGE_UNSUPPORTED')
+                entries.append({'modality':item['modality'].lower(),'tokens':item.get('tokenCount')})
+            if target in result and result[target]!=entries: raise ValueError('GEMINI_USAGE_UNSUPPORTED')
+            result[target]=entries
+    # Apply the same integer, totals, tool and model-bound checks before accounting.
+    from .budget import normalize_usage
+    normalize_usage(result)
+    return result

@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from narma_video.frames import probe, decode, batches
-from narma_video.gemini import validate_result
+from narma_video.gemini import validate_result,generate_usage
 from narma_video import worker
 from narma_video import budget
 from narma_video.api import app
@@ -223,3 +223,14 @@ def test_usage_bounds_breach_is_durably_frozen(api,clip):
     state=budget.status()
     assert not state['enabled'] and state['spent_microusd']==1875075
     assert state['reserved_microusd']==0
+
+def test_raw_generate_content_usage_reconciles_and_rejects_extra_charges():
+    raw={'promptTokenCount':100,'candidatesTokenCount':20,'totalTokenCount':120,
+        'promptTokensDetails':[{'modality':'TEXT','tokenCount':10},{'modality':'IMAGE','tokenCount':90}]}
+    result=generate_usage(raw)
+    assert result['total_thought_tokens']==0
+    assert budget.normalize_usage(result)[1]==150
+    with pytest.raises(ValueError): generate_usage({**raw,'extraCharges':1})
+    with pytest.raises(ValueError): generate_usage({**raw,'totalTokenCount':125})
+    with pytest.raises(ValueError): generate_usage({**raw,'toolUsePromptTokenCount':2})
+    with pytest.raises(ValueError): generate_usage({**raw,'serviceTier':'priority'})
