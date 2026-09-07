@@ -1,8 +1,9 @@
 """Inspect an existing pilot through ephemeral SSH; never provisions resources.
 
 Only safe operational categories leave the host. Raw parser output stays in its
-owner's private directory. Inspection does not change job state or call Gemini. Explicit recovery queues
-one identified failed upload and preserves its attempts and existing AI budget.
+owner's private directory. Inspection does not change job state or call Gemini.
+Explicit recovery queues one identified upload and preserves its attempts and
+existing AI budget. A reviewed refresh keeps the old report for failure recovery.
 """
 import json
 from pathlib import Path
@@ -129,6 +130,144 @@ def recover(request):
  raise ValueError('REPLAY_RECOVERY_WAIT_TIMEOUT')
 '''
 
+REFRESH = r'''
+from copy import deepcopy
+from psycopg.types.json import Jsonb
+
+def refresh_event(name,**fields):
+ print(json.dumps({'event':name,**fields}),flush=True)
+
+def refresh_request(request):
+ try:UUID(request['job_id'])
+ except (ValueError,TypeError,KeyError):raise ValueError('REPLAY_REFRESH_REQUEST_INVALID') from None
+ if (not isinstance(request.get('source_sha256'),str) or not re.fullmatch('[0-9a-f]{64}',request['source_sha256'])
+     or type(request.get('expected_attempt')) is not int or request['expected_attempt']!=2
+     or request.get('expected_insights_schema')!='narma.replay-insights.v1'):
+  raise ValueError('REPLAY_REFRESH_REQUEST_INVALID')
+
+def refresh_row(connection,request,lock=False):
+ row=connection.execute("SELECT * FROM replay_jobs WHERE id=%s AND state<>'deleted'"+(' FOR UPDATE' if lock else ''),(request['job_id'],)).fetchone()
+ if not row:raise ValueError('REPLAY_REFRESH_NOT_FOUND')
+ profile=connection.execute('SELECT account_id FROM portal_dota_profiles WHERE owner_id=%s'+(' FOR SHARE' if lock else ''),(row['owner_id'],)).fetchone()
+ if (not profile or profile['account_id']!=row['account_id'] or row['source_sha256']!=request['source_sha256']):
+  raise ValueError('REPLAY_REFRESH_SOURCE_OR_PLAYER_MISMATCH')
+ return row
+
+def refresh_report_identity(report,row):
+ if not isinstance(report,dict):raise ValueError('REPLAY_REFRESH_REPORT_INVALID')
+ player=report.get('player',{});coverage=report.get('coverage',{})
+ if (not isinstance(player,dict) or not isinstance(coverage,dict) or str(report.get('match_id'))!=str(row['match_id'])
+     or player.get('account_id')!=row['account_id'] or coverage.get('source_sha256')!=row['source_sha256']
+     or coverage.get('complete') is not True or type(coverage.get('final_tick')) is not int
+     or coverage['final_tick']<=0 or coverage['final_tick']!=coverage.get('playback_ticks')):
+  raise ValueError('REPLAY_REFRESH_REPORT_IDENTITY_INVALID')
+
+def refreshed(report,request):
+ return isinstance(report,dict) and isinstance(report.get('insights'),dict) and report['insights'].get('schema_version')==request['expected_insights_schema']
+
+def refresh_source(row,request):
+ source=replay_directory(row['id'])/'source.dem'
+ try:
+  with source.open('rb') as stream:
+   valid=source.stat().st_size==row['size_bytes'] and hashlib.file_digest(stream,'sha256').hexdigest()==request['source_sha256']
+ except OSError:raise ValueError('REPLAY_REFRESH_SOURCE_UNAVAILABLE') from None
+ if not valid:raise ValueError('REPLAY_REFRESH_SOURCE_CHANGED')
+
+def queue_refresh(request):
+ refresh_request(request)
+ with database() as c:row=refresh_row(c,request)
+ if row['state']=='ready' and refreshed(row['result_payload'],request):
+  refresh_report_identity(row['result_payload'],row)
+  return row,None
+ if row['state']!='ready' or row['attempt']!=request['expected_attempt'] or row['lease_token'] is not None or row['lease_expires_at'] is not None:
+  raise ValueError('REPLAY_REFRESH_STATE_CHANGED')
+ refresh_report_identity(row['result_payload'],row)
+ previous=deepcopy(row['result_payload'])
+ verify_runtime()
+ refresh_source(row,request)
+ with database() as c:
+  row=refresh_row(c,request,lock=True)
+  if row['state']=='ready' and refreshed(row['result_payload'],request):
+   refresh_report_identity(row['result_payload'],row)
+   return row,None
+  if (row['state']!='ready' or row['attempt']!=request['expected_attempt'] or row['lease_token'] is not None
+      or row['lease_expires_at'] is not None or row['result_payload']!=previous):
+   raise ValueError('REPLAY_REFRESH_STATE_CHANGED')
+  # Keep the good payload until finish_replay atomically replaces it. Only the
+  # normal worker claims the next attempt and reserves a metered provider call.
+  row=c.execute("UPDATE replay_jobs SET state='queued',progress=0,failure_code=NULL,updated_at=now() WHERE id=%s RETURNING *",(row['id'],)).fetchone()
+ return row,previous
+
+def restore_refresh(request,previous):
+ if previous is None:return False
+ with database() as c:
+  row=refresh_row(c,request,lock=True)
+  if (row['state']!='failed' or row['attempt']!=request['expected_attempt']+1
+      or row['lease_token'] is not None or row['lease_expires_at'] is not None):
+   return False
+  refresh_report_identity(previous,row)
+  if row['result_payload']!=previous:raise ValueError('REPLAY_REFRESH_PREVIOUS_REPORT_CHANGED')
+  # Never rewind attempts, ownership, source, charges or uncertain reservations.
+  c.execute("UPDATE replay_jobs SET state='ready',progress=100,result_payload=%s,failure_code=NULL,updated_at=now() WHERE id=%s",(Jsonb(previous),row['id']))
+ return True
+
+def refresh_complete(row,request):
+ detail=get_replay(row['id'],row['owner_id']);report=detail.get('report')
+ if detail['replay']['state']!='ready' or not refreshed(report,request):
+  raise ValueError('REPLAY_REFRESH_INSIGHTS_MISSING')
+ refresh_report_identity(report,row)
+ insights=report['insights'];gold=insights.get('gold',{})
+ if not isinstance(gold,dict):raise ValueError('REPLAY_REFRESH_INSIGHTS_INVALID')
+ def count(value):return len(value) if isinstance(value,(list,dict)) else 0
+ counts={'gold_bins':count(gold.get('bins')),'gold_sources':count(gold.get('sources')),
+  'key_items':count(insights.get('items')),'pace_points':count(insights.get('pace')),
+  'death_intervals':count(insights.get('death_intervals')),'training_actions':count(insights.get('training_plan'))}
+ if not all(counts.values()):raise ValueError('REPLAY_REFRESH_VISUALS_INCOMPLETE')
+ coaching=report.get('coaching',{})
+ if not isinstance(coaching,dict):raise ValueError('REPLAY_REFRESH_COACHING_INVALID')
+ next_game=count(coaching.get('next_game'))
+ if coaching.get('status')=='ready' and next_game==0:raise ValueError('REPLAY_REFRESH_NEXT_GAME_MISSING')
+ with database() as c:
+  calls=c.execute('SELECT billing_status,charged_microusd FROM video_provider_calls WHERE replay_job_id=%s ORDER BY id',(row['id'],)).fetchall()
+ refresh_event('replay_refresh_complete',job_id=str(row['id']),owner_report_available=True,complete=True,
+  player_and_source_verified=True,final_tick=report['coverage']['final_tick'],insights_schema=insights['schema_version'],
+  **counts,coaching_status=coaching.get('status'),coaching_failure_code=coaching.get('failure_code'),
+  next_game_actions=next_game,attempt=row['attempt'],provider_calls=calls)
+
+def refresh(request):
+ row,previous=queue_refresh(request)
+ if previous is None:
+  refresh_complete(row,request)
+  return
+ refresh_event('replay_refresh_queued',job_id=str(row['id']),state=row['state'],attempts_preserved=row['attempt'],previous_report_preserved=True)
+ deadline=time.monotonic()+480
+ last=None
+ while time.monotonic()<deadline:
+  with database() as c:row=refresh_row(c,request)
+  signal=(row['state'],row['progress'])
+  if signal!=last:
+   refresh_event('replay_refresh_state',job_id=str(row['id']),state=row['state'],progress=row['progress'],failure_code=row['failure_code'])
+   last=signal
+  if row['state']=='ready':
+   refresh_complete(row,request)
+   return
+  if row['state']=='failed':
+   restored=restore_refresh(request,previous)
+   refresh_event('replay_refresh_restored',job_id=str(row['id']),previous_report_available=restored,attempts_preserved=row['attempt'],failure_code=row['failure_code'])
+   raise ValueError('REPLAY_REFRESH_WORKER_FAILED')
+  if row['attempt']>request['expected_attempt']+1:raise ValueError('REPLAY_REFRESH_ATTEMPT_CHANGED')
+  time.sleep(5)
+ # An active worker owns its lease. A monitor timeout must never overwrite it.
+ raise ValueError('REPLAY_REFRESH_WAIT_TIMEOUT')
+
+def run_refresh(request):
+ try:refresh(request)
+ except Exception as error:
+  code=str(error) if isinstance(error,ValueError) and re.fullmatch('REPLAY_REFRESH_[A-Z_]{1,70}',str(error)) else 'REPLAY_REFRESH_UNEXPECTED_FAILURE'
+  refresh_event('replay_refresh_failed',code=code)
+  raise SystemExit(1) from None
+'''
+
 REMOTE = r'''
 import json,pathlib,re,subprocess,sys
 payload=json.loads(sys.stdin.read())
@@ -140,18 +279,18 @@ if len(ids)!=1:raise SystemExit('SUPPORT_WORKER_NOT_RUNNING')
 template='{"running":{{json .State.Running}},"oom_killed":{{json .State.OOMKilled}},"exit_code":{{json .State.ExitCode}},"restart_count":{{json .RestartCount}}}'
 status=json.loads(subprocess.run(['docker','inspect','--format',template,ids[0].decode()],capture_output=True,check=True).stdout)
 print(json.dumps({'event':'replay_container_state',**status}),flush=True)
-result=subprocess.run(compose+['exec','-T','replay-worker','python','-c',payload['probe']],capture_output=True,timeout=370)
+result=subprocess.run(compose+['exec','-T','replay-worker','python','-c',payload['probe']],capture_output=True,timeout=550 if payload.get('action')=='refresh' else 370)
 for line in result.stdout.splitlines():
  try:item=json.loads(line)
  except ValueError:continue
- if item.get('event') in ('replay_jobs_state','replay_environment','replay_probe_skipped','replay_source_missing','replay_source_integrity','replay_parser_probe','replay_report_probe','replay_recovery_queued','replay_recovery_state','replay_recovery_complete','replay_recovery_failed'):print(json.dumps(item),flush=True)
+ if item.get('event') in ('replay_jobs_state','replay_environment','replay_probe_skipped','replay_source_missing','replay_source_integrity','replay_parser_probe','replay_report_probe','replay_recovery_queued','replay_recovery_state','replay_recovery_complete','replay_recovery_failed','replay_refresh_queued','replay_refresh_state','replay_refresh_complete','replay_refresh_restored','replay_refresh_failed'):print(json.dumps(item),flush=True)
 if result.returncode:raise SystemExit('SUPPORT_PROBE_FAILED')
 '''
 
 
 def main():
     request = json.loads((Path(__file__).parent/'replay-support-request.json').read_text())
-    if request.get('action') not in ('inspect','retry') or not re.fullmatch('[0-9a-f]{40}',request.get('expected_release','')):
+    if request.get('action') not in ('inspect','retry','refresh') or not re.fullmatch('[0-9a-f]{40}',request.get('expected_release','')):
         raise CheckError('support_request_invalid')
     cloud = Cloud()
     server = cloud.call('GET', f'/api/v1/servers/{SERVER}')['server']
@@ -178,9 +317,10 @@ def main():
             # travels on stdin; no secret, replay, or prompt enters command text.
             import shlex
             probe=PROBE if request['action']=='inspect' else RECOVERY+'\nrecover(json.loads('+repr(json.dumps(request))+'))'
-            body=json.dumps({'expected_release':request['expected_release'],'probe':probe}).encode()
+            if request['action']=='refresh':probe=RECOVERY+REFRESH+'\nrun_refresh(json.loads('+repr(json.dumps(request))+'))'
+            body=json.dumps({'expected_release':request['expected_release'],'action':request['action'],'probe':probe}).encode()
             import subprocess
-            result=subprocess.run(ssh+['python3 -c '+shlex.quote(REMOTE)],input=body,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=390)
+            result=subprocess.run(ssh+['python3 -c '+shlex.quote(REMOTE)],input=body,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=570 if request['action']=='refresh' else 390)
             for line in result.stdout.splitlines():
                 item=json.loads(line)
                 if item.get('event','').startswith('replay_'):print(json.dumps(item),flush=True)
