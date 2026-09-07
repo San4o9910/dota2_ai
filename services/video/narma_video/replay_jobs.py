@@ -57,9 +57,10 @@ def owned(connection, owner_id, job_id, lock=False):
 
 
 def public(row):
-    return {key: row[key] for key in (
+    return {**{key: row[key] for key in (
         "id", "filename", "size_bytes", "nickname", "match_id", "state",
-        "progress", "failure_code", "created_at", "updated_at")}
+        "progress", "failure_code", "created_at", "updated_at")},
+        "source_retained": row["storage_deleted_at"] is None}
 
 
 def list_replays(owner_id):
@@ -120,8 +121,23 @@ def get_replay(job_id, owner_id):
     with database() as connection:
         row = owned(connection, owner_id, job_id)
         parts = connection.execute("SELECT part_number FROM replay_parts WHERE job_id=%s ORDER BY part_number", (job_id,)).fetchall()
+        archive = previous_report(connection, row)
+    current = row["state"] == "ready"
     return {"replay": public(row), "parts": [part["part_number"] for part in parts],
-            "report": row["result_payload"] if row["state"] == "ready" else None}
+            "report": row["result_payload"] if current else (archive["report"] if archive else None),
+            "report_is_previous": bool(not current and archive), "archived_report": archive}
+
+
+def previous_report(connection, row):
+    """Read snapshots only after ownership/lease resolution, with exact identity.
+
+    Prefer the latest report containing ready coaching. Its own evidence remains
+    available even when it cannot safely be carried into a refreshed report.
+    """
+    return connection.execute("""SELECT id,created_at,report FROM replay_report_history
+        WHERE job_id=%s AND source_sha256=%s AND match_id=%s AND account_id=%s
+        ORDER BY (report->'coaching'->>'status'='ready') DESC NULLS LAST,id DESC LIMIT 1""",
+        (row["id"], row["source_sha256"], row["match_id"], row["account_id"])).fetchone()
 
 
 def store_part(job_id, part_number, data: bytes, owner_id):
@@ -286,10 +302,15 @@ def claim_replay(worker_id, only_id=None):
             ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1""", (only_id, only_id)).fetchone()
         if row is None:
             return None
-        return connection.execute("""UPDATE replay_jobs SET state='processing',progress=1,
+        claimed = connection.execute("""UPDATE replay_jobs SET state='processing',progress=1,
             attempt=attempt+1,lease_token=%s,lease_expires_at=now()+make_interval(secs => %s),
             failure_code=NULL,updated_at=now() WHERE id=%s RETURNING *""",
             (uuid4(), LEASE_SECONDS, row["id"])).fetchone()
+        archive = previous_report(connection, claimed)
+        if archive:
+            claimed["previous_report"] = archive["report"]
+            claimed["previous_report_id"] = archive["id"]
+        return claimed
 
 
 def replay_progress(job_id, lease_token, progress):

@@ -184,3 +184,82 @@ def test_replay_lease_and_lifetime_shared_daily_caps(monkeypatch, active, calls,
         # Daily count does not limit its source to replay calls.
         count_sql = next(sql for sql, _ in queries if 'FROM video_provider_calls' in sql)
         assert "WHERE owner_id=%s" in count_sql and 'call_kind=' not in count_sql
+
+
+def prior_report():
+    return {**deepcopy(FACTS), 'match_id': '8984479726',
+            'coverage': {'complete': True, 'source_sha256': 'a' * 64},
+            'coaching': {'status': 'ready', 'model': coach.ai_budget.MODEL, **deepcopy(RESULT)}}
+
+
+def refreshed_facts():
+    report = prior_report()
+    report.pop('coaching')
+    for event in report['evidence']:
+        event['id'] = 'new-' + event['id']
+    return report
+
+
+def test_optional_failure_carries_forward_all_valid_evidence_without_retry(monkeypatch, capsys):
+    previous, facts = prior_report(), refreshed_facts()
+    model, requests = synthetic_adapter(response({**RESULT, 'summary': 'Unsupported 100'}))
+    settlements = []
+    monkeypatch.setattr(coach, 'reserve_replay', lambda *args: 91)
+    monkeypatch.setattr(coach.ai_budget, 'settle', lambda *args: settlements.append(args))
+    report = coach.enrich_report({'id': 'test', 'previous_report': previous, 'previous_report_id': 12}, facts, coach=model)
+    assert len(requests) == len(settlements) == 1
+    assert report['coaching']['status'] == 'ready'
+    assert report['coaching']['origin'] == 'previous_report'
+    assert report['coaching']['source_report_id'] == 12
+    assert report['coaching']['refresh_failure_code'] == 'REPLAY_COACH_EVIDENCE_MISMATCH'
+    assert report['coaching']['points'][0]['evidence_ids'] == ['new-death.1', 'new-buyback.1']
+    assert report['coaching']['next_game'][0]['evidence_ids'] == ['new-buyback.1']
+    assert previous == prior_report() and facts == refreshed_facts()
+    assert 'previous_coaching_carried_forward": true' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('change', ['account', 'match', 'source', 'incomplete', 'missing_source',
+                                     'missing_reference', 'ambiguous_new', 'ambiguous_old', 'changed_fact',
+                                     'changed_metrics', 'invalid_old_coaching'])
+def test_prior_coaching_with_foreign_or_unverifiable_context_stays_archived(monkeypatch, change):
+    previous, facts = prior_report(), refreshed_facts()
+    if change == 'account': facts['player']['account_id'] += 1
+    elif change == 'match': facts['match_id'] = '8984479727'
+    elif change == 'source': facts['coverage']['source_sha256'] = 'b' * 64
+    elif change == 'missing_source': previous['coverage'].pop('source_sha256')
+    elif change == 'incomplete': facts['coverage']['complete'] = False
+    elif change == 'missing_reference': facts['evidence'].pop()
+    elif change == 'ambiguous_new': facts['evidence'].append({**facts['evidence'][0], 'id': 'duplicate-new'})
+    elif change == 'ambiguous_old': previous['evidence'].append({**previous['evidence'][0], 'id': 'duplicate-old'})
+    elif change == 'changed_fact': facts['evidence'][0]['details']['killer'] = 'different-opponent'
+    elif change == 'changed_metrics': facts['metrics']['kills'] += 1
+    elif change == 'invalid_old_coaching': previous['coaching']['points'][0]['evidence_ids'] = ['unknown']
+    snapshot = deepcopy(previous)
+    model, requests = synthetic_adapter(response())
+    def deny(*args): raise ValueError('REPLAY_COACH_REQUEST_BUDGET_EXCEEDED')
+    monkeypatch.setattr(coach, 'reserve_replay', deny)
+    monkeypatch.setattr(coach.ai_budget, 'settle', lambda *args: pytest.fail('No new reservation'))
+    report = coach.enrich_report({'id': 'test', 'previous_report': previous}, facts, coach=model)
+    assert not requests
+    assert report['coaching']['status'] == 'unavailable'
+    assert previous == snapshot
+
+
+@pytest.mark.parametrize('error,category', [
+    (TimeoutError('secret timeout URL and credentials'), 'timeout'),
+    (coach.httpx.ConnectError('secret transport URL and credentials'), 'transport'),
+    (coach.errors.ClientError(429, {'error': {'message': 'secret prompt'}}), 'rate_limited'),
+    (coach.errors.ServerError(503, {'error': {'message': 'secret prompt'}}), 'provider_unavailable'),
+    (RuntimeError('secret credentials'), 'unknown'),
+])
+def test_failure_categories_never_expose_provider_text(monkeypatch, capsys, error, category):
+    model, requests = synthetic_adapter(response())
+    def fail(*args): raise error
+    model.analyze = fail
+    settlements = []
+    monkeypatch.setattr(coach, 'reserve_replay', lambda *args: 91)
+    monkeypatch.setattr(coach.ai_budget, 'settle', lambda *args: settlements.append(args))
+    report = coach.enrich_report({'id': 'test'}, FACTS, coach=model)
+    assert settlements == [(91, None)]
+    assert report['coaching']['failure_category'] == category
+    assert 'secret' not in json.dumps(report) + capsys.readouterr().out

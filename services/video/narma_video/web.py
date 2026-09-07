@@ -344,24 +344,18 @@ def attach_web(app):
     def profile(account=Depends(account_required)):
         return {"profile": profile_for(account["owner_id"])}
 
-    @router.get("/hero-pool")
-    def hero_pool(hero: str | None = None, position: str | None = None,
-                  account=Depends(account_required)):
-        from .hero_pool import get_pool
-        return get_pool(account["owner_id"], hero=hero, position=position)
-
-    @router.put("/hero-pool/matches/{match_id}", dependencies=[Depends(csrf)])
-    async def hero_pool_note(match_id: str, request: Request,
+    @router.put("/hero-pool/matches/{match_id:int}", dependencies=[Depends(csrf)])
+    async def hero_pool_note(match_id: int, request: Request,
                              account=Depends(account_required)):
-        from .hero_pool import update_match
+        from .hero_pool_legacy import update_match
         body = await json_body(request, HeroPoolMatchNote)
-        return await run_in_threadpool(update_match, account["owner_id"], match_id,
+        return await run_in_threadpool(update_match, account["owner_id"], str(match_id),
                                        **body.model_dump())
 
     @router.get("/hero-pool/coach-context")
     def hero_coach_context(hero: str, position: int = Query(ge=1, le=5),
                            account=Depends(account_required)):
-        from .hero_pool import get_pool
+        from .hero_pool_legacy import get_pool
         from .hero_coach_context import build_hero_coach_context
         pool = get_pool(account["owner_id"], hero=hero, position=position)
         try:

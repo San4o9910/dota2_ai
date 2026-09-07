@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], tab:'review', pool:{data:null,dirty:true,request:0,signature:'',drafts:new Map(),visible:20,metric:'lh10'}};
+const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20};
 if (state.token) history.replaceState(null, '', location.pathname);
 const labels = {uploading:'Загружается', queued:'В очереди', processing:'Разбираем матч', ready:'Разбор готов', failed:'Разбор остановлен'};
 const failures = {
@@ -29,10 +29,9 @@ async function api(path, method='GET', body) {
 }
 function switchTab(tab) {
   if(!['review','hero-pool','player','account'].includes(tab)) return;
-  state.tab=tab;
   for(const section of document.querySelectorAll('.tab-section')) section.hidden=section.id!==tab;
   for(const button of document.querySelectorAll('nav [data-tab]')) { if(button.dataset.tab===tab) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); }
-  if(tab==='hero-pool'&&state.user) void loadHeroPool();
+  if(tab==='hero-pool'&&state.user) void loadPool();
 }
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>switchTab(button.dataset.tab)));
 switchTab(location.pathname==='/account'?'account':location.pathname==='/hero-pool'?'hero-pool':'review');
@@ -53,14 +52,16 @@ async function session() {
   const data=await api('/api/session'); state.setup=data.setup_required===true; state.user=data.authenticated?data.user:null;
   $('loading').hidden=true; $('workspace').hidden=!state.user; $('auth').hidden=!!state.user; $('logout').hidden=!state.user;
   if(!state.user) {
-    state.pool.data=null; state.pool.dirty=true; state.pool.loading=false; state.pool.signature=''; state.pool.drafts.clear(); state.pool.request++;
-    $('pool-hero').replaceChildren(node('option','Все герои')); $('pool-hero').firstChild.value=''; $('pool-position').value=''; $('pool-refresh').disabled=false; $('hero-pool').removeAttribute('aria-busy'); poolContentVisible(false);
+    state.pool=null; state.poolRequest++; state.poolDrafts.clear(); state.poolJournalOpen.clear(); state.poolSignature=''; state.poolVisible=20;
+    state.profile=null; state.selected=null; state.detail=null; state.showArchived=false; $('result').hidden=true; $('pool-content').hidden=true; $('pool-hermes').replaceChildren();
+    $('pool-hero').replaceChildren(new Option('Все герои','')); $('pool-position').value=''; $('pool-period').value='all'; $('pool-favorites-only').checked=false; $('pool-refresh').disabled=false;
+    $('pool-status').textContent=''; $('pool-content').setAttribute('aria-busy','false');
     $('auth-title').textContent=state.setup?'Создай свой аккаунт':'Вход в NARMA VISION';
     $('auth-copy').textContent=state.setup?'Первый вход владельца платформы. Придумай отдельный пароль для NARMA VISION.':'Войди, чтобы загрузить реплей и посмотреть разбор своего матча.';
     $('auth-submit').textContent=state.setup?'Создать аккаунт':'Войти'; $('auth-submit').disabled=state.setup&&!state.token;
     $('setup-help').hidden=!state.setup||!!state.token; $('password-help').hidden=!state.setup; $('password').autocomplete=state.setup?'new-password':'current-password'; return;
   }
-  $('account-email').textContent=state.user.email; state.profile=(await api('/api/profile')).profile; profileView(); await refresh(); if(state.tab==='hero-pool') await loadHeroPool();
+  $('account-email').textContent=state.user.email; state.profile=(await api('/api/profile')).profile; profileView(); await refresh(); if(!$('hero-pool').hidden) await loadPool();
 }
 $('auth-form').addEventListener('submit',async event=>{
   event.preventDefault(); notice(); const button=$('auth-submit'); button.disabled=true;
@@ -104,8 +105,7 @@ async function refresh() {
   if(!state.user) return;
   const data=await api('/api/replays'); $('worker-status').textContent=data.worker_ready?'Обработчик реплеев работает':'Ожидаем обработчик реплеев';
   const signature=data.replays.map(item=>`${item.id}:${item.state}:${item.updated_at??''}`).sort().join('|');
-  const availableMatches=new Set(data.replays.map(item=>String(item.match_id))); for(const matchId of state.pool.drafts.keys()) if(!availableMatches.has(matchId)) state.pool.drafts.delete(matchId);
-  if(signature!==state.pool.signature) { state.pool.signature=signature; state.pool.dirty=true; if(state.tab==='hero-pool') void loadHeroPool(); }
+  if(signature!==state.poolSignature) { state.poolSignature=signature; if(!$('hero-pool').hidden) void loadPool(); }
   const history=$('history'); history.replaceChildren();
   if(!data.replays.length) history.append(node('p','Загрузи реплей — здесь появится твой первый матч.','empty'));
   for(const item of data.replays) {
@@ -114,145 +114,20 @@ async function refresh() {
     if(item.state==='processing') info.append(node('p',`${num(item.progress)}%`,'history-meta'));
     const open=node('button','Открыть'); open.addEventListener('click',()=>void openReplay(item.id,true).catch(error=>notice(error.message)));
     const remove=node('button','Удалить','delete'); remove.disabled=state.busy;
-    remove.addEventListener('click',async()=>{ if(!confirm('Удалить этот реплей и его разбор?')) return; try { await api('/api/replays/'+item.id,'DELETE'); if(state.selected===item.id) { state.selected=null; state.detail=null; $('result').hidden=true; } await refresh(); } catch(error) { notice(error.message); } });
-    actions.append(open,remove); row.append(info,actions); history.append(row);
+    remove.addEventListener('click',async()=>{ if(!confirm('Удалить этот реплей и его разбор?')) return; try { await api('/api/replays/'+item.id,'DELETE'); state.poolDrafts.delete(String(item.match_id)); state.poolJournalOpen.delete(String(item.match_id)); if(state.selected===item.id) { state.selected=null; state.detail=null; $('result').hidden=true; } await refresh(); } catch(error) { notice(error.message); } });
+    actions.append(open);
+    if(item.state==='ready'&&item.source_retained!==false) {
+      const free=node('button','Освободить место'); free.addEventListener('click',async()=>{ if(!confirm('Удалить исходный .dem? Разбор и статистика в пуле героев сохранятся. Повторный разбор потребует загрузки файла.')) return; free.disabled=true; try { await api('/api/replays/'+item.id+'/source','DELETE'); await refresh(); notice('Исходный реплей удалён. Разбор и статистика сохранены.'); } catch(error) { notice(error.message); free.disabled=false; } }); actions.append(free);
+    }
+    actions.append(remove); row.append(info,actions); history.append(row);
   }
 }
 function svgNode(tag, attributes) { const element=document.createElementNS('http://www.w3.org/2000/svg',tag); for(const [key,value] of Object.entries(attributes)) element.setAttribute(key,String(value)); return element; }
-const positionLabels={1:'1 · Керри',2:'2 · Мид',3:'3 · Офлейн',4:'4 · Поддержка',5:'5 · Полная поддержка'};
-const poolFocusLabels={item_plan:'План на ключевой предмет',farm_checkpoint:'Фарм на 10-й минуте',safe_return:'Возвращение после смерти'};
-const poolMetricLabels={lh10:'Добивания к 10:00',nw10:'Ценность предметов и золота к 10:00',deaths10:'Смерти к 10:00',dead_pct:'Доля матча вне игры, %',gpm:'Золото в минуту'};
-function positionName(value) { return positionLabels[value]??'Позиция не указана'; }
-function poolNumber(value,digits=1) { return finite(value)?value.toLocaleString('ru-RU',{maximumFractionDigits:digits}):'—'; }
-function poolWinrate(value) { return finite(value)?`${poolNumber(value)}%`:'—'; }
-function poolRecord(value) { return `Победы: ${num(value.wins)} · поражения: ${num(value.losses)}${value.unknown?` · без результата: ${num(value.unknown)}`:''}`; }
-function poolContentVisible(visible) { $('pool-summary').hidden=!visible; for(const section of $('hero-pool').querySelectorAll('.pool-section')) section.hidden=!visible; }
-async function loadHeroPool(force=false) {
-  if(!state.user||(!force&&!state.pool.dirty&&state.pool.data)||(!force&&state.pool.loading)) return;
-  const request=++state.pool.request, parameters=new URLSearchParams();
-  if($('pool-hero').value) parameters.set('hero',$('pool-hero').value);
-  if($('pool-position').value) parameters.set('position',$('pool-position').value);
-  state.pool.loading=true; $('pool-refresh').disabled=true; $('pool-status').textContent='Собираем историю твоих героев…'; $('hero-pool').setAttribute('aria-busy','true'); poolContentVisible(false);
-  try {
-    const data=await api('/api/hero-pool'+(parameters.size?'?'+parameters.toString():''));
-    if(request!==state.pool.request||!state.user) return;
-    state.pool.data=data; state.pool.dirty=false; renderHeroPool(data); poolContentVisible(true);
-    $('pool-status').textContent=data.scope?.truncated?`Показаны последние ${num(data.scope.limit)} матчей. Более ранние игры не вошли в расчёт.`:'История обновлена. В расчёте только завершённые разборы твоего игрока.';
-  } catch(error) {
-    if(request!==state.pool.request) return;
-    state.pool.dirty=true; $('pool-status').textContent=`Не удалось обновить пул героев. ${error.message} Нажми «Обновить пул», чтобы повторить.`;
-  } finally {
-    if(request===state.pool.request) { state.pool.loading=false; $('pool-refresh').disabled=false; $('hero-pool').removeAttribute('aria-busy'); }
-  }
-}
-function poolFilter(hero,position) {
-  $('pool-hero').value=hero??''; if(position!==undefined) $('pool-position').value=position===null?'unknown':String(position);
-  state.pool.visible=20; state.pool.dirty=true; void loadHeroPool(true);
-}
-function renderHeroPool(data) {
-  const heroSelect=$('pool-hero'), selected=heroSelect.value; heroSelect.replaceChildren(node('option','Все герои')); heroSelect.firstChild.value='';
-  for(const hero of data.heroes??[]) { const option=node('option',hero.hero_label??heroName(hero.hero)); option.value=hero.hero; heroSelect.append(option); }
-  if(selected&&!(data.heroes??[]).some(hero=>hero.hero===selected)) { const option=node('option',`${heroName(selected)} · нет матчей`); option.value=selected; heroSelect.append(option); }
-  heroSelect.value=selected;
-  const summary=$('pool-summary'), totals=data.summary??{}, known=(totals.wins??0)+(totals.losses??0); summary.replaceChildren();
-  const reviewed=(data.practice?.done??0)+(data.practice?.partial??0)+(data.practice?.not_done??0);
-  for(const [title,value,note] of [['Матчей',num(totals.matches),'В выбранном наборе реплеев'],['Винрейт',poolWinrate(totals.winrate),`Победы: ${num(totals.wins)} из ${num(known)}${known<6?' · мало матчей для вывода':' с известным результатом'}`],['Победы / поражения',`${num(totals.wins)} / ${num(totals.losses)}`,totals.unknown?`${num(totals.unknown)} без результата — вне винрейта`:'По исходу матча в реплее'],['Проверено после игры',num(reviewed),`${num(data.practice?.done??0)} выполнено · ${num(data.practice?.partial??0)} частично`]]) {
-    const metric=node('div',undefined,'pool-stat'), amount=node('dd',value); amount.append(node('p',note,'help')); metric.append(node('dt',title),amount); summary.append(metric);
-  }
-  const heroes=$('pool-heroes'); heroes.replaceChildren(); $('pool-hero-count').textContent=`${num((data.heroes??[]).length)} в истории`;
-  for(const hero of data.heroes??[]) {
-    const card=node('article',undefined,'pool-hero-card'), heading=node('div',undefined,'pool-hero-heading'), monogram=node('span',(hero.hero_label??heroName(hero.hero)).split(' ').slice(0,2).map(word=>word[0]).join(''),'pool-hero-mark'); monogram.setAttribute('aria-hidden','true');
-    const name=node('div'); name.append(node('h3',hero.hero_label??heroName(hero.hero)),node('p',`Матчей: ${num(hero.matches)}`,'help')); heading.append(monogram,name);
-    const rate=node('strong',poolWinrate(hero.winrate),'pool-hero-rate'); rate.setAttribute('aria-label',`Винрейт ${poolWinrate(hero.winrate)}`); heading.append(rate); card.append(heading,node('p',poolRecord(hero),'help'));
-    const select=node('button','Смотреть героя','pool-hero-select'); select.type='button'; select.addEventListener('click',()=>poolFilter(hero.hero,'')); card.append(select);
-    const positions=node('div',undefined,'pool-positions');
-    for(const position of hero.positions??[]) { const button=node('button',undefined,'pool-position-button'); button.type='button'; button.append(node('span',positionName(position.position)),node('strong',poolWinrate(position.winrate)),node('small',poolRecord(position))); button.addEventListener('click',()=>poolFilter(hero.hero,position.position)); positions.append(button); }
-    card.append(positions); heroes.append(card);
-  }
-  if(!heroes.childElementCount) { const empty=node('div',undefined,'pool-empty surface'); empty.append(node('h3','Пул начинается с первого матча'),node('p','Загрузи .dem и дождись готового разбора. Герой, результат и показатели появятся здесь автоматически.','muted')); const button=node('button','Загрузить реплей','secondary'); button.addEventListener('click',()=>switchTab('review')); empty.append(button); heroes.append(empty); }
-  renderPoolTrends(data); renderPoolPatterns(data); renderPoolHistory(data);
-}
-function renderPoolTrends(data) {
-  const target=$('pool-trends'); target.replaceChildren(); const trends=data.trends??{};
-  target.append(node('p',trends.note??'Выбери героя и укажи позицию, чтобы сравнить игры в одной роли.','pool-trend-note'));
-  if(trends.status==='choose_hero_position') return;
-  const matches=(data.matches??[]).slice(0,12).reverse();
-  if(matches.length) {
-    const chart=node('div',undefined,'pool-trend-chart'), label=node('label','Показатель'), select=node('select'); label.htmlFor='pool-trend-metric'; select.id='pool-trend-metric';
-    for(const [key,text] of Object.entries(poolMetricLabels)) { const option=node('option',text); option.value=key; select.append(option); } select.value=state.pool.metric;
-    const plot=node('div',undefined,'pool-plot'); select.addEventListener('change',()=>{state.pool.metric=select.value; drawPoolTrend(plot,matches,state.pool.metric);}); chart.append(label,select,plot); target.append(chart); drawPoolTrend(plot,matches,state.pool.metric);
-  }
-  if(trends.status==='ready') {
-    const comparisons=node('div',undefined,'pool-comparisons');
-    for(const metric of trends.metrics??[]) { const card=node('article',undefined,'pool-comparison'); card.append(node('h3',metric.label??poolMetricLabels[metric.key])); const before=node('div'),after=node('div'); before.append(node('span',`Предыдущие ${num(metric.older_count)}`),node('strong',poolNumber(metric.older))); after.append(node('span',`Последние ${num(metric.recent_count)}`),node('strong',poolNumber(metric.recent))); card.append(before,after); if(finite(metric.delta)) card.append(node('p',`Изменение: ${metric.delta>0?'+':''}${poolNumber(metric.delta)}${metric.unit==='%'?' п.п.':''}`,'help')); comparisons.append(card); }
-    target.append(comparisons);
-  }
-  target.append(node('p',data.scope?.context??'Соперники, рейтинг и патч не сопоставлены. Изменение показателя само по себе не доказывает рост понимания игры.','help'));
-}
-function drawPoolTrend(target,matches,key) {
-  target.replaceChildren(); const valid=matches.filter(match=>finite(match.metrics?.[key]));
-  if(!valid.length) { target.append(node('p','В этих реплеях нет данных для выбранного показателя.','empty')); return; }
-  const title=poolMetricLabels[key], maximum=Math.max(1,...valid.map(match=>match.metrics[key])), svg=svgNode('svg',{viewBox:'0 0 640 185',role:'img','aria-label':`${title}. ${matches.length} последних матчей: от более раннего к более позднему. Точные значения в таблице под графиком.`});
-  const x=index=>matches.length===1?320:24+index/(matches.length-1)*592, y=value=>157-value/maximum*128;
-  for(const fraction of [0,.5,1]) svg.append(svgNode('line',{x1:24,x2:616,y1:y(maximum*fraction),y2:y(maximum*fraction),class:'chart-grid'}));
-  let segment=[];
-  const flush=()=>{ if(segment.length>1) svg.append(svgNode('polyline',{points:segment.join(' '),fill:'none',class:'pool-trend-line'})); segment=[]; };
-  matches.forEach((match,index)=>{ const value=match.metrics?.[key]; if(finite(value)) segment.push(`${x(index)},${y(value)}`); else flush(); }); flush();
-  matches.forEach((match,index)=>{ const value=match.metrics?.[key]; if(!finite(value)) return; const circle=svgNode('circle',{cx:x(index),cy:y(value),r:5,class:'pool-trend-dot'}), detail=svgNode('title',{}); detail.textContent=`Матч ${match.match_id}: ${poolNumber(value)}`; circle.append(detail); svg.append(circle); });
-  const scale=node('div',undefined,'pool-chart-scale'); scale.append(node('span',`Макс. ${poolNumber(maximum)}`),node('span',`${valid.length} из ${matches.length} с данными`));
-  const order=node('div',undefined,'pool-chart-order'); order.append(node('span','Ранее'),node('span','Последний матч'));
-  const details=node('details',undefined,'pool-chart-table'), summary=node('summary','Точные значения по матчам'), table=node('table'), caption=node('caption',title), head=node('thead'), headings=node('tr');
-  for(const text of ['Матч','Результат','Значение']) { const th=node('th',text); th.scope='col'; headings.append(th); } head.append(headings); const body=node('tbody');
-  for(const match of matches) { const row=node('tr'); row.append(node('td',match.match_id),node('td',match.outcome==='win'?'Победа':match.outcome==='loss'?'Поражение':'Неизвестен'),node('td',poolNumber(match.metrics?.[key]))); body.append(row); }
-  table.append(caption,head,body); details.append(summary,table); target.append(scale,svg,order,details);
-}
-async function poolOpenReport(jobId,evidence) {
-  switchTab('review'); await openReplay(jobId,true);
-  if(evidence?.event_id&&state.evidence.has(evidence.event_id)) focusEvidence(evidence.event_id); else if(finite(evidence?.time)) jumpTime(evidence.time);
-}
-function renderPoolPatterns(data) {
-  const target=$('pool-patterns'); target.replaceChildren();
-  for(const pattern of data.patterns??[]) {
-    const card=node('article',undefined,'pool-pattern surface'); card.append(node('p',`${num(pattern.matches)} из ${num(pattern.eligible_matches)} матчей`,'eyebrow'),node('h3',pattern.title),node('p',pattern.observation,'muted'));
-    const action=node('div',undefined,'pool-pattern-action'); action.append(node('h4','Что сделать'),node('p',pattern.action),node('h4','Как проверить'),node('p',pattern.measure)); card.append(action);
-    const links=node('div',undefined,'evidence-links');
-    for(const evidence of (pattern.evidence??[]).slice(0,6)) { const button=node('button',`Матч ${evidence.match_id}${finite(evidence.time)?` · ${stamp(evidence.time)}`:''}`,'evidence-link'); button.addEventListener('click',()=>void poolOpenReport(evidence.job_id,evidence).catch(error=>notice(error.message))); links.append(button); }
-    card.append(links); target.append(card);
-  }
-  if(!target.childElementCount) target.append(node('p',data.trends?.status==='choose_hero_position'?'Выбери одного героя и позицию. Повторения ищем в сопоставимых играх.':'Пока недостаточно повторений для общего вывода. Продолжай загружать игры на этом герое и отмечать один выбранный фокус.','pool-empty surface muted'));
-}
-function poolSelect(id,options,value,className) { const select=node('select',undefined,className); select.id=id; for(const [key,text] of options) { const option=node('option',text); option.value=key; select.append(option); } select.value=value??''; return select; }
-function renderPoolHistory(data) {
-  const target=$('pool-history'); target.replaceChildren(); const matches=data.matches??[];
-  for(const match of matches.slice(0,state.pool.visible)) {
-    const card=node('article',undefined,'pool-match surface'); card.dataset.matchId=String(match.match_id); const heading=node('div',undefined,'pool-match-heading'), identity=node('div'), result=match.outcome==='win'?'Победа':match.outcome==='loss'?'Поражение':'Результат неизвестен';
-    identity.append(node('h3',match.hero_label??heroName(match.hero)),node('p',`Матч ${match.match_id}`,'help')); const badge=node('span',result,`pool-outcome ${match.outcome==='win'?'pool-win':match.outcome==='loss'?'pool-loss':''}`); heading.append(identity,badge); card.append(heading);
-    const metrics=node('dl',undefined,'pool-match-metrics');
-    for(const key of ['lh10','nw10','deaths10']) { const cell=node('div'); cell.append(node('dt',poolMetricLabels[key]),node('dd',poolNumber(match.metrics?.[key],0))); metrics.append(cell); } card.append(metrics);
-    const draft=state.pool.drafts.get(String(match.match_id))??match, form=node('form',undefined,'pool-match-form'), prefix=`pool-${match.match_id}`, grid=node('div',undefined,'pool-form-grid');
-    const position=poolSelect(`${prefix}-position`,[['','Не указана'],...Object.entries(positionLabels)],draft.position,'pool-match-position');
-    const focus=poolSelect(`${prefix}-focus`,[['','Фокус не выбран'],...Object.entries(poolFocusLabels)],draft.focus,'pool-focus');
-    const reflection=poolSelect(`${prefix}-reflection`,[['','Ещё не проверил'],['done','Выполнил'],['partial','Частично'],['not_done','Не выполнил']],draft.reflection,'pool-reflection');
-    for(const [text,control] of [['Позиция в матче',position],['Мой фокус на игру',focus],['После игры: получилось?',reflection]]) { const field=node('div'), label=node('label',text); label.htmlFor=control.id; field.append(label,control); grid.append(field); }
-    const noteLabel=node('label','Что заметил после игры'), note=node('textarea',undefined,'pool-note'); note.id=`${prefix}-note`; noteLabel.htmlFor=note.id; note.maxLength=500; note.rows=2; note.value=draft.note??''; note.placeholder='Какое решение хочу повторить или изменить в следующем матче';
-    const actions=node('div',undefined,'pool-match-actions'), save=node('button','Сохранить проверку','secondary pool-save'), open=node('button','Открыть разбор','quiet pool-open-report'), status=node('p','','help pool-save-status'); save.type='submit'; open.type='button'; status.setAttribute('role','status'); status.setAttribute('aria-live','polite');
-    open.addEventListener('click',()=>void poolOpenReport(match.job_id).catch(error=>notice(error.message))); actions.append(save,open); form.append(grid,noteLabel,note,actions,status); card.append(form); target.append(card);
-    const values=()=>({position:position.value?Number(position.value):null,focus:focus.value||null,reflection:reflection.value||null,note:note.value.trim()});
-    form.addEventListener('input',()=>{state.pool.drafts.set(String(match.match_id),values()); status.textContent='Есть несохранённые изменения.';});
-    form.addEventListener('submit',async event=>{ event.preventDefault(); if(save.disabled) return; const submitted=values(); if(submitted.reflection&&!submitted.focus) { status.textContent='Выбери фокус, для которого отмечаешь результат.'; focus.focus(); return; } save.disabled=true; for(const control of [position,focus,reflection,note]) control.disabled=true; status.textContent='Сохраняем…';
-      try { await api('/api/hero-pool/matches/'+encodeURIComponent(match.match_id),'PUT',submitted); Object.assign(match,submitted); state.pool.drafts.delete(String(match.match_id)); state.pool.dirty=true; await loadHeroPool(true); const updated=Array.from($('pool-history').querySelectorAll('.pool-match')).find(item=>item.dataset.matchId===String(match.match_id)); if(updated) updated.querySelector('.pool-save-status').textContent='Сохранено в аккаунте.'; else $('pool-status').textContent='Сохранено. Матч переместился в выбранную позицию и больше не входит в текущий фильтр.';
-      } catch(error) { status.textContent=`Не удалось сохранить. ${error.message}`; } finally { save.disabled=false; for(const control of [position,focus,reflection,note]) control.disabled=false; }
-    });
-  }
-  if(!matches.length) target.append(node('p','В этом наборе пока нет готовых матчей. Измени фильтр или загрузи реплей.','pool-empty surface muted'));
-  if(matches.length>state.pool.visible) { const more=node('button',`Показать ещё · осталось ${num(matches.length-state.pool.visible)}`,'pool-more quiet'); more.addEventListener('click',()=>{state.pool.visible+=20;renderPoolHistory(data);}); target.append(more); }
-}
-$('pool-refresh').addEventListener('click',()=>void loadHeroPool(true));
-for(const id of ['pool-hero','pool-position']) $(id).addEventListener('change',()=>{state.pool.visible=20;state.pool.dirty=true;void loadHeroPool(true);});
 const sourceColors=['#dcc071','#9fc5a8','#91b8d8','#c1a2d5','#d49b8a','#b7bdad','#d5bba3'];
 function finite(value) { return typeof value==='number' && Number.isFinite(value); }
 function itemName(value) { return String(value??'Предмет').replace(/^item_/,'').split('_').map(word=>word.charAt(0).toUpperCase()+word.slice(1)).join(' '); }
-function insight() { return state.detail?.report?.insights??{}; }
+function displayedReport() { return state.showArchived&&state.detail?.archived_report?.report?state.detail.archived_report.report:state.detail?.report; }
+function insight() { return displayedReport()?.insights??{}; }
 function jumpTime(time) { seekTime(time); $('economy-heading').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'}); }
 function timeButton(time, label, className='evidence-link') { const button=node('button',`${stamp(time)}${label?` · ${label}`:''}`,className); button.type='button'; button.addEventListener('click',()=>jumpTime(time)); return button; }
 function graphFrame(id,duration,maximum) {
@@ -282,7 +157,7 @@ function drawCombat(duration) {
   const target=$('combat-strip'); target.replaceChildren(); const svg=svgNode('svg',{viewBox:'0 0 520 44',role:'img','aria-label':'Моменты убийств, смертей и получения предметов. Точные времена доступны в хронологии.'}), x=t=>20+Math.max(0,Math.min(duration,t))/duration*480;
   svg.append(svgNode('line',{x1:20,x2:500,y1:22,y2:22,class:'chart-axis'}));
   for(const interval of insight().death_intervals??[]) if(finite(interval.start)&&finite(interval.end)) svg.append(svgNode('rect',{x:x(interval.start),y:9,width:Math.max(1,x(interval.end)-x(interval.start)),height:26,class:'death-period'}));
-  for(const event of state.detail.report.evidence??[]) {
+  for(const event of displayedReport().evidence??[]) {
     if(!['kill','death'].includes(event.type)||!finite(event.time)) continue;
     const marker=event.type==='kill'?svgNode('circle',{cx:x(event.time),cy:22,r:3,class:'combat-kill'}):svgNode('path',{d:`M ${x(event.time)} 14 l 5 8 l -5 8 l -5 -8 Z`,class:'combat-death'});
     const title=svgNode('title',{}); title.textContent=`${stamp(event.time)} · ${eventLabels[event.type]}`; marker.append(title); svg.append(marker);
@@ -305,7 +180,7 @@ function renderSources() {
   for(const flow of gold.other_flows??[]) if(finite(flow.gold)&&flow.gold!==0) target.append(node('p',`${flow.label??flow.key}: ${num(flow.gold)} · отдельно от заработка`,'help'));
 }
 function updateMoment() {
-  const report=state.detail?.report; if(!report) return;
+  const report=displayedReport(); if(!report) return;
   const data=insight(), select=bins=>(bins??[]).find(bin=>state.time>=bin.start&&(state.time<bin.end||(state.time===report.metrics?.duration_seconds&&state.time===bin.end))), bin=select(data.gold?.bins), pace=select(data.pace);
   $('income-value').textContent=bin?num(bin.income):'—'; $('farm-value').textContent=pace?num(pace.last_hits):'—';
   $('income-window').textContent=bin?`${stamp(bin.start)}–${stamp(bin.end)} · Потери: ${num(bin.loss)} золота`:'Выбери интервал на общей шкале.';
@@ -316,11 +191,11 @@ function updateMoment() {
   if(!pace&&!bin) target.append(node('p','Для этой минуты подробных счётчиков нет. Снимок общей статистики указан под шкалой времени.','help'));
   for(const card of $('item-cards').children) card.classList.toggle('item-selected',finite(Number(card.dataset.time))&&Math.abs(Number(card.dataset.time)-state.time)<1);
 }
-function itemGoalKey(item) { const player=state.detail?.report?.player??{}; return `narma.item-goal.v1:${player.account_id??'unknown'}:${player.hero??'unknown'}:${item.item}`; }
+function itemGoalKey(item) { const player=displayedReport()?.player??{}; return `narma.item-goal.v1:${player.account_id??'unknown'}:${player.hero??'unknown'}:${item.item}`; }
 function readGoal(item) { try { const value=localStorage.getItem(itemGoalKey(item)); return value&&/^\d{1,3}:[0-5]\d$/.test(value)?value:''; } catch { return ''; } }
 function goalSeconds(text) { if(!/^\d{1,3}:[0-5]\d$/.test(text)) return null; const [minutes,seconds]=text.split(':').map(Number); return minutes*60+seconds; }
 function renderItems() {
-  const report=state.detail.report, data=insight(), provided=Array.isArray(data.items), items=provided?data.items:(report.inventory??[]).filter(entry=>finite(entry.time)).map((entry,index)=>({id:`legacy-${index}`,item:entry.item,label:itemName(entry.item),time:entry.time,event_id:entry.event_id,acquisition:'purchase',timing:{label:'Без эталона',basis:'Нет сопоставимого ориентира по герою, роли и рейтингу.'},realization:{note:'В этом отчёте нет данных о доставке и применении предмета.'}}));
+  const report=displayedReport(), data=insight(), provided=Array.isArray(data.items), items=provided?data.items:(report.inventory??[]).filter(entry=>finite(entry.time)).map((entry,index)=>({id:`legacy-${index}`,item:entry.item,label:itemName(entry.item),time:entry.time,event_id:entry.event_id,acquisition:'purchase',timing:{label:'Без эталона',basis:'Нет сопоставимого ориентира по герою, роли и рейтингу.'},realization:{note:'В этом отчёте нет данных о доставке и применении предмета.'}}));
   const rail=$('item-rail'), cards=$('item-cards'); rail.replaceChildren(); cards.replaceChildren(); $('item-count').textContent=`${items.length} предметов`;
   if(!items.length) { cards.append(node('p','В этом отчёте нет подтверждённых покупок ключевых предметов.','muted')); return; }
   for(const [index,item] of items.entries()) {
@@ -360,7 +235,7 @@ function renderItems() {
   }
 }
 function renderTraining() {
-  const target=$('next-game-plan'), coach=state.detail.report.coaching, plans=coach?.status==='ready'&&coach.next_game?.length?coach.next_game:insight().training_plan??[]; target.replaceChildren();
+  const target=$('next-game-plan'), coach=displayedReport().coaching, plans=coach?.status==='ready'&&coach.next_game?.length?coach.next_game:insight().training_plan??[]; target.replaceChildren();
   for(const [index,plan] of plans.slice(0,3).entries()) { const card=node('article',undefined,'training-card'); card.append(node('p',`0${index+1}`,'training-number'),node('h4',plan.title??'Приоритет на матч'),node('p',plan.action??'','training-action'));
     if(plan.measure) {const measure=node('div',undefined,'training-measure');measure.append(node('span','Как проверить'),node('p',plan.measure));card.append(measure);}
     const links=node('div',undefined,'evidence-links'); for(const id of (plan.evidence_ids??[]).slice(0,2)) {const evidence=state.evidence.get(id);if(!evidence)continue;const button=node('button',`${stamp(evidence.time)} · ${eventLabels[evidence.type]??'Эпизод'}`,'evidence-link');button.addEventListener('click',()=>focusEvidence(id));links.append(button);} if(links.childElementCount)card.append(links);target.append(card);
@@ -374,7 +249,7 @@ function drawGraph(id,samples,key,duration) {
   else {const empty=svgNode('text',{x:260,y:80,'text-anchor':'middle',class:'chart-empty'});empty.textContent='Нет данных';svg.append(empty);}
 }
 function seekTime(seconds, evidenceId=null) {
-  const report=state.detail?.report; if(!report) return;
+  const report=displayedReport(); if(!report) return;
   const duration=Math.max(1,report.metrics?.duration_seconds??0); state.time=Math.max(0,Math.min(duration,seconds));
   $('timeline').value=String(Math.round(state.time)); $('timeline-value').textContent=stamp(state.time);
   const samples=(report.economy??[]).filter(sample=>Number.isFinite(sample.time)&&sample.time<=state.time);
@@ -405,7 +280,7 @@ function renderPoints(target, points) {
 }
 function renderEvents() {
   const filter=$('event-filter').value, list=$('events'); list.replaceChildren();
-  for(const evidence of state.detail?.report?.evidence??[]) {
+  for(const evidence of displayedReport()?.evidence??[]) {
     if(filter!=='all' && evidence.type!==filter) continue;
     const row=node('article',undefined,'event-row'); row.dataset.evidenceId=evidence.id;
     const time=node('button',stamp(evidence.time),'event-time'); time.setAttribute('aria-label',`Выбрать время ${stamp(evidence.time)}`); time.addEventListener('click',()=>seekTime(evidence.time,evidence.id));
@@ -415,12 +290,16 @@ function renderEvents() {
   if(!list.childElementCount) list.append(node('p','Таких событий в журнале нет.','empty'));
 }
 function renderDetail() {
-  const detail=state.detail; if(!detail) return; const job=detail.replay, report=detail.report;
+  const detail=state.detail; if(!detail) return; const job=detail.replay, report=state.showArchived&&detail.archived_report?.report?detail.archived_report.report:detail.report;
   $('result').hidden=false; $('result-title').textContent=job.match_id?`Матч ${job.match_id}`:job.filename; $('result-state').textContent=labels[job.state]??job.state;
   $('result-player').textContent=report?`${report.player.nickname} · ${heroName(report.player.hero)} · ${report.player.team==='radiant'?'Radiant':'Dire'}${report.outcome==='win'?' · Победа':report.outcome==='loss'?' · Поражение':''}`:job.nickname;
   $('analysis-progress').hidden=job.state!=='processing'; $('analysis-progress').value=job.progress??0;
   $('result-status').textContent=job.state==='failed'?(failures[job.failure_code]??'Не удалось завершить разбор этого реплея. Повтори загрузку полного файла .dem.'):job.state==='queued'?'Реплей загружен. Ожидаем начало разбора.':job.state==='processing'?`Читаем события матча и готовим разбор · ${num(job.progress)}%`:job.state==='uploading'?'Реплей ещё загружается.':report?`Полный матч · ${stamp(report.metrics?.duration_seconds)} · Разбор закреплённого игрока`:'Результат ещё не получен.';
-  $('report-body').hidden=!report; if(!report) return;
+  $('report-body').hidden=!report;
+  const archive=$('previous-report-toggle'); archive.hidden=!detail.archived_report?.report||detail.report_is_previous===true; archive.textContent=state.showArchived?'Вернуться к текущему разбору':'Предыдущий тренерский разбор'; archive.setAttribute('aria-pressed',String(state.showArchived));
+  $('previous-report-note').hidden=!(state.showArchived||detail.report_is_previous||report?.coaching?.origin==='previous_report');
+  $('previous-report-note').textContent=state.showArchived||detail.report_is_previous?'Показан сохранённый предыдущий разбор целиком, с его исходными событиями и таймкодами.':report?.coaching?.origin==='previous_report'?'Сохранён предыдущий тренерский комментарий: обновить его в этом запуске не удалось.':'';
+  if(!report) return;
   state.evidence=new Map((report.evidence??[]).map(event=>[event.id,event]));
   const metrics=$('metrics'); metrics.replaceChildren(); const m=report.metrics??{};
   for(const [label,value] of [['Убийства / смерти / помощи',`${num(m.kills)} / ${num(m.deaths)} / ${num(m.assists)}`],['Добивания / денаи',`${num(m.last_hits)} / ${num(m.denies)}`],['Ценность предметов и золота',num(m.net_worth)],['Всего заработано золота',num(m.total_earned_gold)],['Полученный опыт',num(m.xp)],['Время вне игры',stamp(m.confirmed_dead_seconds)]]) { const metric=node('div',undefined,'metric'); metric.append(node('dt',label),node('dd',value)); metrics.append(metric); }
@@ -436,13 +315,241 @@ function renderDetail() {
   seekTime(state.time);
 }
 async function openReplay(id, scroll=false) {
-  const changed=state.selected!==id; state.selected=id; const detail=await api('/api/replays/'+id); if(state.selected!==id) return;
+  const changed=state.selected!==id; if(changed) state.showArchived=false; state.selected=id; const detail=await api('/api/replays/'+id); if(state.selected!==id) return;
   if(changed||(!state.detail?.report&&detail.report)) { state.time=detail.report?.metrics?.duration_seconds??0; $('event-filter').value='all'; }
   state.detail=detail; renderDetail(); if(scroll) $('result').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
 }
+$('previous-report-toggle').addEventListener('click',()=>{ state.showArchived=!state.showArchived; state.time=displayedReport()?.metrics?.duration_seconds??0; renderDetail(); });
 $('timeline').addEventListener('input',()=>seekTime(Number($('timeline').value)));
 $('event-filter').addEventListener('change',renderEvents);
-for(const id of ['gold-chart','xp-chart','income-chart','farm-chart']) $(id).addEventListener('click',event=>{ const duration=state.detail?.report?.metrics?.duration_seconds; if(!duration) return; const box=$(id).getBoundingClientRect(), relative=(event.clientX-box.left)/box.width*520; seekTime((relative-20)/480*duration); });
+for(const id of ['gold-chart','xp-chart','income-chart','farm-chart']) $(id).addEventListener('click',event=>{ const duration=displayedReport()?.metrics?.duration_seconds; if(!duration) return; const box=$(id).getBoundingClientRect(), relative=(event.clientX-box.left)/box.width*520; seekTime((relative-20)/480*duration); });
 $('refresh').addEventListener('click',()=>void refresh().then(()=>state.selected?openReplay(state.selected):undefined).catch(error=>notice(error.message)));
 setInterval(()=>{ if(!state.user||document.hidden||state.busy) return; void refresh().then(()=>{ if(state.selected&&['queued','processing'].includes(state.detail?.replay.state)) return openReplay(state.selected); }).catch(error=>notice(error.message)); },10000);
 void session().catch(error=>{ $('loading').textContent='Не удалось открыть кабинет.'; notice(error.message); });
+
+// Long-term observations use only saved reports for the authenticated player.
+const poolFocusLabels={item_plan:'План на ключевой предмет',farm_checkpoint:'Фарм на 10-й минуте',safe_return:'Возвращение после смерти'};
+const poolReflectionLabels={done:'Выполнил',partial:'Частично',not_done:'Не выполнил'};
+const positionLabels={1:'1 · Керри',2:'2 · Мидер',3:'3 · Офлейнер',4:'4 · Поддержка',5:'5 · Полная поддержка'};
+const poolMetricLabels={deaths_per_30:'Смерти на 30 минут',gpm:'Золото в минуту',xpm:'Опыт в минуту',last_hits_10:'Добивания к 10-й минуте',net_worth_10:'Ценность героя на 10-й минуте',item_delay_seconds:'До первого применения предмета, сек.'};
+function positionName(value) { return positionLabels[value]??'Позиция не указана'; }
+function decimal(value) { return finite(value)?value.toLocaleString('ru-RU',{maximumFractionDigits:1}):'—'; }
+function poolDate(value) { const date=new Date(value??''); return Number.isFinite(date.valueOf())?date.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit'}):'Дата неизвестна'; }
+function matchDateLabel(match) { return `${match.date_source==='analysis'?'Разобран':'Игра'} ${poolDate(match.played_at??match.chronology_at)}${match.date_source==='user'?' · дата указана вручную':''}`; }
+function poolQuery() {
+  const query=new URLSearchParams({window:$('pool-period').value});
+  if($('pool-hero').value) query.set('hero',$('pool-hero').value);
+  if($('pool-position').value) query.set('position',$('pool-position').value);
+  if($('pool-favorites-only').checked) query.set('favorites_only','true');
+  return query;
+}
+async function loadPool() {
+  if(!state.user) return;
+  const request=++state.poolRequest;
+  $('pool-status').textContent='Собираем результаты твоих матчей…'; $('pool-content').setAttribute('aria-busy','true'); $('pool-refresh').disabled=true;
+  try {
+    const data=await api('/api/hero-pool?'+poolQuery());
+    if(request!==state.poolRequest||!state.user) return;
+    state.pool=data; renderPool(); $('pool-status').textContent='';
+    void api('/api/hermes').then(hermes=>{ if(request===state.poolRequest) renderPoolHermes(hermes); }).catch(()=>{ if(request===state.poolRequest) { $('pool-hermes').hidden=false; $('pool-hermes').replaceChildren(node('h3','Hermes'),node('p','Статус подключения сейчас недоступен.','help')); } });
+  } catch(error) {
+    if(request!==state.poolRequest) return;
+    state.pool=null; $('pool-content').hidden=true; $('pool-status').textContent=`Не удалось открыть пул героев. ${error.message} Нажми «Обновить пул», чтобы повторить.`;
+  } finally { if(request===state.poolRequest) { $('pool-content').setAttribute('aria-busy','false'); $('pool-refresh').disabled=false; } }
+}
+async function poolMutation(button,path,method,body,success) {
+  const focusId=button.id, focusLabel=button.getAttribute('aria-label'); button.disabled=true;
+  try { await api(path,method,body); await loadPool(); $('pool-status').textContent=success;
+    const replacement=focusId?$(focusId):focusLabel?Array.from($('hero-pool').querySelectorAll('button[aria-label]')).find(item=>item.getAttribute('aria-label')===focusLabel):null;
+    (replacement??$('pool-refresh')).focus({preventScroll:true});
+  }
+  catch(error) { if(state.pool&&state.user) renderPool(); $('pool-status').textContent=error.message; const replacement=focusId?$(focusId):null; (replacement??$('pool-refresh')).focus({preventScroll:true}); }
+  finally { if(button.isConnected) button.disabled=false; }
+}
+function poolMatchButton(match,label='Открыть разбор') {
+  const button=node('button',label,'quiet'); button.type='button';
+  button.addEventListener('click',async()=>{ button.disabled=true; switchTab('review'); try { await openReplay(match.job_id,true); } catch(error) { notice(error.message); } finally { button.disabled=false; } });
+  return button;
+}
+function renderPool() {
+  const data=state.pool, summary=data.summary??{};
+  const selected=$('pool-hero').value; $('pool-hero').replaceChildren(new Option('Все герои',''));
+  for(const hero of data.available_heroes??[]) $('pool-hero').append(new Option(hero.label||heroName(hero.hero),hero.hero));
+  if(selected&&!Array.from($('pool-hero').options).some(option=>option.value===selected)) $('pool-hero').append(new Option(heroName(selected),selected));
+  $('pool-hero').value=selected;
+  const metrics=$('pool-summary'); metrics.replaceChildren();
+  for(const [label,value] of [['Матчей в выборке',num(summary.matches)],['Винрейт',finite(summary.winrate_pct)?`${decimal(summary.winrate_pct)}%`:'—'],['Победы / поражения',`${num(summary.wins)} / ${num(summary.losses)}`],['Исход неизвестен',num(summary.unknown_outcomes)]]) { const metric=node('div',undefined,'metric'); metric.append(node('dt',label),node('dd',value)); metrics.append(metric); }
+  const caveats=[`Винрейт: ${num(summary.known_outcomes)} матчей с известным исходом.`];
+  if(summary.known_outcomes>0&&summary.known_outcomes<10) caveats.push('Малая выборка: процент может заметно меняться после каждого матча.');
+  if(summary.unknown_positions) caveats.push(`Без позиции: ${num(summary.unknown_positions)}.`);
+  if(summary.analysis_dated_matches) caveats.push(`У ${num(summary.analysis_dated_matches)} матчей нет даты игры: они показаны по дате разбора.`);
+  $('pool-limitations').replaceChildren(...(data.limitations??[]).filter(limit=>typeof limit==='string').map(limit=>node('li',limit)));
+  $('pool-coverage').textContent=caveats.join(' ');
+  $('pool-content').hidden=false;
+  const empty=!summary.matches; $('pool-empty').hidden=!empty; $('pool-data').hidden=empty;
+  const filtered=!!($('pool-hero').value||$('pool-position').value||$('pool-favorites-only').checked||$('pool-period').value!=='all');
+  $('pool-empty').querySelector('h2').textContent=filtered?'Нет матчей с такими фильтрами':'Пул начинается с первого матча';
+  $('pool-empty-copy').textContent=filtered?'Измени период, героя или позицию. В избранное можно добавить сочетание героя и позиции в таблице пула.':'Загрузи реплей своего игрока. Готовые разборы соберутся здесь по героям и позициям.';
+  if(empty) return;
+  const reflections=(data.history??[]).filter(match=>match.reflection), reflectionCounts=Object.keys(poolReflectionLabels).map(key=>`${reflections.filter(match=>match.reflection===key).length} · ${poolReflectionLabels[key].toLowerCase()}`);
+  $('pool-practice-summary').textContent=reflections.length?`Личные проверки: ${reflectionCounts.join(' · ')}. Это твоя самооценка по выбранному фокусу, отдельно от показателей реплея.`:'Выбери фокус и отметь после игры, получилось ли его выполнить. Личная проверка помогает связать решения с практикой.';
+  renderPoolRoster(); renderPoolTrend(); renderPoolPatterns(); renderPoolGoals(); renderPoolMatches();
+  if(data.hermes) renderPoolHermes(data.hermes);
+}
+function renderPoolRoster() {
+  const target=$('pool-roster'); target.replaceChildren(); const heroes=state.pool.heroes??[];
+  $('pool-roster-count').textContent=`${heroes.length} сочетаний`;
+  for(const hero of heroes) {
+    const row=node('article',undefined,'pool-hero-row');
+    const identity=node('div',undefined,'pool-hero-identity'), avatar=node('span',(hero.label||heroName(hero.hero)).slice(0,2).toUpperCase(),'pool-hero-monogram'); avatar.setAttribute('aria-hidden','true');
+    const copy=node('div'); copy.append(node('h3',hero.label||heroName(hero.hero)),node('p',positionName(hero.position),'help')); identity.append(avatar,copy);
+    const stats=node('div',undefined,'pool-hero-stats'), winrate=node('strong',finite(hero.winrate_pct)?`${decimal(hero.winrate_pct)}%`:'—');
+    stats.append(winrate,node('span',`${num(hero.wins)} побед · ${num(hero.losses)} поражений`),node('small',`${num(hero.matches)} матчей${hero.unknown_outcomes?` · ${num(hero.unknown_outcomes)} без исхода`:''}`));
+    const actions=node('div',undefined,'pool-hero-actions');
+    const focus=node('button','Динамика','quiet'); focus.type='button'; focus.setAttribute('aria-label',`Динамика: ${hero.label||heroName(hero.hero)}, ${positionName(hero.position)}`); focus.addEventListener('click',async()=>{ $('pool-hero').value=hero.hero; $('pool-position').value=hero.position??'unknown'; state.poolVisible=20; await loadPool(); $('pool-trend-heading').scrollIntoView({block:'start'}); }); actions.append(focus);
+    if(hero.position) {
+      const favorite=node('button',hero.favorite?'★':'☆','pool-favorite'); favorite.type='button'; favorite.setAttribute('aria-pressed',String(!!hero.favorite)); favorite.setAttribute('aria-label',`Избранное: ${hero.label||heroName(hero.hero)}, ${positionName(hero.position)}`);
+      favorite.addEventListener('click',()=>void poolMutation(favorite,hero.favorite?`/api/hero-pool/favorites/${encodeURIComponent(hero.hero)}/${hero.position}`:'/api/hero-pool/favorites',hero.favorite?'DELETE':'PUT',hero.favorite?undefined:{hero:hero.hero,position:hero.position},hero.favorite?'Сочетание убрано из избранного.':'Герой и позиция добавлены в избранное.')); actions.append(favorite);
+    }
+    row.append(identity,stats,actions); target.append(row);
+  }
+}
+function renderPoolTrend() {
+  const metric=$('pool-metric').value, label=poolMetricLabels[metric], history=[...(state.pool?.history??[])].sort((a,b)=>String(a.chronology_at).localeCompare(String(b.chronology_at))||String(a.match_id).localeCompare(String(b.match_id)));
+  const points=history.map((match,index)=>({match,index,value:match.metrics?.[metric]})).filter(point=>finite(point.value));
+  const svg=$('pool-trend-chart'), chartWidth=matchMedia('(max-width:680px)').matches?360:760; svg.setAttribute('viewBox',`0 0 ${chartWidth} 240`); svg.replaceChildren();
+  const title=svgNode('title',{id:'pool-trend-title'}); title.textContent=label;
+  const desc=svgNode('desc',{id:'pool-trend-description'}); desc.textContent=`${points.length} матчей с показателем. Точные значения и даты — под графиком. Отсутствующие значения не заменяются нулём.`; svg.append(title,desc);
+  const groups=new Set(points.map(point=>`${point.match.hero}:${point.match.position??'unknown'}`)), chronology=new Set(points.map(point=>point.match.date_source)), builds=new Set(points.map(point=>point.match.engine_build??null));
+  const comparable=groups.size===1&&points.every(point=>point.match.position)&&chronology.size===1&&builds.size===1;
+  $('pool-trend-context').textContent=comparable?`${heroName(points[0]?.match.hero)} · ${positionName(points[0]?.match.position)}. ${label}.`:`${label}. Для сравнения выбери одного героя и позицию. Точки разных ролей, источников даты и версий игры не соединяются.`;
+  const values=points.map(point=>point.value), maximum=Math.max(1,...values), x=index=>56+(history.length>1?index/(history.length-1):.5)*(chartWidth-88), y=value=>202-(value/maximum)*178;
+  for(const fraction of [0,.5,1]) { const yy=y(maximum*fraction); svg.append(svgNode('line',{x1:56,x2:chartWidth-32,y1:yy,y2:yy,class:'chart-grid'})); const text=svgNode('text',{x:45,y:yy+4,'text-anchor':'end',class:'pool-chart-axis'}); text.textContent=decimal(maximum*fraction); svg.append(text); }
+  if(comparable&&points.length>1) {
+    // Break at missing observations rather than drawing an invented interpolation.
+    for(let i=1;i<points.length;i++) if(points[i].index===points[i-1].index+1) svg.append(svgNode('line',{x1:x(points[i-1].index),y1:y(points[i-1].value),x2:x(points[i].index),y2:y(points[i].value),class:'pool-chart-line'}));
+  }
+  for(const point of points) { const circle=svgNode('circle',{cx:x(point.index),cy:y(point.value),r:5,class:'pool-chart-point'}), hint=svgNode('title',{}); hint.textContent=`${matchDateLabel(point.match)} · ${point.match.label||heroName(point.match.hero)} · ${positionName(point.match.position)} · ${label}: ${decimal(point.value)}`; circle.append(hint); svg.append(circle); }
+  if(!points.length) { const text=svgNode('text',{x:chartWidth/2,y:118,'text-anchor':'middle',class:'pool-chart-empty'}); text.textContent='Нет данных по этому показателю'; svg.append(text); }
+  const dates=$('pool-chart-dates'); dates.replaceChildren();
+  if(history.length) dates.append(node('span',poolDate(history[0].played_at??history[0].chronology_at)),node('span','Матчи по порядку'),node('span',poolDate(history.at(-1).played_at??history.at(-1).chronology_at)));
+  const matching=(state.pool?.trends??[]).filter(trend=>trend.metric===metric), ready=matching.filter(trend=>trend.status==='ready');
+  const notes=[];
+  if(ready.length===1&&comparable) {
+    const trend=ready[0]; notes.push(`Первые ${num(trend.early_n)}: ${decimal(trend.early_mean)} → последние ${num(trend.recent_n)}: ${decimal(trend.recent_mean)}. Изменение: ${trend.delta>0?'+':''}${decimal(trend.delta)}${trend.unit?` ${trend.unit}`:''}.`);
+  } else if(matching.some(trend=>trend.status==='mixed_builds')) notes.push('Матчи относятся к разным версиям игры: общий вывод о динамике не рассчитывается.');
+  else if(matching.some(trend=>trend.status==='ambiguous_chronology')) notes.push('У ранних и последних матчей совпадают даты: направление изменений определить нельзя.');
+  else notes.push('Для вывода о динамике нужны хотя бы 3 ранних и 3 последних сопоставимых матча на одном герое и позиции.');
+  if(points.length&&builds.has(null)) notes.push('Версия игры известна не для всех матчей; сравнение не учитывает возможные изменения патча.');
+  if(chronology.has('analysis')) notes.push('Для матчей без даты игры используется дата разбора; порядок может отличаться от порядка игр.');
+  if(chronology.size>1) notes.push('Источники дат различаются — сравнение периодов не рассчитывается.');
+  if(metric==='gpm'||metric==='xpm'||metric==='last_hits_10'||metric==='net_worth_10') notes.push('Больше фарма не всегда означает более полезную игру: учитывай задачу своей позиции.');
+  if(metric==='item_delay_seconds') notes.push('Показывает задержку применения записанных активных предметов; состав покупок между матчами может различаться.');
+  $('pool-trend-note').textContent=notes.join(' ');
+  const table=node('table',undefined,'pool-values-table'), caption=node('caption',`${label} по матчам`); table.append(caption);
+  const head=node('thead'), heading=node('tr'); for(const value of ['Матч / дата','Герой / позиция',label]) { const th=node('th',value); th.scope='col'; heading.append(th); } head.append(heading); table.append(head);
+  const body=node('tbody');
+  for(const match of history) { const row=node('tr'), matchCell=node('td'); matchCell.append(node('span',`#${match.match_id}`),node('small',matchDateLabel(match))); const heroCell=node('td'); heroCell.append(node('span',match.label||heroName(match.hero)),node('small',positionName(match.position))); row.append(matchCell,heroCell,node('td',decimal(match.metrics?.[metric]))); body.append(row); }
+  table.append(body); $('pool-trend-values').replaceChildren(table);
+}
+function renderPoolPatterns() {
+  const target=$('pool-patterns'); target.replaceChildren(); const patterns=state.pool.patterns??[];
+  for(const pattern of patterns) {
+    const card=node('article',undefined,'pool-pattern-card'); card.append(node('p',`${pattern.label||heroName(pattern.hero)} · ${positionName(pattern.position)}`,'eyebrow'),node('h3',pattern.title),node('p',pattern.observation,'muted'));
+    if(finite(pattern.occurrences)&&finite(pattern.eligible_matches)) card.append(node('p',`Наблюдается в ${num(pattern.occurrences)} из ${num(pattern.eligible_matches)} подходящих матчей.`,'help'));
+    if(pattern.action) card.append(node('p',pattern.action,'pool-practice'));
+    const evidence=node('div',undefined,'evidence-links'); for(const item of (pattern.evidence??[]).slice(0,3)) evidence.append(poolMatchButton(item,`Матч ${item.match_id}`)); card.append(evidence);
+    if(pattern.position) {
+      const active=(state.pool.goals??[]).some(goal=>goal.pattern_id===pattern.id&&goal.hero===pattern.hero&&goal.position===pattern.position&&goal.status==='active');
+      const practice=node('button',active?'Уже в плане':'Взять в практику','secondary'); practice.type='button'; practice.disabled=active;
+      practice.addEventListener('click',()=>void poolMutation(practice,'/api/hero-pool/goals','POST',{pattern_id:pattern.id,hero:pattern.hero,position:pattern.position},'Практика сохранена. Следующие подходящие матчи покажут результат.')); card.append(practice);
+    }
+    target.append(card);
+  }
+  if(!patterns.length) target.append(node('p','Пока недостаточно сопоставимых матчей для повторяющегося паттерна. Укажи позиции и добавляй новые разборы.','empty'));
+}
+function renderPoolGoals() {
+  const target=$('pool-goals'); target.replaceChildren(); const goals=state.pool.goals??[]; if(!goals.length) return;
+  target.append(node('h3','Моя практика'));
+  for(const goal of goals) {
+    const card=node('article',undefined,'pool-goal-card'); card.append(node('p',`${heroName(goal.hero)} · ${positionName(goal.position)} · ${goal.status==='active'?'В работе':goal.status==='paused'?'На паузе':'Завершена'}`,'eyebrow'),node('h4',goal.title??'Практика на следующие матчи'),node('p',goal.action,'muted'));
+    const checks=goal.checks??[]; card.append(node('p',checks.length?`Матчей с проверкой: ${num(checks.length)}.`:'Результат появится после следующего подходящего матча.','help'));
+    if(goal.metric&&finite(goal.threshold)) card.append(node('p',`Критерий: ${poolMetricLabels[goal.metric]??(goal.metric==='repeated_deaths'?'Повторные смерти':goal.metric)} ≤ ${decimal(goal.threshold)}.`,'help'));
+    for(const check of checks.slice(0,5)) { const line=node('div',undefined,'pool-goal-check'), status={reached:'Критерий выполнен',review:'Нужен разбор эпизода',unknown:'Нет данных',predates_goal:'Матч сыгран до начала практики'}[check.status]??'Наблюдение'; line.append(poolMatchButton(check,`Матч ${check.match_id}`),node('span',`${status}${finite(check.value)?` · ${decimal(check.value)}`:''}${check.chronology_basis==='analysis'?' · дата игры неизвестна':''}`,'help')); card.append(line); }
+    const actions=node('div',undefined,'evidence-links');
+    for(const [status,label] of goal.status==='completed'?[['active','Вернуть в практику']]:goal.status==='paused'?[['active','Продолжить'],['completed','Завершить']]:[['paused','Пауза'],['completed','Завершить']]) { const button=node('button',label,'quiet'); button.type='button'; button.addEventListener('click',()=>void poolMutation(button,`/api/hero-pool/goals/${encodeURIComponent(goal.id)}`,'PATCH',{status},'Статус практики сохранён.')); actions.append(button); }
+    card.append(actions); target.append(card);
+  }
+}
+function renderPoolMatches() {
+  const target=$('pool-matches'); target.replaceChildren(); const matches=state.pool.history??[]; $('pool-match-count').textContent=`${matches.length} матчей`;
+  for(const match of matches.slice(0,state.poolVisible)) {
+    const row=node('article',undefined,'pool-match-row'); row.dataset.matchId=String(match.match_id); const copy=node('div',undefined,'pool-match-copy'); copy.append(node('h3',`${match.label||heroName(match.hero)} · #${match.match_id}`),node('p',matchDateLabel(match),'help'));
+    const outcome=node('span',match.outcome==='win'?'Победа':match.outcome==='loss'?'Поражение':'Исход неизвестен',`pool-outcome ${match.outcome==='win'?'pool-win':match.outcome==='loss'?'pool-loss':''}`); copy.append(outcome);
+    if(match.report_is_previous) copy.append(node('p',match.report_state==='failed'?'Сохранённый разбор · обновление остановилось':'Сохранённый разбор · обновляется','help'));
+    const control=node('div',undefined,'pool-position-control'), label=node('label',`Позиция в матче ${match.match_id}`), select=node('select'); select.id=`pool-position-${match.job_id}`; label.htmlFor=select.id; select.append(new Option('Не указана',''));
+    for(const [value,text] of Object.entries(positionLabels)) select.append(new Option(text,value)); select.value=match.position??''; select.disabled=!!match.report_state&&match.report_state!=='ready';
+    select.addEventListener('change',()=>void poolMutation(select,`/api/hero-pool/matches/${encodeURIComponent(match.job_id)}`,'PUT',{position:select.value?Number(select.value):null},`Позиция в матче ${match.match_id} сохранена.`)); control.append(label,select);
+    row.append(copy,control,poolMatchButton(match));
+    if(match.date_source!=='replay') {
+      const details=node('details',undefined,'pool-match-date'), summary=node('summary',match.played_at?'Изменить дату игры':'Указать дату игры'), form=node('form'), dateLabel=node('label','Дата и время игры'), input=node('input'), help=node('p','Твой часовой пояс. Дата игры уточнит период и порядок матчей. Пустое поле вернёт дату разбора.','help'), save=node('button','Сохранить дату','quiet');
+      input.type='datetime-local'; input.id=`pool-date-${match.job_id}`; input.min='2010-01-01T00:00'; input.setAttribute('aria-describedby',`pool-date-help-${match.job_id}`); help.id=`pool-date-help-${match.job_id}`; dateLabel.htmlFor=input.id; dateLabel.textContent=`Дата и время игры ${match.match_id}`;
+      const localValue=date=>new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);
+      input.max=localValue(new Date(Date.now()+86400000)); input.value=match.played_at?localValue(new Date(match.played_at)):'';
+      save.type='submit'; save.disabled=!!match.report_state&&match.report_state!=='ready'; save.setAttribute('aria-label',`Сохранить дату матча ${match.match_id}`);
+      form.addEventListener('submit',event=>{ event.preventDefault(); const value=input.value?new Date(input.value).toISOString():null; void poolMutation(save,`/api/hero-pool/matches/${encodeURIComponent(match.job_id)}`,'PUT',{played_at:value},`Дата матча ${match.match_id} сохранена.`); });
+      form.append(dateLabel,input,help,save); details.append(summary,form); row.append(details);
+    }
+    renderPoolJournal(row,match); target.append(row);
+  }
+  if(matches.length>state.poolVisible) { const more=node('button',`Показать ещё · осталось ${num(matches.length-state.poolVisible)}`,'pool-more quiet'); more.type='button'; more.addEventListener('click',()=>{state.poolVisible+=20;renderPoolMatches();}); target.append(more); }
+}
+function renderPoolJournal(row,match) {
+  const key=String(match.match_id), draft=state.poolDrafts.get(key)??match;
+  const details=node('details',undefined,'pool-journal'), summary=node('summary','Личная проверка'+(draft.reflection?` · ${poolReflectionLabels[draft.reflection]??'Результат отмечен'}`:''));
+  details.open=state.poolJournalOpen.has(key)||state.poolDrafts.has(key);
+  details.addEventListener('toggle',()=>{if(details.open)state.poolJournalOpen.add(key);else state.poolJournalOpen.delete(key);});
+  const form=node('form',undefined,'pool-journal-form'), fields=node('div',undefined,'pool-journal-fields');
+  const focus=node('select',undefined,'pool-focus'), reflection=node('select',undefined,'pool-reflection');
+  focus.id=`pool-focus-${match.job_id}`; reflection.id=`pool-reflection-${match.job_id}`;
+  focus.append(new Option('Фокус не выбран','')); reflection.append(new Option('Ещё не проверил',''));
+  for(const [value,label] of Object.entries(poolFocusLabels)) focus.append(new Option(label,value));
+  for(const [value,label] of Object.entries(poolReflectionLabels)) reflection.append(new Option(label,value));
+  focus.value=draft.focus??''; reflection.value=draft.reflection??'';
+  for(const [text,control] of [[`Мой фокус в матче ${match.match_id}`,focus],[`После игры ${match.match_id}: получилось?`,reflection]]) {const field=node('div'),label=node('label',text);label.htmlFor=control.id;field.append(label,control);fields.append(field);}
+  const noteLabel=node('label',`Что заметил после игры ${match.match_id}`), note=node('textarea',undefined,'pool-note'); note.id=`pool-note-${match.job_id}`; noteLabel.htmlFor=note.id; note.maxLength=500; note.rows=3; note.value=draft.note??''; note.placeholder='Какое решение хочу повторить или изменить в следующем матче';
+  const help=node('p','Фокус, отметка выполнения и заметка — твоя оценка игры. Они сохраняются в аккаунте отдельно от статистики реплея.','help');
+  const save=node('button','Сохранить проверку','secondary pool-save'), status=node('p',state.poolDrafts.has(key)?'Есть несохранённые изменения.':'','help pool-save-status');
+  save.type='submit'; save.id=`pool-save-${match.job_id}`; save.setAttribute('aria-label',`Сохранить проверку матча ${match.match_id}`); status.id=`pool-journal-status-${match.job_id}`; status.setAttribute('role','status'); status.setAttribute('aria-live','polite');
+  const readOnly=!!match.report_state&&match.report_state!=='ready'; for(const control of [focus,reflection,note,save])control.disabled=readOnly;
+  const values=()=>({focus:focus.value||null,reflection:reflection.value||null,note:note.value.trim()});
+  form.addEventListener('input',()=>{state.poolDrafts.set(key,values());state.poolJournalOpen.add(key);status.textContent='Есть несохранённые изменения.';});
+  form.addEventListener('submit',async event=>{
+    event.preventDefault(); if(save.disabled)return; const submitted=values();
+    if(submitted.reflection&&!submitted.focus) {status.textContent='Выбери фокус, для которого отмечаешь результат.';focus.focus();return;}
+    state.poolDrafts.set(key,submitted); for(const control of [focus,reflection,note,save])control.disabled=true;status.textContent='Сохраняем…';
+    try {
+      await api(`/api/hero-pool/matches/${encodeURIComponent(match.job_id)}`,'PUT',submitted);
+      if(JSON.stringify(state.poolDrafts.get(key))===JSON.stringify(submitted))state.poolDrafts.delete(key);
+      Object.assign(match,submitted); await loadPool();
+      const message=state.poolDrafts.has(key)?'Проверка сохранена. Есть новые несохранённые изменения.':'Проверка сохранена в аккаунте.';
+      const currentStatus=$(`pool-journal-status-${match.job_id}`);if(currentStatus)currentStatus.textContent=message;$('pool-status').textContent=message;
+      ($(`pool-save-${match.job_id}`)??$('pool-refresh')).focus({preventScroll:true});
+    } catch(error) {status.textContent=`Не удалось сохранить. ${error.message}`;}
+    finally {for(const control of [focus,reflection,note,save])if(control.isConnected)control.disabled=readOnly;}
+  });
+  form.append(fields,noteLabel,note,help,save,status);details.append(summary,form);row.append(details);
+}
+function renderPoolHermes(data) {
+  const target=$('pool-hermes'); target.hidden=false; target.replaceChildren(node('h3',data.runtime_connected?'Hermes':'Hermes не подключён'));
+  target.append(node('p',data.runtime_connected?'Статус подключения подтверждён сервером.':'Автоматическое наблюдение Hermes пока не запущено. Паттерны выше рассчитаны по сохранённым реплеям.','help'));
+  if(data.stage==='offline_bridge') {
+    const exportButton=node('button','Скачать пакет для Hermes','quiet'); exportButton.type='button'; exportButton.addEventListener('click',async()=>{ exportButton.disabled=true; try { const result=await api('/api/hermes/exports','POST',{}), blob=new Blob([JSON.stringify(result.packet,null,2)],{type:'application/json'}), url=URL.createObjectURL(blob), link=node('a'); link.href=url; link.download='narma-hermes-'+result.export_id+'.json'; document.body.append(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); $('pool-status').textContent='Пакет для внешнего разбора подготовлен.'; } catch(error) { $('pool-status').textContent=error.message; } finally { exportButton.disabled=false; } }); target.append(exportButton);
+  }
+  if(data.last_review) target.append(node('p',`Последний импорт рекомендаций: ${poolDate(data.last_review.created_at)}. Источник: внешний разбор; запуск Hermes не подтверждён.`,'help'));
+}
+for(const id of ['pool-period','pool-hero','pool-position','pool-favorites-only']) $(id).addEventListener('change',()=>{state.poolVisible=20;void loadPool();});
+$('pool-refresh').addEventListener('click',()=>void loadPool());
+$('pool-metric').addEventListener('change',()=>{ if(state.pool) renderPoolTrend(); });
+
+matchMedia('(max-width:680px)').addEventListener('change',()=>{ if(state.pool) renderPoolTrend(); });

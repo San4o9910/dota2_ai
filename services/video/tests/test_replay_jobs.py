@@ -207,3 +207,91 @@ def test_database_rejects_mutation_of_bound_identity(browser):
         with pytest.raises(psycopg.Error):
             with database() as connection:
                 connection.execute(f"UPDATE replay_jobs SET {column}=%s WHERE id=%s", (value, command["id"]))
+
+
+def saved_coached_replay(browser):
+    from test_replay_coach import prior_report
+    command, _ = queued(browser)
+    job = replay.claim_replay('synthetic-worker', command['id'])
+    report = prior_report()
+    report['match_id'] = job['match_id']
+    report['player']['account_id'] = job['account_id']
+    report['coverage']['source_sha256'] = job['source_sha256']
+    assert replay.finish_replay(job['id'], job['lease_token'], report)
+    return job, report
+
+
+def queue_saved_refresh(job_id):
+    # Mirrors an operator refresh and deliberately clears the current payload:
+    # preservation must happen in the same DB transaction before it is lost.
+    with database() as connection:
+        connection.execute("""UPDATE replay_jobs SET state='queued',progress=0,
+            result_payload=NULL,updated_at=now() WHERE id=%s""", (job_id,))
+
+
+def test_refresh_archive_is_transactional_and_survives_failed_worker(browser):
+    job, report = saved_coached_replay(browser)
+    with pytest.raises(RuntimeError, match='synthetic rollback'):
+        with database() as connection:
+            connection.execute("UPDATE replay_jobs SET state='queued',progress=0 WHERE id=%s", (job['id'],))
+            raise RuntimeError('synthetic rollback')
+    with database() as connection:
+        assert connection.execute('SELECT count(*) AS n FROM replay_report_history').fetchone()['n'] == 0
+    queue_saved_refresh(job['id'])
+    queued_detail = replay.get_replay(job['id'], OWNER)
+    assert queued_detail['report'] == report and queued_detail['report_is_previous']
+    assert queued_detail['archived_report']['report'] == report
+    with pytest.raises(HTTPException) as rejected:
+        replay.get_replay(job['id'], 'foreign-owner')
+    assert rejected.value.status_code == 404
+    refreshed = replay.claim_replay('synthetic-worker', job['id'])
+    assert refreshed['previous_report'] == report and refreshed['attempt'] == 2
+    assert replay.fail_replay(job['id'], refreshed['lease_token'], 'REPLAY_PARSE_FAILED')
+    failed = browser.get(f"/api/replays/{job['id']}").json()
+    assert failed['replay']['state'] == 'failed'
+    assert failed['report'] == report and failed['report_is_previous']
+    assert browser.delete(f"/api/replays/{job['id']}").status_code == 200
+    with database() as connection:
+        assert connection.execute('SELECT count(*) AS n FROM replay_report_history').fetchone()['n'] == 0
+
+
+@pytest.mark.parametrize('ambiguous', [False, True])
+def test_optional_refresh_failure_preserves_prior_coaching_or_complete_archive(browser, monkeypatch, ambiguous):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from narma_video import replay_coach as coach
+    job, old_report = saved_coached_replay(browser)
+    with database() as connection:
+        calls_before = connection.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']
+    queue_saved_refresh(job['id'])
+    refreshed = replay.claim_replay('synthetic-worker', job['id'])
+    facts = deepcopy(old_report)
+    facts.pop('coaching')
+    for event in facts['evidence']:
+        event['id'] = 'new-' + event['id']
+    if ambiguous:
+        facts['evidence'].append({**facts['evidence'][0], 'id': 'ambiguous-new'})
+    def deny(*args): raise ValueError('REPLAY_COACH_REQUEST_BUDGET_EXCEEDED')
+    monkeypatch.setattr(coach, 'reserve_replay', deny)
+    monkeypatch.setattr(coach.ai_budget, 'settle', lambda *args: pytest.fail('No reservation to settle'))
+    provider = SimpleNamespace(model=coach.ai_budget.MODEL,
+                               analyze=lambda *args: pytest.fail('No additional provider call'))
+    new_report = coach.enrich_report(refreshed, facts, coach=provider)
+    assert replay.finish_replay(job['id'], refreshed['lease_token'], new_report)
+    detail = browser.get(f"/api/replays/{job['id']}").json()
+    assert detail['replay']['state'] == 'ready' and not detail['report_is_previous']
+    assert detail['archived_report']['report'] == old_report
+    current = detail['report']['coaching']
+    assert current['status'] == ('unavailable' if ambiguous else 'ready')
+    if not ambiguous:
+        assert current['origin'] == 'previous_report'
+        assert current['points'][0]['evidence_ids'] == ['new-death.1', 'new-buyback.1']
+    with database() as connection:
+        assert connection.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n'] == calls_before
+        assert connection.execute('SELECT attempt FROM replay_jobs WHERE id=%s', (job['id'],)).fetchone()['attempt'] == 2
+    if ambiguous:
+        # A later refresh must find the older useful coaching, not just the
+        # newest factual report whose optional generation was unavailable.
+        queue_saved_refresh(job['id'])
+        third = replay.claim_replay('synthetic-worker', job['id'])
+        assert third['previous_report'] == old_report and third['attempt'] == 3

@@ -55,58 +55,36 @@ report.insights.gold.recorded_loss=report.insights.gold.bins.reduce((sum,bin)=>s
 report.insights.gold.total_earned_gold=report.insights.gold.recorded_income;
 report.metrics.total_earned_gold=report.insights.gold.recorded_income;
 report.insights.pace=report.insights.gold.bins.map((bin,index)=>({...bin,last_hits:3+index%7,kills:index%11===0?1:0,deaths:index%15===0?1:0,assists:index%9===0?1:0,earned_gold:bin.income,xp:bin.income*1.5}));
-// Entirely synthetic history: role changes and an unknown result must stay visible.
-const heroPoolMatches=Array.from({length:10},(_,index)=>({
-  match_id:String(9000000101+index),job_id:`fixture-pool-${index+1}`,
-  hero:index===9?'npc_dota_hero_zuus':'npc_dota_hero_necrolyte',hero_label:index===9?'Zeus':'Necrophos',
-  position:index<6?3:index===8?null:2,outcome:['win','loss','win','win','loss','win','loss','win',null,'win'][index],
-  uploaded_at:new Date(Date.UTC(2026,7,index+1)).toISOString(),
-  metrics:{lh10:32+index*3,nw10:3300+index*100,deaths10:index<3?2:1,dead_pct:18-index/2,gpm:360+index*8},
-  focus:index<6?'item_plan':null,reflection:index<3?'done':index===3?'partial':index===4?'not_done':null,note:''
-}));
-function poolCounts(matches) {
-  const wins=matches.filter(match=>match.outcome==='win').length,losses=matches.filter(match=>match.outcome==='loss').length;
-  return {matches:matches.length,wins,losses,unknown:matches.length-wins-losses,winrate:wins+losses?wins/(wins+losses)*100:null};
-}
-function heroPoolFixture(matches,url) {
-  const hero=url.searchParams.get('hero')||null,position=url.searchParams.get('position')||null;
-  const selected=matches.filter(match=>(!hero||match.hero===hero)&&(!position||(position==='unknown'?match.position===null:match.position===Number(position))));
-  const heroes=[...new Set(matches.map(match=>match.hero))].map(value=>{
-    const group=matches.filter(match=>match.hero===value);
-    return {hero:value,hero_label:group[0].hero_label,...poolCounts(group),positions:[...new Set(group.map(match=>match.position))].map(value=>({position:value,...poolCounts(group.filter(match=>match.position===value))}))};
-  });
-  const ready=!!hero&&!!position&&selected.length>=6,ascending=[...selected].sort((a,b)=>a.match_id.localeCompare(b.match_id)),older=ascending.slice(0,3),recent=ascending.slice(-3);
-  const average=(group,key)=>group.reduce((total,match)=>total+match.metrics[key],0)/group.length;
-  return {schema_version:'narma.hero-pool.v1',scope:{account_id:profile.account_id,nickname:profile.nickname,hero,position,chronology:'match_id',source:'uploaded_replays',total_available:matches.length,limit:1000,truncated:false,context:'Только загруженные реплеи закреплённого игрока.'},summary:poolCounts(selected),heroes,matches:[...selected].reverse(),
-    trends:{status:!hero||!position?'choose_hero_position':ready?'ready':'insufficient',eligible_matches:selected.length,note:ready?'Сравниваем три ранних и три последних матча на одном герое и позиции.':'Для сравнения нужны матчи на одном герое и позиции; одна игра не показывает динамику.',older_match_ids:ready?older.map(match=>match.match_id):[],recent_match_ids:ready?recent.map(match=>match.match_id):[],metrics:ready?[['lh10','Добивания к 10:00',''],['nw10','Ценность к 10:00','золота'],['deaths10','Смерти до 10:00','']].map(([key,label,unit])=>({key,label,unit,older:average(older,key),recent:average(recent,key),delta:average(recent,key)-average(older,key),older_count:3,recent_count:3})):[]},
-    patterns:hero&&position&&position!=='unknown'&&selected.length>=3?[{id:'item-plan',title:'Предмет появился, следующий выход задержался',observation:'В трёх реплеях между покупкой и первым применением прошло больше двух минут.',action:'До покупки выбери следующий безопасный эпизод.',measure:'После матча сравни покупку, доставку и первое применение.',matches:3,eligible_matches:selected.length,evidence:selected.slice(0,3).map(match=>({match_id:match.match_id,job_id:match.job_id,time:700,event_id:'purchase-1',item:'item_radiance'}))}]:[],
-    practice:{tracked:selected.filter(match=>match.focus).length,done:selected.filter(match=>match.reflection==='done').length,partial:selected.filter(match=>match.reflection==='partial').length,not_done:selected.filter(match=>match.reflection==='not_done').length,unreviewed:selected.filter(match=>match.focus&&!match.reflection).length}};
-}
 try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
-    let authenticated=false, bound=false, job=null, uploaded=false, legacy=false,poolFailure=false,poolSaveFailure=false,poolMatches=structuredClone(heroPoolMatches);
-    const errors=[], requests=[],poolWrites=[],externalRequests=[];
+    let authenticated=false, bound=false, job=null, uploaded=false, legacy=false, poolFailed=false, poolSaveFailed=false;
+    const poolMatches=Array.from({length:8},(_,index)=>({job_id:'pool-'+index,match_id:String(8984000000+index),hero:index===7?'npc_dota_hero_lion':'npc_dota_hero_necrolyte',label:index===7?'Lion':'Necrophos',position:index===7?5:index===6?null:2,outcome:index===6?null:index%2?'loss':'win',played_at:index===6?null:new Date(Date.now()-(50-index*7)*86400000).toISOString(),date_source:index===6?'analysis':'user',chronology_at:new Date(Date.now()-(50-index*7)*86400000).toISOString(),metrics:{deaths_per_30:10-index,gpm:400+index*20,xpm:500+index*20,last_hits_10:30+index,net_worth_10:4000+index*100,item_delay_seconds:index===3?null:120-index*10}}));
+    const favorites=new Set(), goals=[], poolWrites=[], externalRequests=[];
+    function poolResponse(url) {
+      const query=url.searchParams, hero=query.get('hero'), pos=query.get('position'), period=query.get('window'), favoriteOnly=query.get('favorites_only')==='true';
+      const selected=poolMatches.filter(match=>(!hero||match.hero===hero)&&(!pos||String(match.position??'unknown')===pos)&&(!favoriteOnly||favorites.has(match.hero+':'+match.position))&&(period==='all'||Date.parse(match.chronology_at)>=Date.now()-Number(period)*86400000));
+      const summarize=rows=>{const wins=rows.filter(r=>r.outcome==='win').length,losses=rows.filter(r=>r.outcome==='loss').length;return {matches:rows.length,wins,losses,known_outcomes:wins+losses,unknown_outcomes:rows.length-wins-losses,winrate_pct:wins+losses?Math.round(wins/(wins+losses)*1000)/10:null,unknown_positions:rows.filter(r=>r.position===null).length,analysis_dated_matches:rows.filter(r=>r.date_source==='analysis').length};};
+      const groups=new Map(); for(const match of selected) {const key=match.hero+':'+match.position;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(match);}
+      const sameRole=selected.filter(match=>match.hero==='npc_dota_hero_necrolyte'&&match.position===2);
+      return {summary:summarize(selected),heroes:[...groups].map(([key,rows])=>({hero:rows[0].hero,label:rows[0].label,position:rows[0].position,favorite:favorites.has(key),...summarize(rows)})),available_heroes:[{hero:'npc_dota_hero_necrolyte',label:'Necrophos'},{hero:'npc_dota_hero_lion',label:'Lion'}],history:selected,trends:sameRole.length===6?[{hero:'npc_dota_hero_necrolyte',position:2,metric:'deaths_per_30',status:'ready',early_n:3,recent_n:3,early_mean:9,recent_mean:6,delta:-3,unit:'смертей'}]:[],patterns:sameRole.length>=3?[{id:'repeat-death',hero:'npc_dota_hero_necrolyte',label:'Necrophos',position:2,title:malicious,observation:'Повторная смерть в двух матчах.',action:'Перед возвращением на линию проверь доступные предметы.',occurrences:2,eligible_matches:sameRole.length,evidence:[{job_id:'pool-0',match_id:'8984000000'}]}]:[],goals,limitations:['Синтетическая тестовая выборка. Дата разбора не является датой игры.']};
+    }
+    const errors=[], requests=[];
     page.on('pageerror',error=>errors.push(error.message));
-    await page.route('**/*',async route=>{ if(new URL(route.request().url()).origin!==origin) { externalRequests.push(route.request().url()); await route.abort(); } else await route.fallback(); });
+    await page.route('**/*',async route=>{if(new URL(route.request().url()).origin!==origin){externalRequests.push(route.request().url());await route.abort();}else await route.fallback();});
     await page.route('**/api/**',async route=>{
-      const request=route.request(),url=new URL(request.url()), endpoint=url.pathname, method=request.method(); requests.push(endpoint);
+      const request=route.request(), url=new URL(request.url()), endpoint=url.pathname, method=request.method(); requests.push(endpoint);
       let body, status=200;
       if(endpoint==='/api/auth/login') { authenticated=true; body={authenticated:true}; }
       else if(endpoint==='/api/session') body={authenticated,setup_required:false,user:authenticated?{email:'fixture@example.test'}:null};
+      else if(endpoint==='/api/hero-pool') {status=poolFailed?503:200;body=poolFailed?{detail:'Проверка восстановления после ошибки.'}:poolResponse(url);}
+      else if(endpoint==='/api/hermes') body={stage:'offline_bridge',runtime_connected:false,automatic_tracking:false,last_review:null};
+      else if(endpoint==='/api/hero-pool/favorites'&&method==='PUT') {const value=request.postDataJSON();favorites.add(value.hero+':'+value.position);body={saved:true};}
+      else if(endpoint.startsWith('/api/hero-pool/favorites/')&&method==='DELETE') {const parts=endpoint.split('/');favorites.delete(parts[4]+':'+parts[5]);body={deleted:true};}
+      else if(endpoint.startsWith('/api/hero-pool/matches/')&&method==='PUT') {const match=poolMatches.find(item=>item.job_id===endpoint.split('/').at(-1));assert.ok(match);const value=request.postDataJSON();poolWrites.push(value);if(poolSaveFailed&&'note' in value){status=503;body={detail:'Не удалось сохранить дневник (проверка).'};}else{if('position' in value)match.position=value.position;if('played_at' in value){match.played_at=value.played_at;match.date_source=value.played_at?'user':'analysis';match.chronology_at=value.played_at??match.analyzed_at??match.chronology_at;}for(const key of ['focus','reflection','note'])if(key in value)match[key]=value[key];body={saved:true};}}
+      else if(endpoint==='/api/hero-pool/goals'&&method==='POST') {const value=request.postDataJSON();goals.push({id:'goal-1',...value,title:'Практика после смерти',action:'Проверь готовность перед возвращением.',status:'active',metric:'repeated_deaths',threshold:0,checks:[{job_id:'pool-0',match_id:'8984000000',value:1,status:'predates_goal',chronology_basis:'user'},{job_id:'pool-1',match_id:'8984000001',value:0,status:'unknown',chronology_basis:'analysis'}]});body={goal:goals[0]};}
+      else if(endpoint.startsWith('/api/hero-pool/goals/')&&method==='PATCH') {goals[0].status=request.postDataJSON().status;body={saved:true};}
       else if(endpoint==='/api/profile') body={profile:bound?profile:null};
-      else if(endpoint==='/api/hero-pool'&&method==='GET') { status=poolFailure?503:200; body=poolFailure?{detail:'Пул временно недоступен (проверка).'}:heroPoolFixture(poolMatches,url); }
-      else if(endpoint.startsWith('/api/hero-pool/matches/')&&method==='PUT') {
-        const match=poolMatches.find(match=>match.match_id===endpoint.split('/').at(-1)); assert.ok(match,'Only a listed synthetic match can be saved.');
-        const command=request.postDataJSON(); poolWrites.push(command);
-        assert.deepEqual(Object.keys(command).sort(),['focus','note','position','reflection']);
-        if(poolSaveFailure) { status=503; body={detail:'Не удалось сохранить дневник (проверка).'}; }
-        else { Object.assign(match,command); body={saved:true,match_id:match.match_id,...command}; }
-      }
-      else if(endpoint.startsWith('/api/replays/fixture-pool-')&&method==='GET') {
-        const match=poolMatches.find(match=>`/api/replays/${match.job_id}`===endpoint); assert.ok(match);
-        body={replay:{id:match.job_id,state:'ready',progress:100,match_id:match.match_id,nickname:profile.nickname},parts:[],report:{...report,match_id:match.match_id,outcome:match.outcome,player:{...report.player,hero:match.hero}}};
-      }
       else if(endpoint==='/api/replays'&&method==='POST') {
         const command=request.postDataJSON(); assert.equal(command.filename,'synthetic.dem'); assert.equal(command.nickname,'SyntheticPlayer'); assert.equal('account_id' in command,false);
         job={...command,state:'uploading',progress:0,match_id:null,created_at:new Date().toISOString()}; status=201; body={replay:job,part_bytes:5*1024**2};
@@ -114,7 +92,8 @@ try {
       else if(endpoint==='/api/replays') body={replays:job?[job]:[],worker_ready:true,max_bytes:512*1024**2};
       else if(job&&endpoint===`/api/replays/${job.id}/parts/1`&&method==='PUT') { uploaded=true; assert.equal(request.postDataBuffer().subarray(0,8).toString('binary'),'PBDEMS2\x00'); body={uploaded:true,part_number:1}; }
       else if(job&&endpoint===`/api/replays/${job.id}/complete`) { assert.equal(uploaded,true); bound=true; job={...job,state:'ready',progress:100,match_id:'8984479726'}; body={replay:job}; }
-      else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,parts:uploaded?[1]:[],report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{})}:null};
+      else if(job&&endpoint===`/api/replays/${job.id}/source`&&method==='DELETE') {job.source_retained=false;body={source_deleted:true,report_retained:true};}
+      else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,parts:uploaded?[1]:[],archived_report:job.state==='ready'?{id:1,created_at:new Date().toISOString(),report:{...report,metrics:{...report.metrics,kills:9},evidence:[{id:'old-death',type:'death',time:500,title:'Старый эпизод'}],coaching:{status:'ready',summary:'Сохранённый комментарий',points:[{title:'Сохранённый эпизод',observation:'Предыдущий разбор.',evidence_ids:['old-death']}]}}}:null,report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{})}:null};
       else throw Error(`Unexpected frontend API request: ${method} ${endpoint}`);
       await route.fulfill({status,json:body});
     });
@@ -169,100 +148,111 @@ try {
     const accessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
     assert.deepEqual(accessibility.violations.map(violation=>({id:violation.id,nodes:violation.nodes.map(item=>item.target)})),[]);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await page.getByRole('button',{name:'Предыдущий тренерский разбор',exact:true}).click();
+    await page.getByRole('heading',{name:'Сохранённый эпизод',exact:true}).waitFor();
+    assert.match(await page.locator('#metrics').textContent(),/9 \/ 16 \/ 20/);
+    await page.getByRole('button',{name:'8:20 · Смерть',exact:true}).click();
+    assert.equal(await page.locator('#timeline-value').textContent(),'8:20');
+    assert.equal(await page.locator('#events [data-evidence-id=old-death]').count(),1);
+    await page.getByRole('button',{name:'Вернуться к текущему разбору',exact:true}).click();
+    assert.equal(await page.locator('#events [data-evidence-id=old-death]').count(),0);
     legacy=true; await page.getByRole('button',{name:'Обновить',exact:true}).click();
     await page.getByText('В этом отчёте нет разбивки золота по источникам. Изменение ценности предметов показано выше.',{exact:true}).waitFor();
     assert.equal(await page.locator('#gold-chart .chart-line').count(),1);
     assert.equal(await page.locator('#item-cards .item-card').count(),1);
     assert.equal(await page.locator('#income-chart .chart-bar').count(),0);
-    const waitPoolCount=count=>page.waitForFunction(expected=>!document.getElementById('hero-pool').hasAttribute('aria-busy')&&!document.getElementById('pool-summary').hidden&&document.querySelectorAll('#pool-history .pool-match').length===expected,count);
-    await page.locator('button[data-tab="hero-pool"]').click();
-    await waitPoolCount(10);
-    assert.match(await page.locator('#pool-heroes').innerText(),/Necrophos/);
-    assert.match(await page.locator('#pool-heroes').innerText(),/Zeus/);
-    assert.match(await page.locator('#pool-summary').innerText(),/66[,.]7/);
-    assert.match(await page.locator('.pool-hero-card').filter({has:page.getByRole('heading',{name:'Necrophos',exact:true})}).locator('.pool-hero-rate').innerText(),/62[,.]5/);
-    await page.locator('.pool-hero-card').filter({has:page.getByRole('heading',{name:'Zeus',exact:true})}).locator('.pool-hero-select').click();
-    await waitPoolCount(1);
-    assert.equal(await page.locator('#pool-hero').inputValue(),'npc_dota_hero_zuus');
-    assert.match(await page.locator('#pool-summary').innerText(),/100%/);
-    await page.locator('#pool-hero').selectOption('npc_dota_hero_necrolyte');
-    await waitPoolCount(9);
-    await page.locator('#pool-position').selectOption('3');
-    await waitPoolCount(6);
-    assert.match(await page.locator('#pool-summary').innerText(),/66[,.]7/);
-    assert.match(await page.locator('#pool-trends').innerText(),/Добивания к 10:00/);
-    assert.equal(await page.locator('#pool-trends .pool-trend-dot').count(),6);
-    assert.equal(await page.locator('#pool-trends .pool-comparison').count(),3);
-    await page.locator('#pool-trend-metric').selectOption('nw10');
-    assert.match(await page.locator('#pool-trends svg').getAttribute('aria-label'),/Ценность предметов и золота к 10:00/);
-    await page.locator('.pool-chart-table summary').click();
-    assert.equal(await page.locator('.pool-chart-table tbody tr').count(),6);
-    assert.match(await page.locator('#pool-patterns').innerText(),/следующий выход задержался/);
-    if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-hero-pool.png`),fullPage:true});
+    await page.getByRole('button',{name:'Пул героев',exact:true}).click();
+    await page.getByRole('heading',{name:'Пул героев',exact:true}).waitFor();
+    await page.locator('#pool-roster .pool-hero-row').first().waitFor();
+    assert.equal(await page.locator('#pool-roster .pool-hero-row').count(),3);
+    assert.match(await page.locator('#pool-summary').textContent(),/42,9%/);
+    assert.match(await page.locator('#pool-summary').textContent(),/Исход неизвестен1/);
+    assert.match(await page.locator('#pool-coverage').textContent(),/нет даты игры/);
+    assert.equal(await page.locator('#pool-trend-chart .pool-chart-line').count(),0);
+    assert.equal(await page.locator('#pool-patterns img').count(),0);
+    await page.getByRole('heading',{name:'Hermes не подключён',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Избранное: Necrophos, 2 · Мидер',exact:true}).click();
+    await page.locator('#pool-status').filter({hasText:'добавлены в избранное'}).waitFor();
+    await page.getByLabel('Только избранные герой и позиция',{exact:true}).check();
+    await page.waitForFunction(()=>document.querySelectorAll('#pool-roster .pool-hero-row').length===1);
+    assert.equal(await page.locator('#pool-trend-chart .pool-chart-line').count(),5);
+    assert.match(await page.locator('#pool-trend-note').textContent(),/Первые 3: 9 → последние 3: 6/);
+    await page.getByLabel('Показатель',{exact:true}).selectOption('item_delay_seconds');
+    assert.equal(await page.locator('#pool-trend-chart .pool-chart-point').count(),5);
+    assert.equal(await page.locator('#pool-trend-chart .pool-chart-line').count(),3);
+    await page.getByLabel('Показатель',{exact:true}).selectOption('deaths_per_30');
+    await page.getByRole('button',{name:'Взять в практику',exact:true}).click();
+    await page.getByRole('heading',{name:'Практика после смерти',exact:true}).waitFor();
+    assert.match(await page.locator('#pool-goals').textContent(),/Матч сыгран до начала практики/);
+    assert.match(await page.locator('#pool-goals').textContent(),/Нет данных · 0 · дата игры неизвестна/);
+    await page.getByRole('button',{name:'Пауза',exact:true}).click();
+    await page.getByRole('button',{name:'Продолжить',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Продолжить',exact:true}).click();
+    await page.getByRole('button',{name:'Пауза',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Избранное: Necrophos, 2 · Мидер',exact:true}).click();
+    await page.getByRole('heading',{name:'Нет матчей с такими фильтрами',exact:true}).waitFor();
+    await page.getByLabel('Только избранные герой и позиция',{exact:true}).uncheck();
+    await page.getByLabel('Позиция в матче 8984000006',{exact:true}).waitFor();
+    await page.getByLabel('Позиция в матче 8984000006',{exact:true}).selectOption('3');
+    await page.locator('#pool-status').filter({hasText:'Позиция в матче 8984000006 сохранена.'}).waitFor();
+    assert.equal(await page.getByLabel('Позиция в матче 8984000006',{exact:true}).inputValue(),'3');
+    await page.getByText('Указать дату игры',{exact:true}).click();
+    await page.getByLabel('Дата и время игры 8984000006',{exact:true}).fill('2020-01-02T15:30');
+    await page.getByRole('button',{name:'Сохранить дату матча 8984000006',exact:true}).click();
+    await page.locator('#pool-status').filter({hasText:'Дата матча 8984000006 сохранена.'}).waitFor();
+    assert.match(poolMatches[6].played_at,/2020-01-02T/);
+    assert.equal(poolMatches[6].date_source,'user');
+    await page.getByLabel('Позиция',{exact:true}).selectOption('3');
+    await page.waitForFunction(()=>document.querySelectorAll('#pool-matches .pool-match-row').length===1);
+    assert.equal(await page.locator('#pool-summary .metric dd').nth(1).textContent(),'—');
+    await page.getByLabel('Позиция',{exact:true}).selectOption('');
+    await page.getByLabel('Период',{exact:true}).selectOption('30');
+    await page.waitForFunction(()=>document.querySelectorAll('#pool-matches .pool-match-row').length===4);
+    await page.getByLabel('Период',{exact:true}).selectOption('all');
+    await page.waitForFunction(()=>document.querySelectorAll('#pool-matches .pool-match-row').length===8);
+    const journal=page.locator('.pool-match-row[data-match-id="8984000005"] .pool-journal');
+    await journal.locator('summary').click();
+    await journal.locator('.pool-focus').selectOption('safe_return');
+    await journal.locator('.pool-reflection').selectOption('partial');
+    await journal.locator('.pool-note').fill(malicious);
+    poolSaveFailed=true;
+    await journal.locator('.pool-save').click();
+    await journal.locator('.pool-save-status').filter({hasText:'Не удалось сохранить дневник (проверка).'}).waitFor();
+    assert.equal(await journal.locator('.pool-note').inputValue(),malicious);
+    await page.getByRole('button',{name:'Обновить пул',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#pool-content').getAttribute('aria-busy')==='false');
+    assert.equal(await journal.locator('.pool-note').inputValue(),malicious,'Refreshing cannot discard an unsaved reflection.');
+    poolSaveFailed=false;
+    await journal.locator('.pool-save').click();
+    await journal.locator('.pool-save-status').filter({hasText:'Проверка сохранена в аккаунте.'}).waitFor();
+    assert.deepEqual(poolWrites.at(-1),{focus:'safe_return',reflection:'partial',note:malicious});
+    assert.equal(poolMatches[5].note,malicious);
+    assert.equal(await journal.locator('.pool-reflection').inputValue(),'partial');
+    assert.equal(await page.locator('#hero-pool img').count(),0,'Reflection notes remain safe text.');
+    assert.match(await page.locator('#pool-practice-summary').textContent(),/1 · частично/);
+    if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-pool.png`),fullPage:true});
     const poolAccessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
     assert.deepEqual(poolAccessibility.violations.map(violation=>({id:violation.id,nodes:violation.nodes.map(item=>item.target)})),[]);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-    await page.locator('#pool-position').selectOption('2');
-    await waitPoolCount(2);
-    assert.match(await page.locator('#pool-summary').innerText(),/50/);
-    assert.match(await page.locator('#pool-trends').innerText(),/не показывает динамику/);
-    await page.locator('#pool-position').selectOption('unknown');
-    await waitPoolCount(1);
-    assert.equal((await page.locator('#pool-summary').innerText()).includes('%'),false,'Unknown results cannot become 0% winrate.');
-    assert.match(await page.locator('#pool-trends').innerText(),/не показывает динамику/);
-    assert.equal(await page.locator('#pool-trends .pool-trend-line, #pool-trends .pool-comparison').count(),0,'One observed match cannot become a growth line or an earlier/later comparison.');
-    await page.locator('#pool-position').selectOption('3');
-    await waitPoolCount(6);
-    const editedMatchId='9000000106',editedMatch=page.locator(`.pool-match[data-match-id="${editedMatchId}"]`);
-    await editedMatch.locator('.pool-match-position').selectOption('2');
-    await editedMatch.locator('.pool-focus').selectOption('safe_return');
-    await editedMatch.locator('.pool-reflection').selectOption('partial');
-    await editedMatch.locator('.pool-note').fill(malicious);
-    poolSaveFailure=true;
-    await editedMatch.locator('.pool-save').click();
-    await editedMatch.locator('.pool-save-status').filter({hasText:'Не удалось сохранить дневник (проверка).'}).waitFor();
-    assert.equal(await editedMatch.locator('.pool-note').inputValue(),malicious,'A failed save must preserve the user draft.');
-    assert.equal(await editedMatch.locator('.pool-match-position').inputValue(),'2');
-    poolSaveFailure=false;
-    await editedMatch.locator('.pool-save').click();
-    await waitPoolCount(5);
-    assert.deepEqual(poolWrites.at(-1),{position:2,focus:'safe_return',reflection:'partial',note:malicious});
-    await page.locator('#pool-position').selectOption('2');
-    await waitPoolCount(3);
-    assert.equal(await editedMatch.locator('.pool-note').inputValue(),malicious);
-    assert.equal(await editedMatch.locator('.pool-focus').inputValue(),'safe_return');
-    assert.equal(await editedMatch.locator('.pool-reflection').inputValue(),'partial');
-    assert.equal(await page.locator('#hero-pool img').count(),0,'Diary notes are rendered as text, not markup.');
-    await editedMatch.locator('.pool-open-report').click();
-    await page.getByRole('heading',{name:`Матч ${editedMatchId}`,exact:true}).waitFor();
-    assert.equal(await page.locator('#review').isVisible(),true);
-    assert.equal(await page.locator('#hero-pool').isHidden(),true);
-    await page.locator('button[data-tab="hero-pool"]').click();
-    poolFailure=true;
-    await page.locator('#pool-refresh').click();
-    await page.locator('#pool-status').filter({hasText:'Пул временно недоступен (проверка).'}).waitFor();
-    poolFailure=false;
-    await page.locator('#pool-refresh').click();
-    await waitPoolCount(3);
-    poolMatches=[structuredClone(heroPoolMatches[6])];
-    await page.locator('#pool-refresh').click();
-    await waitPoolCount(1);
-    assert.match(await page.locator('#pool-trends').innerText(),/не показывает динамику/);
-    assert.equal(await page.locator('#pool-trends .pool-trend-line, #pool-trends .pool-comparison').count(),0);
-    poolMatches=[];
-    await page.locator('#pool-refresh').click();
-    await waitPoolCount(0);
-    assert.equal(await page.locator('#pool-trends svg').count(),0);
-    assert.equal((await page.locator('#pool-summary').innerText()).includes('%'),false,'Empty history cannot claim a winrate.');
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    poolFailed=true; await page.getByRole('button',{name:'Обновить пул',exact:true}).click();
+    await page.locator('#pool-status').filter({hasText:'Не удалось открыть пул героев'}).waitFor();
+    assert.equal(await page.locator('#pool-content').isHidden(),true);
+    poolFailed=false; await page.getByRole('button',{name:'Обновить пул',exact:true}).click();
+    await page.locator('#pool-content').waitFor();
+    await page.getByRole('button',{name:'Разбор матча',exact:true}).click();
+    page.once('dialog',dialog=>dialog.accept());
+    await page.getByRole('button',{name:'Освободить место',exact:true}).click();
+    await page.getByText('Исходный реплей удалён. Разбор и статистика сохранены.',{exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:'Освободить место',exact:true}).count(),0);
+    assert.equal(await page.locator('#history .history-row').count(),1);
     await page.getByRole('button',{name:'Мой игрок',exact:true}).click();
     await page.getByRole('heading',{name:'Мой игрок',exact:true}).waitFor();
     assert.match(await page.locator('#player-summary').textContent(),/Steam ID: 123/);
     await page.getByRole('button',{name:'Аккаунт',exact:true}).click();
     await page.getByRole('heading',{name:'Изменить пароль',exact:true}).waitFor();
     assert.equal(requests.some(url=>url.startsWith('/api/videos')),false);
-    assert.deepEqual(externalRequests,[],'Fixtures must never contact a provider or other external host.');
+    assert.deepEqual(externalRequests,[],'Synthetic UI fixtures must never contact external providers.');
     assert.deepEqual(errors,[]); await page.close();
   }
-  console.log('Hero pool role/hero filters, known-result winrates, sparse-history honesty, journal save/recovery, report navigation and WCAG; visual report sources, item delivery/realization, personal goals and next-game plan; .dem upload, binding, timeline and mobile layout passed (synthetic API fixtures; no provider/network calls).');
+  console.log('Visual report income sources, item timings/delivery/realization, personal goals/reset and next-game plan; Portal .dem upload→report, selected-player binding, shared gold/XP timeline, evidence links, safe text, account navigation, mobile layout and WCAG passed (mocked API; no paid calls).');
 } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }

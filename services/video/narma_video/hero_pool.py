@@ -1,327 +1,512 @@
-"""Private longitudinal observations from verified, selected-player replays.
+"""Private longitudinal replay facts and measurable personal practice goals.
 
-No model calls, external match lookup, inferred rank/role or skill score. Role
-and practice reflections are explicitly supplied by the owner. Unknown facts
-stay unknown, and uploading the same match twice never increases its weight.
+Nothing in this module infers a role from a hero, invents a match date or calls a
+provider. A win rate includes only verified outcomes. Trends compare one hero
+and a manually declared role and keep the source of chronology visible.
 """
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 import math
 import re
-from collections import defaultdict
 from statistics import mean
+from typing import Literal
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Depends, Request
+from psycopg.errors import UniqueViolation
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from .db import database
 from .replay_report import display_unit
-from .web import reject
+from .web import account_required, csrf, reject
+# The first deployed coach-context contract remains supported independently.
+from .hero_pool_legacy import build_pool
 
 SCHEMA = "narma.hero-pool.v1"
-LIMIT = 1000
-FOCUSES = {"item_plan", "farm_checkpoint", "safe_return"}
-REFLECTIONS = {"done", "partial", "not_done"}
-METRICS = {
-    "lh10": ("Добивания к 10-й минуте", "LH"),
-    "nw10": ("Стоимость героя к 10-й минуте", "золото"),
-    "deaths10": ("Смерти к 10-й минуте", "смертей"),
-    "dead_pct": ("Подтверждённое время вне игры", "%"),
-    "gpm": ("Средний доход за матч", "GPM"),
+HERO = r"^npc_dota_hero_[a-z0-9_]{1,80}$"
+MIN_GROUP = 3
+UTC = timezone.utc
+TREND_METRICS = {
+    "last_hits_10": ("Добивания к 10-й минуте", "доб.", "higher"),
+    "net_worth_10": ("Стоимость героя к 10-й минуте", "зол.", "higher"),
+    "deaths_per_30": ("Смертей на 30 минут", "смертей", "lower"),
+    "repeated_deaths": ("Повторные смерти за 3 минуты", "эпизодов", "lower"),
+    "item_delay_seconds": ("От активного слота до первого применения", "с", "lower"),
+}
+PATTERNS = {
+    "repeat-death": {
+        "title": "Повторный вход после смерти", "metric": "repeated_deaths", "threshold": 0,
+        "action": "После возрождения перед возвращением проверь союзников, доступные способности и цель входа. После игры пересмотри смерти с промежутком до трёх минут.",
+        "note": "Близкие смерти — повод проверить решения, а не доказательство ошибки.",
+    },
+    "item-delay": {
+        "title": "Первое применение активного предмета", "metric": "item_delay_seconds", "threshold": 120,
+        "action": "Перед покупкой выбери задачу предмета. После доставки проверь активный слот и после игры разберись, что определило время первого применения.",
+        "note": "120 секунд — личная проверочная отметка, не норма силы игры. Отсутствие применения не доказывает отсутствие пользы.",
+    },
 }
 
-# Distinct identities are selected BEFORE projecting report fields. The API
-# never loads entire 300 KB reports for every match. Even a long history sends
-# only one checkpoint, death markers and compact item-use records per match.
-POOL_SQL = """
-WITH latest AS (
-    SELECT DISTINCT ON (r.account_id, r.match_id)
-        r.id, r.owner_id, r.account_id, r.match_id, r.created_at, r.updated_at,
-        r.result_payload
-    FROM replay_jobs r
-    JOIN portal_dota_profiles p ON p.owner_id=r.owner_id AND p.account_id=r.account_id
-    WHERE r.owner_id=%s AND r.state='ready'
-      AND r.result_payload->>'schema_version'='narma.replay-report.v1'
-      AND r.result_payload#>>'{coverage,complete}'='true'
-      AND r.result_payload#>>'{coverage,source_sha256}'=r.source_sha256
-      AND r.result_payload->>'match_id'=r.match_id
-      AND r.result_payload#>>'{player,account_id}'=r.account_id::text
-    ORDER BY r.account_id, r.match_id, r.updated_at DESC, r.id DESC
-), bounded AS (
-    SELECT *, count(*) OVER() AS total_available FROM latest
-    ORDER BY match_id::bigint DESC LIMIT %s
-)
-SELECT r.id AS job_id, r.account_id, r.match_id, r.created_at AS uploaded_at,
-    r.total_available,
-    r.result_payload#>>'{player,hero}' AS hero,
-    r.result_payload->>'outcome' AS outcome,
-    r.result_payload->'metrics' AS metrics,
-    r.result_payload#>'{coverage,engine_build}' AS engine_build,
-    r.result_payload#>'{coverage,unclosed_death_intervals}' AS unclosed_death_intervals,
-    (SELECT e FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.result_payload->'economy')='array'
-         THEN r.result_payload->'economy' ELSE '[]'::jsonb END) e
-     WHERE jsonb_typeof(e->'time')='number' AND (e->>'time')::numeric BETWEEN 0 AND 600
-     ORDER BY (e->>'time')::numeric DESC LIMIT 1) AS checkpoint,
-    (SELECT coalesce(jsonb_agg(jsonb_build_object('id', e->'id', 'time', e->'time')), '[]'::jsonb)
-     FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.result_payload->'evidence')='array'
-         THEN r.result_payload->'evidence' ELSE '[]'::jsonb END) e
-     WHERE e->>'type'='death') AS deaths,
-    (SELECT coalesce(jsonb_agg(jsonb_build_object(
-         'item', i->'item', 'label', i->'label', 'time', i->'time', 'event_id', i->'event_id',
-         'first_active_inventory_time', i->'first_active_inventory_time',
-         'first_use_time', i#>'{realization,first_use_time}',
-         'first_use_event_id', i#>'{realization,first_use_event_id}')), '[]'::jsonb)
-     FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.result_payload#>'{insights,items}')='array'
-         THEN r.result_payload#>'{insights,items}' ELSE '[]'::jsonb END) i) AS items,
-    n.position, n.focus, n.reflection, coalesce(n.note, '') AS note
-FROM bounded r LEFT JOIN hero_pool_match_notes n
-    ON n.owner_id=r.owner_id AND n.account_id=r.account_id AND n.match_id=r.match_id
-ORDER BY r.match_id::bigint DESC
-"""
+
+def finite(value):
+    return type(value) in (int, float) and math.isfinite(value)
 
 
-def _number(value):
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+def timestamp(value):
+    if isinstance(value, str):
         try:
-            if math.isfinite(value) and value >= 0:
-                return value
-        except OverflowError:
-            pass
-    return None
-
-
-def _position(value, *, filter_value=False):
-    if value is None or (filter_value and value == "unknown"):
-        return value
-    if filter_value and isinstance(value, str) and value in {"1", "2", "3", "4", "5"}:
-        return int(value)
-    if type(value) is int and 1 <= value <= 5:
-        return value
-    reject(400, "HERO_POOL_POSITION", "Выберите позицию от 1 до 5 или оставьте её незаданной.")
-
-
-def _hero(value):
-    if value is None:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime) or value.tzinfo is None:
         return None
-    if not isinstance(value, str) or not re.fullmatch(r"npc_dota_hero_[a-z0-9_]{1,80}", value):
-        reject(400, "HERO_POOL_HERO", "Выберите героя из своего пула.")
-    return value
+    return value.astimezone(UTC)
 
 
-def _counts(matches):
-    wins = sum(m["outcome"] == "win" for m in matches)
-    losses = sum(m["outcome"] == "loss" for m in matches)
-    return {"matches": len(matches), "wins": wins, "losses": losses,
-            "unknown": len(matches) - wins - losses,
-            "winrate": round(wins * 100 / (wins + losses), 1) if wins + losses else None}
+def iso(value):
+    return value.isoformat() if value else None
 
 
-def _normalize(row):
-    metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
-    duration = _number(metrics.get("duration_seconds"))
-    checkpoint = row.get("checkpoint") if isinstance(row.get("checkpoint"), dict) else {}
-    sample_time = _number(checkpoint.get("time"))
-    # A very old sample, or a game ending before ten minutes, is not a 10m value.
-    valid_checkpoint = duration is not None and duration >= 600 and sample_time is not None and 565 <= sample_time <= 600
-    dead = _number(metrics.get("confirmed_dead_seconds"))
-    death_count, paired_count = metrics.get("deaths"), metrics.get("confirmed_death_intervals")
-    # Compare whole-match dead time only when every scoreboard death has one
-    # closed life-state interval. Partial/missing telemetry must not look like
-    # reduced downtime. A genuine zero needs explicit zero counts and seconds.
-    complete_life_data = (type(death_count) is int and death_count >= 0
-        and type(paired_count) is int and paired_count == death_count
-        and type(row.get("unclosed_death_intervals")) is int
-        and row["unclosed_death_intervals"] == 0
-        and dead is not None and ((death_count == 0 and dead == 0) or (death_count > 0 and dead > 0)))
-    earned = _number(metrics.get("total_earned_gold"))
-    available = {
-        "lh10": _number(checkpoint.get("last_hits")) if valid_checkpoint else None,
-        "nw10": _number(checkpoint.get("net_worth")) if valid_checkpoint else None,
-        "deaths10": _number(checkpoint.get("deaths")) if valid_checkpoint else None,
-        "dead_pct": round(dead * 100 / duration, 2) if duration and dead is not None and dead <= duration
-            and complete_life_data else None,
-        "gpm": round(earned * 60 / duration, 1) if duration and earned is not None else None,
-    }
-    uploaded = row.get("uploaded_at")
-    return {"match_id": str(row["match_id"]), "job_id": str(row["job_id"]),
-            "hero": row["hero"], "hero_label": display_unit(row["hero"]),
-            "position": row.get("position"),
-            "outcome": row.get("outcome") if row.get("outcome") in ("win", "loss") else None,
-            "uploaded_at": uploaded.isoformat() if hasattr(uploaded, "isoformat") else uploaded,
-            "metrics": available, "checkpoint_seconds": sample_time if valid_checkpoint else None,
-            "engine_build": row.get("engine_build"),
-            "focus": row.get("focus"), "reflection": row.get("reflection"), "note": row.get("note") or "",
-            "_deaths": [e for e in (row.get("deaths") or []) if isinstance(e, dict) and _number(e.get("time")) is not None],
-            "_items": [i for i in (row.get("items") or []) if isinstance(i, dict)]}
+def valid_report(row):
+    report = row.get("result_payload")
+    if not isinstance(report, dict):
+        return None
+    player, coverage = report.get("player"), report.get("coverage")
+    if (report.get("schema_version") != "narma.replay-report.v1"
+            or not isinstance(player, dict) or not isinstance(coverage, dict)
+            or coverage.get("complete") is not True
+            or type(player.get("account_id")) is not int
+            or player["account_id"] != row["account_id"]
+            or str(report.get("match_id")) != row["match_id"]
+            or coverage.get("source_sha256") != row["source_sha256"]
+            or not isinstance(player.get("hero"), str) or not re.fullmatch(HERO, player["hero"])
+            or player.get("team") not in ("radiant", "dire")):
+        return None
+    return report
 
 
-def _compatible_builds(matches):
-    # Unknown versions may be compared descriptively with the explicit caveat.
-    # Known different builds, or known mixed with unknown, cannot be pooled.
-    builds = {str(m.get("engine_build")) if m.get("engine_build") is not None else None for m in matches}
-    return len(builds) <= 1
-
-
-def _trends(matches, hero, position):
-    result = {"status": "choose_hero_position", "eligible_matches": len(matches),
-              "note": "Выберите одного героя и позицию, чтобы сравнить похожие по роли матчи.",
-              "older_match_ids": [], "recent_match_ids": [], "metrics": []}
-    if hero is None or type(position) is not int:
-        return result
-    result.update(status="insufficient", note="Для сравнения нужны минимум шесть матчей на этом герое и позиции: три предыдущих и три последних.")
-    if len(matches) < 6:
-        return result
-    recent, older = matches[:3], matches[3:6]
-    if not _compatible_builds(recent + older):
-        result["note"] = "Версии игры в последних шести матчах различаются или часть версий неизвестна. История доступна; средние между ними не сравниваются."
-        return result
-    result["older_match_ids"] = [m["match_id"] for m in reversed(older)]
-    result["recent_match_ids"] = [m["match_id"] for m in reversed(recent)]
-    for key, (label, unit) in METRICS.items():
-        old_values = [m["metrics"][key] for m in older if m["metrics"][key] is not None]
-        new_values = [m["metrics"][key] for m in recent if m["metrics"][key] is not None]
-        if len(old_values) < 3 or len(new_values) < 3:
+def match_facts(row, metadata):
+    report = valid_report(row)
+    if not report:
+        return None
+    raw = report.get("metrics") or {}
+    metrics = {key: raw[key] for key in (
+        "duration_seconds", "kills", "deaths", "assists", "last_hits", "net_worth",
+        "total_earned_gold", "xp", "confirmed_dead_seconds") if finite(raw.get(key)) and raw[key] >= 0}
+    duration = metrics.get("duration_seconds", 0)
+    if duration > 0:
+        for source, target, scale in (("total_earned_gold", "gpm", 60), ("xp", "xpm", 60), ("deaths", "deaths_per_30", 1800)):
+            if source in metrics:
+                metrics[target] = round(metrics[source] * scale / duration, 2)
+    economy = [r for r in report.get("economy", []) if isinstance(r, dict) and finite(r.get("time")) and 565 <= r["time"] <= 600]
+    if duration >= 600 and economy:
+        checkpoint = max(economy, key=lambda r: r["time"])
+        for key in ("last_hits", "net_worth"):
+            if finite(checkpoint.get(key)) and checkpoint[key] >= 0:
+                metrics[key + "_10"] = checkpoint[key]
+    evidence = [{"id": e["id"], "type": e["type"], "time": e["time"]}
+                for e in report.get("evidence", []) if isinstance(e, dict)
+                and isinstance(e.get("id"), str) and e.get("type") == "death" and finite(e.get("time"))]
+    deaths = sorted(evidence, key=lambda e: e["time"])
+    # Coverage is observable: incomplete death evidence is unknown, never zero.
+    if "deaths" in metrics and len(deaths) == metrics["deaths"]:
+        metrics["repeated_deaths"] = sum(0 < b["time"] - a["time"] <= 180 for a, b in zip(deaths, deaths[1:]))
+    items = []
+    for item in (report.get("insights") or {}).get("items", []):
+        if not isinstance(item, dict) or not isinstance(item.get("item"), str):
             continue
-        old, new = round(mean(old_values), 2), round(mean(new_values), 2)
-        result["metrics"].append({"key": key, "label": label, "unit": unit,
-            "older": old, "recent": new, "delta": round(new - old, 2),
-            "older_count": len(old_values), "recent_count": len(new_values)})
-    if result["metrics"]:
-        result.update(status="ready", note="Три предыдущих матча → три последних, по Match ID. Изменение показателей само по себе не доказывает улучшение понимания игры; составы, рейтинг и условия матчей не сопоставлены.")
-        if recent[0].get("engine_build") is None:
-            result["note"] += " Версия игры не подтверждена."
-    else:
-        result["note"] = "В каждой группе нужны три записанных значения одного показателя. Пропуски не заменяются нулями."
+        realization = item.get("realization") or {}
+        compact = {key: item.get(key) for key in ("item", "label", "time", "event_id", "acquisition")}
+        compact["realization"] = {key: realization.get(key) for key in (
+            "status", "delay_from_active_seconds", "delay_seconds", "first_use_time", "first_use_event_id", "evidence_ids")}
+        items.append(compact)
+        if isinstance(realization.get("first_use_event_id"), str) and finite(realization.get("first_use_time")):
+            evidence.append({"id": realization["first_use_event_id"], "type": "item_use", "time": realization["first_use_time"]})
+        if isinstance(item.get("event_id"), str) and finite(item.get("time")):
+            evidence.append({"id": item["event_id"], "type": "item_acquisition", "time": item["time"]})
+    delays = [i["realization"]["delay_from_active_seconds"] for i in items
+              if finite(i["realization"].get("delay_from_active_seconds")) and i["realization"]["delay_from_active_seconds"] >= 0]
+    if delays:
+        metrics["item_delay_seconds"] = round(mean(delays), 2)
+    # Reserve replay dates for the explicitly sourced future parser contract.
+    replay_date = timestamp(report.get("played_at")) if report.get("played_at_source") == "replay" else None
+    now = datetime.now(UTC)
+    if replay_date and not datetime(2010, 1, 1, tzinfo=UTC) <= replay_date <= now + timedelta(days=1):
+        replay_date = None
+    played_at = replay_date or metadata.get("played_at")
+    source = "replay" if replay_date else "user" if played_at else "analysis"
+    analyzed = metadata["first_analyzed_at"]
+    return {"job_id": str(row["id"]), "match_id": row["match_id"], "source_sha256": row["source_sha256"],
+            "report_sha256": row.get("report_sha256"), "report_state": row.get("state", "ready"),
+            "report_is_previous": row.get("report_is_previous", False),
+            "pool_metadata": {"position": metadata.get("position"), "played_at": iso(metadata.get("played_at"))},
+            "focus": metadata.get("focus"), "reflection": metadata.get("reflection"), "note": metadata.get("note") or "",
+            "engine_build": report["coverage"].get("engine_build"),
+            "hero": report["player"]["hero"], "label": display_unit(report["player"]["hero"]),
+            "position": metadata.get("position"), "outcome": report.get("outcome") if report.get("outcome") in ("win", "loss") else None,
+            "played_at": iso(played_at), "date_source": source, "chronology_at": iso(played_at or analyzed),
+            "analyzed_at": iso(analyzed), "metrics": metrics, "items": items, "evidence": evidence}
+
+
+def summary(matches):
+    wins = sum(r["outcome"] == "win" for r in matches)
+    losses = sum(r["outcome"] == "loss" for r in matches)
+    known = wins + losses
+    return {"matches": len(matches), "wins": wins, "losses": losses, "known_outcomes": known,
+            "unknown_outcomes": len(matches) - known, "winrate_pct": round(100 * wins / known, 1) if known else None,
+            "unknown_positions": sum(r["position"] is None for r in matches),
+            "dated_matches": sum(r["date_source"] != "analysis" for r in matches),
+            "analysis_dated_matches": sum(r["date_source"] == "analysis" for r in matches)}
+
+
+def trends_for(matches):
+    groups = defaultdict(list)
+    for row in matches:
+        if row["position"] is not None:
+            groups[(row["hero"], row["position"])].append(row)
+    result = []
+    for (hero, position), rows in sorted(groups.items()):
+        sources = {r["date_source"] for r in rows}
+        builds = {str(r["engine_build"]) if r.get("engine_build") is not None else None for r in rows}
+        for metric, (label, unit, desired) in TREND_METRICS.items():
+            available = sorted([r for r in rows if finite(r["metrics"].get(metric))], key=lambda r: (r["chronology_at"], r["match_id"]))
+            n = min(10, len(available) // 2)
+            status = "mixed_chronology" if len(sources) > 1 else "ready" if n >= MIN_GROUP else "insufficient"
+            if len(builds) > 1:
+                status = "mixed_builds"
+            early, recent = (available[:n], available[-n:]) if n else ([], [])
+            # Identical recorded dates cannot establish temporal direction.
+            if status == "ready" and early[-1]["chronology_at"] >= recent[0]["chronology_at"]:
+                status = "ambiguous_chronology"
+            a = round(mean(r["metrics"][metric] for r in early), 2) if status == "ready" else None
+            b = round(mean(r["metrics"][metric] for r in recent), 2) if status == "ready" else None
+            result.append({"hero": hero, "hero_label": display_unit(hero), "position": position,
+                "metric": metric, "label": label, "unit": unit, "status": status,
+                "chronology_basis": next(iter(sources)) if len(sources) == 1 else "mixed",
+                "engine_build": next(iter(builds)) if len(builds) == 1 else None,
+                "build_note": "Версия игры не подтверждена." if builds == {None} else "Версии игры различаются или часть версий неизвестна." if len(builds) > 1 else "",
+                "early_n": len(early), "recent_n": len(recent), "early_mean": a, "recent_mean": b,
+                "delta": round(b - a, 2) if a is not None else None,
+                "direction": "up" if a is not None and b > a else "down" if a is not None and b < a else "flat" if a is not None else None,
+                "desired_direction": desired,
+                "early_match_ids": [r["match_id"] for r in early], "recent_match_ids": [r["match_id"] for r in recent]})
     return result
 
 
-def _patterns(matches, hero, position):
-    if hero is None or type(position) is not int or len(matches) < 3:
-        return []
-    # Recurrence uses the latest 20 comparable games; older habits do not keep
-    # reappearing forever after the owner changes their play.
-    recent = matches[:20]
-    if not _compatible_builds(recent):
-        return []
-    patterns, repeated = [], []
-    for match in recent:
-        deaths = sorted(match["_deaths"], key=lambda e: e["time"])
-        pair = next(((a, b) for a, b in zip(deaths, deaths[1:]) if 0 < b["time"] - a["time"] <= 180), None)
-        if pair:
-            repeated.append({"match_id": match["match_id"], "job_id": match["job_id"],
-                "time": pair[1]["time"], "event_id": pair[1].get("id"),
-                "previous_time": pair[0]["time"], "previous_event_id": pair[0].get("id")})
-    if len(repeated) >= 3:
-        patterns.append({"id": "safe_return", "title": "Повторные смерти за три минуты",
-            "observation": f"В {len(repeated)} из {len(recent)} последних матчей на этом герое и позиции записаны две смерти с промежутком не более трёх минут. Это повод проверить решение, а не доказанная ошибка.",
-            "action": "После возрождения перед возвращением к драке назови цель, проверь союзников рядом и путь отхода. После игры пересмотри повторный вход.",
-            "measure": "Отметь, выполнил ли эту проверку; сравни контекст повторных смертей в следующих трёх матчах.",
-            "matches": len(repeated), "eligible_matches": len(recent), "evidence": repeated[:6]})
-    items = defaultdict(list)
-    for match in recent:
-        seen = set()
-        for item in match["_items"]:
-            name = item.get("item")
-            active, used = _number(item.get("first_active_inventory_time")), _number(item.get("first_use_time"))
-            if not isinstance(name, str) or name in seen or active is None or used is None or used < active:
+def patterns_for(matches):
+    groups = defaultdict(list)
+    for row in matches:
+        if row["position"] is not None:
+            groups[(row["hero"], row["position"])].append(row)
+    result = []
+    for (hero, position), rows in sorted(groups.items()):
+        rows = sorted(rows, key=lambda r: (r["chronology_at"], r["match_id"]), reverse=True)[:20]
+        builds = {str(r["engine_build"]) if r.get("engine_build") is not None else None for r in rows}
+        if len(builds) > 1:
+            continue
+        for ident, definition in PATTERNS.items():
+            eligible = [r for r in rows if finite(r["metrics"].get(definition["metric"]))]
+            occurrences = [r for r in eligible if r["metrics"][definition["metric"]] > definition["threshold"]]
+            if len(eligible) < 3 or len(occurrences) < 2:
                 continue
-            seen.add(name)
-            items[name].append((match, item, used - active))
-    for name, observations in sorted(items.items()):
-        delayed = [(match, item, delay) for match, item, delay in observations if delay > 120]
-        if len(delayed) < 3:
-            continue
-        patterns.append({"id": "item_plan_" + name, "title": "План первого применения: " + display_unit(name),
-            "observation": f"В {len(delayed)} из {len(observations)} матчей с записанным первым применением прошло больше двух минут с появления предмета в активном слоте. Сам интервал не показывает, был ли момент для применения.",
-            "action": "Перед покупкой назови задачу предмета. В первом подходящем эпизоде проверь, помог ли он её выполнить; при ожидании запиши причину.",
-            "measure": "В следующих трёх матчах сравни активный слот, первое применение и результат эпизода. Не нажимай предмет только ради сокращения интервала.",
-            "matches": len(delayed), "eligible_matches": len(observations),
-            "evidence": [{"match_id": m["match_id"], "job_id": m["job_id"], "item": name,
-                "time": i["first_use_time"], "event_id": i.get("first_use_event_id"),
-                "active_time": i["first_active_inventory_time"], "delay_seconds": round(delay, 2)}
-                for m, i, delay in delayed[:6]]})
-    return patterns[:4]
-
-
-def build_pool(rows, profile=None, hero=None, position=None):
-    """Pure aggregation of the bounded, already ownership-checked projection."""
-    hero, position = _hero(hero), _position(position, filter_value=True)
-    # SQL performs authoritative deduplication. This defensive pass also keeps
-    # duplicate projected inputs from weighting pure aggregation twice.
-    all_matches, seen = [], set()
-    for row in rows:
-        identity = (row.get("account_id"), str(row.get("match_id")))
-        name = row.get("hero")
-        if identity in seen or not isinstance(name, str) or not re.fullmatch(r"npc_dota_hero_[a-z0-9_]{1,80}", name):
-            continue
-        seen.add(identity)
-        all_matches.append(_normalize(row))
-    all_matches.sort(key=lambda m: int(m["match_id"]), reverse=True)
-    grouped = defaultdict(list)
-    for match in all_matches:
-        grouped[match["hero"]].append(match)
-    heroes = []
-    for name, matches in sorted(grouped.items(), key=lambda pair: (-len(pair[1]), display_unit(pair[0]))):
-        positions = defaultdict(list)
-        for match in matches:
-            positions[match["position"]].append(match)
-        heroes.append({"hero": name, "hero_label": display_unit(name), **_counts(matches),
-            "positions": [{"position": pos, **_counts(values)} for pos, values in
-                          sorted(positions.items(), key=lambda pair: pair[0] or 6)]})
-    matches = [m for m in all_matches if (hero is None or m["hero"] == hero) and (
-        position is None or (m["position"] is None if position == "unknown" else m["position"] == position))]
-    total = max([int(r.get("total_available") or 0) for r in rows] + [len(all_matches)])
-    practice = {"tracked": sum(bool(m["focus"]) for m in matches)}
-    practice.update({key: sum(bool(m["focus"]) and m["reflection"] == key for m in matches) for key in REFLECTIONS})
-    practice["unreviewed"] = sum(bool(m["focus"]) and m["reflection"] is None for m in matches)
-    result = {"schema_version": SCHEMA,
-        "scope": {"account_id": profile.get("account_id") if profile else None,
-            "nickname": profile.get("nickname") if profile else None, "hero": hero, "position": position,
-            "chronology": "match_id", "chronology_label": "Порядок матчей", "source": "uploaded_replays",
-            "total_available": total, "limit": LIMIT, "truncated": total > LIMIT,
-            "position_source": "self_reported",
-            "context": "Учтены только загруженные и завершённые разборы закреплённого игрока. Позиция и выполнение задачи указаны вами. Рейтинг, соперники и патч не сопоставлены: это наблюдения, а не оценка понимания игры."},
-        "summary": _counts(matches), "heroes": heroes, "matches": [],
-        "trends": _trends(matches, hero, position), "patterns": _patterns(matches, hero, position), "practice": practice}
-    result["matches"] = [{k: v for k, v in match.items() if not k.startswith("_")} for match in matches]
+            result.append({"id": ident, "hero": hero, "label": display_unit(hero), "position": position,
+                "title": definition["title"], "metric": definition["metric"], "occurrences": len(occurrences),
+                "eligible_matches": len(eligible), "observation": f"Наблюдается в {len(occurrences)} из {len(eligible)} доступных матчей. {definition['note']}",
+                "action": definition["action"], "evidence": [{"job_id": r["job_id"], "match_id": r["match_id"],
+                    "value": r["metrics"][definition["metric"]], "evidence_ids": [e["id"] for e in r["evidence"]
+                        if e["type"] == ("death" if ident == "repeat-death" else "item_use")][:12]} for r in occurrences[:12]]})
     return result
 
 
-def get_pool(owner_id, hero=None, position=None):
-    # Validation precedes the database query; no caller-supplied account ID.
-    hero, position = _hero(hero), _position(position, filter_value=True)
-    with database() as connection:
-        profile = connection.execute("SELECT account_id,nickname FROM portal_dota_profiles WHERE owner_id=%s", (owner_id,)).fetchone()
-        rows = connection.execute(POOL_SQL, (owner_id, LIMIT)).fetchall() if profile else []
-    return build_pool(rows, profile, hero, position)
+def _load_history(connection, owner_id):
+    profile = connection.execute("SELECT account_id,nickname FROM portal_dota_profiles WHERE owner_id=%s", (owner_id,)).fetchone()
+    if profile is None:
+        return None, []
+    # Project only fields used here; leave the full reports in their existing API.
+    rows = connection.execute("""WITH reports AS (
+        SELECT r.id,r.account_id,r.match_id,r.source_sha256,r.state,
+            CASE WHEN r.state='ready' THEN r.result_payload ELSE archived.report END AS result_payload,
+            CASE WHEN r.state='ready' THEN r.updated_at ELSE archived.created_at END AS updated_at,
+            r.state<>'ready' AS report_is_previous
+        FROM replay_jobs r LEFT JOIN LATERAL (
+            SELECT h.report,h.created_at FROM replay_report_history h WHERE r.state<>'ready'
+                AND h.job_id=r.id AND h.source_sha256=r.source_sha256 AND h.match_id=r.match_id
+                AND h.account_id=r.account_id AND h.report->>'schema_version'='narma.replay-report.v1'
+                AND h.report#>>'{coverage,complete}'='true'
+            ORDER BY h.id DESC LIMIT 1
+        ) archived ON true
+        WHERE r.owner_id=%s AND r.account_id=%s AND r.state<>'deleted'
+    ) SELECT id,account_id,match_id,source_sha256,updated_at,state,report_is_previous,
+        encode(sha256(convert_to(result_payload::text,'UTF8')), 'hex') AS report_sha256,
+        jsonb_build_object('schema_version',result_payload->'schema_version','player',result_payload->'player',
+          'match_id',result_payload->'match_id','coverage',result_payload->'coverage',
+          'outcome',result_payload->'outcome','played_at',result_payload->'played_at','played_at_source',result_payload->'played_at_source',
+          'metrics',result_payload->'metrics','economy',coalesce(result_payload->'economy','[]'::jsonb),
+          'evidence',jsonb_path_query_array(result_payload,'$.evidence[*] ? (@.type == "death")'),
+          'insights',jsonb_build_object('items',coalesce(result_payload#>'{insights,items}','[]'::jsonb))) AS result_payload
+        FROM reports WHERE result_payload IS NOT NULL
+        ORDER BY updated_at DESC,id DESC""", (owner_id, profile["account_id"])).fetchall()
+    canonical, first_dates = {}, {}
+    for row in rows:
+        if valid_report(row):
+            canonical.setdefault(row["match_id"], row)
+            first_dates[row["match_id"]] = min(first_dates.get(row["match_id"], row["updated_at"]), row["updated_at"])
+    # Stable lock order across simultaneous reads and metadata mutations.
+    for match_id, when in sorted(first_dates.items()):
+        connection.execute("""INSERT INTO hero_pool_matches(owner_id,account_id,match_id,first_analyzed_at)
+            VALUES (%s,%s,%s,%s) ON CONFLICT(owner_id,account_id,match_id) DO UPDATE
+            SET first_analyzed_at=excluded.first_analyzed_at
+            WHERE excluded.first_analyzed_at<hero_pool_matches.first_analyzed_at""",
+            (owner_id, profile["account_id"], match_id, when))
+    metadata = {r["match_id"]: r for r in connection.execute("""SELECT m.*,n.focus,n.reflection,n.note
+        FROM hero_pool_matches m LEFT JOIN hero_pool_match_notes n ON n.owner_id=m.owner_id
+            AND n.account_id=m.account_id AND n.match_id=m.match_id
+        WHERE m.owner_id=%s AND m.account_id=%s""", (owner_id, profile["account_id"])).fetchall()}
+    history = [match_facts(row, metadata[match_id]) for match_id, row in canonical.items()]
+    return profile, sorted(history, key=lambda r: (r["chronology_at"], r["match_id"]), reverse=True)
 
 
-def update_match(owner_id, match_id, *, position=None, focus=None, reflection=None, note=""):
-    position = _position(position)
-    if not isinstance(match_id, str) or not re.fullmatch(r"[1-9][0-9]{7,11}", match_id):
-        reject(400, "HERO_POOL_MATCH", "Укажите Match ID из своей истории.")
-    if focus is not None and focus not in FOCUSES or reflection is not None and reflection not in REFLECTIONS:
-        reject(400, "HERO_POOL_NOTE", "Выберите задачу и отметку выполнения из списка.")
-    if not isinstance(note, str) or len(note) > 500 or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", note):
-        reject(400, "HERO_POOL_NOTE", "Заметка должна содержать не больше 500 символов.")
-    if reflection is not None and focus is None:
-        reject(400, "HERO_POOL_NOTE", "Сначала выберите задачу для этого матча.")
+def _goals(connection, owner_id, account_id, history):
+    goals = connection.execute("SELECT * FROM hero_pool_goals WHERE owner_id=%s AND account_id=%s ORDER BY created_at DESC", (owner_id, account_id)).fetchall()
+    by_match = {r["match_id"]: r for r in history}
+    result = []
+    for goal in goals:
+        for row in history:
+            if (goal["status"] != "active" or row["hero"] != goal["hero"] or row["position"] != goal["position"]
+                    or row["match_id"] in goal["baseline_match_ids"] or timestamp(row["analyzed_at"]) <= goal["created_at"]):
+                continue
+            value = row["metrics"].get(goal["metric"])
+            # Uploading an undated historical match cannot satisfy a new goal.
+            status = "unknown" if not finite(value) or row["date_source"] == "analysis" else "reached" if value <= goal["threshold"] else "review"
+            if row["played_at"] and timestamp(row["played_at"]) <= goal["created_at"]:
+                status = "predates_goal"
+            connection.execute("""INSERT INTO hero_pool_goal_checks(goal_id,match_id,value,status,chronology_basis)
+                VALUES (%s,%s,%s,%s,%s) ON CONFLICT(goal_id,match_id) DO UPDATE
+                SET value=excluded.value,status=excluded.status,chronology_basis=excluded.chronology_basis,checked_at=now()""",
+                (goal["id"], row["match_id"], value if finite(value) else None, status, row["date_source"]))
+        checks = connection.execute("SELECT match_id,value,status,chronology_basis FROM hero_pool_goal_checks WHERE goal_id=%s ORDER BY checked_at DESC,match_id DESC", (goal["id"],)).fetchall()
+        # Deleted reports and changed role assignments do not remain visible through a goal.
+        checks = [{**check, "job_id": by_match[check["match_id"]]["job_id"]} for check in checks
+                  if check["match_id"] in by_match and by_match[check["match_id"]]["hero"] == goal["hero"]
+                  and by_match[check["match_id"]]["position"] == goal["position"]]
+        result.append({key: goal[key] for key in ("id", "status", "title", "action", "created_at", "hero", "position", "pattern_id", "metric", "threshold")} | {"checks": checks})
+    return result
+
+
+def get_pool(owner_id, window="all", hero=None, position=None, favorites_only=False):
+    if window not in ("30", "90", "all") or (hero is not None and not re.fullmatch(HERO, hero)) or position not in (None, "unknown", "1", "2", "3", "4", "5"):
+        reject(400, "POOL_FILTER", "Проверьте фильтры пула героев.")
     with database() as connection:
-        # Same owner lock as replay profile binding; never changes that binding.
+        profile, all_history = _load_history(connection, owner_id)
+        favorites = connection.execute("SELECT hero,position FROM hero_pool_favorites WHERE owner_id=%s AND account_id=%s ORDER BY hero,position", (owner_id, profile["account_id"])).fetchall() if profile else []
+        goals = _goals(connection, owner_id, profile["account_id"], all_history) if profile else []
+    favorite_keys = {(r["hero"], r["position"]) for r in favorites}
+    since = datetime.now(UTC) - timedelta(days=int(window)) if window != "all" else None
+    selected = [r for r in all_history if (not hero or r["hero"] == hero)
+                and (position is None or r["position"] == (None if position == "unknown" else int(position)))
+                and (not since or timestamp(r["chronology_at"]) >= since)
+                and (not favorites_only or (r["hero"], r["position"]) in favorite_keys)]
+    groups = defaultdict(list)
+    for row in selected:
+        groups[(row["hero"], row["position"])].append(row)
+    heroes = [{"hero": key[0], "label": display_unit(key[0]), "position": key[1],
+               "favorite": key in favorite_keys, **summary(rows)} for key, rows in groups.items()]
+    heroes.sort(key=lambda r: (-r["matches"], r["hero"], r["position"] or 0))
+    return {"schema_version": SCHEMA, "profile": profile,
+        "filters": {"window": window, "hero": hero, "position": position, "favorites_only": favorites_only},
+        "summary": summary(selected), "heroes": heroes,
+        "available_heroes": [{"hero": h, "label": display_unit(h)} for h in sorted({r["hero"] for r in all_history})],
+        "favorites": [{**r, "label": display_unit(r["hero"])} for r in favorites], "history": selected,
+        "practice": {"tracked": sum(bool(r["focus"]) for r in selected),
+            **{key: sum(bool(r["focus"]) and r["reflection"] == key for r in selected) for key in ("done", "partial", "not_done")},
+            "unreviewed": sum(bool(r["focus"]) and r["reflection"] is None for r in selected)},
+        "trends": trends_for(selected), "patterns": patterns_for(selected),
+        "goals": [g for g in goals if (not hero or g["hero"] == hero)
+                  and (position is None or str(g["position"]) == position)
+                  and (not favorites_only or (g["hero"], g["position"]) in favorite_keys)],
+        "limitations": [
+            "Учтены завершённые разборы закреплённого игрока; во время обновления доступен предыдущий полный отчёт. Повторные загрузки одного матча считаются один раз.",
+            "Винрейт считается по матчам с известным результатом. Позицию указывает игрок; герой не определяет позицию.",
+            "Если дата игры не записана, период и порядок используют дату сохранённого анализа. Дату игры можно указать вручную.",
+            "Динамика сравнивает одного героя и позицию: минимум 3 ранних и 3 последних матча, максимум по 10. Разные источники дат не смешиваются.",
+            "Изменение показателя не измеряет понимание игры: патч, соперники, длительность и контекст могут влиять на результат.",
+            "Известные разные сборки игры и известная сборка вместе с неизвестной не сравниваются. Отметки выполнения задач — самооценка игрока.",
+            "Матч без даты игры не засчитывается как выполнение новой цели: неизвестно, состоялся ли он после её постановки.",
+        ]}
+
+
+class MatchUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    position: int | None = Field(default=None, ge=1, le=5, strict=True)
+    played_at: datetime | None = None
+    focus: Literal["item_plan", "farm_checkpoint", "safe_return"] | None = None
+    reflection: Literal["done", "partial", "not_done"] | None = None
+    note: str = Field(default="", max_length=500, strict=True)
+
+    @field_validator("note")
+    @classmethod
+    def plain_note(cls, value):
+        if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", value):
+            raise ValueError("Заметка содержит недопустимые символы.")
+        return value.strip()
+
+    @field_validator("played_at")
+    @classmethod
+    def real_date(cls, value):
+        if value is not None and (value.tzinfo is None or not datetime(2010, 1, 1, tzinfo=UTC) <= value <= datetime.now(UTC) + timedelta(days=1)):
+            raise ValueError("Укажите дату игры с часовым поясом.")
+        return value
+
+
+class Favorite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    hero: str = Field(pattern=HERO)
+    position: int = Field(ge=1, le=5, strict=True)
+
+
+class GoalCreate(Favorite):
+    pattern_id: str = Field(pattern=r"^(repeat-death|item-delay)$")
+
+
+class GoalUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: str = Field(pattern=r"^(active|paused|completed)$")
+
+
+async def body_for(request, model):
+    from pydantic import ValidationError
+    if request.headers.get("content-type", "").split(";", 1)[0].strip() != "application/json":
+        reject(415, "POOL_JSON", "Нужен JSON-запрос.")
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > 8192:
+            reject(413, "POOL_BODY", "Слишком большой запрос.")
+        raw.extend(chunk)
+    try:
+        return model.model_validate_json(raw)
+    except (ValidationError, ValueError):
+        reject(400, "POOL_FIELDS", "Проверьте героя, позицию и дату игры.")
+
+
+def update_match(owner_id, job_id, body):
+    with database() as connection:
+        # Same lock as the deployed numeric Match ID form: position sync touches
+        # both tables, so serialize cross-version edits before either row lock.
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner_id,))
-        profile = connection.execute("SELECT account_id FROM portal_dota_profiles WHERE owner_id=%s FOR UPDATE", (owner_id,)).fetchone()
-        report = connection.execute("""SELECT id FROM replay_jobs WHERE owner_id=%s AND account_id=%s
-            AND match_id=%s AND state='ready'
-            AND result_payload->>'schema_version'='narma.replay-report.v1'
-            AND result_payload#>>'{coverage,complete}'='true'
-            AND result_payload#>>'{coverage,source_sha256}'=source_sha256
-            AND result_payload->>'match_id'=match_id
-            AND result_payload#>>'{player,account_id}'=account_id::text
-            LIMIT 1 FOR SHARE""", (owner_id, profile["account_id"], match_id)).fetchone() if profile else None
-        if report is None:
-            reject(404, "HERO_POOL_MATCH", "Завершённый разбор этого матча не найден у закреплённого игрока.")
-        connection.execute("""INSERT INTO hero_pool_match_notes(owner_id,account_id,match_id,position,focus,reflection,note)
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT(owner_id,account_id,match_id) DO UPDATE SET
-                position=excluded.position,focus=excluded.focus,reflection=excluded.reflection,
-                note=excluded.note,updated_at=now()""",
-            (owner_id, profile["account_id"], match_id, position, focus, reflection, note.strip()))
-    return {"saved": True, "match_id": match_id, "position": position,
-            "focus": focus, "reflection": reflection, "note": note.strip()}
+        profile, history = _load_history(connection, owner_id)
+        # Authorize the exact supplied upload too; never accept a foreign job
+        # merely because its public match ID is present in this owner's history.
+        row = connection.execute("SELECT * FROM replay_jobs WHERE id=%s AND owner_id=%s AND state<>'deleted' FOR UPDATE", (job_id, owner_id)).fetchone()
+        if (not row or not profile or row["account_id"] != profile["account_id"]
+                or not any(r["match_id"] == row["match_id"] for r in history)):
+            reject(404, "POOL_MATCH_NOT_FOUND", "Готовый разбор этого игрока не найден.")
+        fields, args = [], []
+        for key in ("position", "played_at"):
+            if key in body.model_fields_set:
+                fields.append(key + "=%s")
+                args.append(getattr(body, key))
+        if not body.model_fields_set:
+            reject(400, "POOL_FIELDS", "Укажите позицию, дату матча или заметку.")
+        if fields:
+            connection.execute("UPDATE hero_pool_matches SET " + ",".join(fields) + ",updated_at=now() WHERE owner_id=%s AND account_id=%s AND match_id=%s",
+                               (*args, owner_id, profile["account_id"], row["match_id"]))
+        note_fields = body.model_fields_set & {"focus", "reflection", "note"}
+        if note_fields:
+            previous = connection.execute("SELECT * FROM hero_pool_match_notes WHERE owner_id=%s AND account_id=%s AND match_id=%s FOR UPDATE",
+                (owner_id, profile["account_id"], row["match_id"])).fetchone() or {"focus": None, "reflection": None, "note": ""}
+            values = {key: getattr(body, key) if key in note_fields else previous[key] for key in ("focus", "reflection", "note")}
+            if values["reflection"] is not None and values["focus"] is None:
+                reject(400, "POOL_FIELDS", "Сначала выберите задачу для этого матча.")
+            position = connection.execute("SELECT position FROM hero_pool_matches WHERE owner_id=%s AND account_id=%s AND match_id=%s", (owner_id, profile["account_id"], row["match_id"])).fetchone()["position"]
+            connection.execute("""INSERT INTO hero_pool_match_notes(owner_id,account_id,match_id,position,focus,reflection,note)
+                VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(owner_id,account_id,match_id) DO UPDATE
+                SET focus=excluded.focus,reflection=excluded.reflection,note=excluded.note,updated_at=now()""",
+                (owner_id, profile["account_id"], row["match_id"], position, values["focus"], values["reflection"], values["note"]))
+    return {"saved": True}
+
+
+def save_favorite(owner_id, body):
+    with database() as connection:
+        profile, history = _load_history(connection, owner_id)
+        if not profile or not any(r["hero"] == body.hero for r in history):
+            reject(404, "POOL_HERO_NOT_FOUND", "Сначала добавьте разбор своей игры на этом герое.")
+        connection.execute("INSERT INTO hero_pool_favorites(owner_id,account_id,hero,position) VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                           (owner_id, profile["account_id"], body.hero, body.position))
+    return {"saved": True}
+
+
+def create_goal(owner_id, body):
+    snapshot = get_pool(owner_id)
+    pattern = next((p for p in snapshot["patterns"] if (p["id"], p["hero"], p["position"]) == (body.pattern_id, body.hero, body.position)), None)
+    if not pattern:
+        reject(409, "POOL_PATTERN_UNAVAILABLE", "Для этой цели пока недостаточно подтверждённых наблюдений.")
+    definition = PATTERNS[body.pattern_id]
+    with database() as connection:
+        # Serialize a user's practice changes; duplicate clicks are idempotent.
+        connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (owner_id,))
+        existing = connection.execute("SELECT id FROM hero_pool_goals WHERE owner_id=%s AND account_id=%s AND hero=%s AND position=%s AND pattern_id=%s AND status='active'",
+            (owner_id, snapshot["profile"]["account_id"], body.hero, body.position, body.pattern_id)).fetchone()
+        if existing:
+            return {"saved": True, "goal": existing}
+        row = connection.execute("""INSERT INTO hero_pool_goals(id,owner_id,account_id,hero,position,pattern_id,title,action,metric,threshold,baseline_match_ids)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id,status,title""",
+            (uuid4(), owner_id, snapshot["profile"]["account_id"], body.hero, body.position, body.pattern_id,
+             definition["title"], definition["action"], definition["metric"], definition["threshold"],
+             Jsonb([r["match_id"] for r in snapshot["history"]]))).fetchone()
+    return {"saved": True, "goal": row}
+
+
+def attach_hero_pool(app):
+    router = APIRouter(prefix="/api/hero-pool")
+
+    @router.get("")
+    def get(window: str = "all", hero: str | None = None, position: str | None = None,
+            favorites_only: bool = False, account=Depends(account_required)):
+        return get_pool(account["owner_id"], window=window, hero=hero, position=position, favorites_only=favorites_only)
+
+    @router.put("/matches/{job_id:uuid}", dependencies=[Depends(csrf)])
+    @router.patch("/matches/{job_id:uuid}", dependencies=[Depends(csrf)])
+    async def match(job_id: UUID, request: Request, account=Depends(account_required)):
+        body = await body_for(request, MatchUpdate)
+        return await run_in_threadpool(update_match, account["owner_id"], job_id, body)
+
+    @router.put("/favorites", dependencies=[Depends(csrf)])
+    async def favorite(request: Request, account=Depends(account_required)):
+        body = await body_for(request, Favorite)
+        return await run_in_threadpool(save_favorite, account["owner_id"], body)
+
+    @router.delete("/favorites/{hero}/{position}", dependencies=[Depends(csrf)])
+    def delete_favorite(hero: str, position: int, account=Depends(account_required)):
+        if not re.fullmatch(HERO, hero) or position not in range(1, 6):
+            reject(400, "POOL_FIELDS", "Проверьте героя и позицию.")
+        with database() as connection:
+            connection.execute("DELETE FROM hero_pool_favorites f USING portal_dota_profiles p WHERE f.owner_id=%s AND p.owner_id=f.owner_id AND p.account_id=f.account_id AND f.hero=%s AND f.position=%s",
+                               (account["owner_id"], hero, position))
+        return {"deleted": True}
+
+    @router.post("/goals", dependencies=[Depends(csrf)], status_code=201)
+    async def goal(request: Request, account=Depends(account_required)):
+        body = await body_for(request, GoalCreate)
+        return await run_in_threadpool(create_goal, account["owner_id"], body)
+
+    @router.patch("/goals/{goal_id}", dependencies=[Depends(csrf)])
+    async def goal_status(goal_id: UUID, request: Request, account=Depends(account_required)):
+        body = await body_for(request, GoalUpdate)
+        def save():
+            try:
+                with database() as connection:
+                    row = connection.execute("""UPDATE hero_pool_goals g SET status=%s,updated_at=now()
+                        FROM portal_dota_profiles p WHERE g.id=%s AND g.owner_id=%s
+                        AND p.owner_id=g.owner_id AND p.account_id=g.account_id RETURNING g.id,g.status""",
+                        (body.status, goal_id, account["owner_id"])).fetchone()
+                    if not row:
+                        reject(404, "POOL_GOAL_NOT_FOUND", "Цель не найдена.")
+            except UniqueViolation:
+                reject(409, "POOL_GOAL_ACTIVE", "Такая цель уже активна.")
+            return {"saved": True, "goal": row}
+        return await run_in_threadpool(save)
+
+    app.include_router(router)

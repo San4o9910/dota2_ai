@@ -8,8 +8,9 @@ import json
 import os
 import re
 
+import httpx
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import budget as ai_budget
@@ -141,6 +142,100 @@ def validate_coaching(value, evidence_ids):
     return result
 
 
+def failure_category(error, code):
+    """Bounded diagnostics: never persist exception text, URLs or provider bodies."""
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):
+        return 'timeout'
+    if isinstance(error, (ConnectionError, httpx.TransportError)):
+        return 'transport'
+    status = (error.code if isinstance(error, errors.APIError) else
+              error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None)
+    if status == 429:
+        return 'rate_limited'
+    if status in (401, 403):
+        return 'authentication'
+    if type(status) is int and 500 <= status <= 599:
+        return 'provider_unavailable'
+    if type(status) is int and 400 <= status <= 499:
+        return 'provider_rejected'
+    if 'BUDGET' in code or code == 'GEMINI_USAGE_UNSUPPORTED':
+        return 'budget'
+    if code == 'REPLAY_COACH_NOT_CONFIGURED':
+        return 'configuration'
+    if code == 'REPLAY_COACH_LEASE_LOST':
+        return 'lease'
+    if code in _SAFE_FAILURES and code != 'REPLAY_COACH_UNAVAILABLE':
+        return 'validation'
+    return 'unknown'
+
+
+def carry_forward_coaching(previous, current, source_report_id=None):
+    """Reuse prior validated text only when every cited fact has one exact match.
+
+    Full event content (including type, time, details and data) must match except
+    the parser's unstable event ID. Changed or ambiguous facts stay in the
+    archived report with their original context instead of receiving guessed IDs.
+    """
+    if not isinstance(previous, dict) or not isinstance(current, dict):
+        return False
+    old_player, new_player = previous.get('player'), current.get('player')
+    old_coverage, new_coverage = previous.get('coverage'), current.get('coverage')
+    if not all(isinstance(value, dict) for value in (old_player, new_player, old_coverage, new_coverage)):
+        return False
+    match_id, account_id, digest = previous.get('match_id'), old_player.get('account_id'), old_coverage.get('source_sha256')
+    if (not isinstance(match_id, str) or not re.fullmatch(r'[1-9][0-9]{7,11}', match_id)
+            or match_id != current.get('match_id')
+            or type(account_id) is not int or not 1 <= account_id <= 4294967294
+            or type(new_player.get('account_id')) is not int or account_id != new_player['account_id']
+            or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest)
+            or digest != new_coverage.get('source_sha256')
+            or old_coverage.get('complete') is not True or new_coverage.get('complete') is not True
+            or any(old_player.get(key) != new_player.get(key) for key in ('hero', 'team'))
+            or previous.get('metrics') != current.get('metrics')):
+        return False
+    old_coaching = previous.get('coaching')
+    if not isinstance(old_coaching, dict) or old_coaching.get('status') != 'ready':
+        return False
+    try:
+        _, old_ids = prepare_evidence(previous)
+        _, new_ids = prepare_evidence(current)
+        value = {key: old_coaching[key] for key in ('summary', 'points', 'next_game')}
+        validated = validate_coaching(value, old_ids).model_dump()
+        def indexed(evidence):
+            by_id, by_fact = {}, {}
+            for event in evidence:
+                if (not isinstance(event.get('type'), str) or not event['type']
+                        or type(event.get('time')) not in (int, float)):
+                    raise ValueError('REPLAY_COACH_INPUT_INVALID')
+                fact = json.dumps({key: value for key, value in event.items() if key != 'id'},
+                                 sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+                by_id[event['id']] = fact
+                by_fact.setdefault(fact, []).append(event['id'])
+            return by_id, by_fact
+        old_by_id, old_by_fact = indexed(previous['evidence'])
+        _, new_by_fact = indexed(current['evidence'])
+        mapping = {}
+        for point in [*validated['points'], *validated['next_game']]:
+            for evidence_id in point['evidence_ids']:
+                fact = old_by_id[evidence_id]
+                matches = new_by_fact.get(fact, [])
+                if len(old_by_fact[fact]) != 1 or len(matches) != 1:
+                    return False
+                mapping[evidence_id] = matches[0]
+        for point in [*validated['points'], *validated['next_game']]:
+            point['evidence_ids'] = [mapping[value] for value in point['evidence_ids']]
+        validated = validate_coaching(validated, new_ids).model_dump()
+    except (KeyError, TypeError, ValueError):
+        return False
+    failed = current.get('coaching') or {}
+    current['coaching'] = {
+        'status': 'ready', 'model': old_coaching.get('model'), 'origin': 'previous_report',
+        'source_report_id': source_report_id, 'refresh_failure_code': failed.get('failure_code'),
+        'refresh_failure_category': failed.get('failure_category'), **validated,
+    }
+    return True
+
+
 class GeminiReplayCoach:
     def __init__(self):
         key = os.environ.get('GEMINI_API_KEY', '')
@@ -236,8 +331,13 @@ def enrich_report(job, factual_report, coach=None):
         print(json.dumps({'event': 'replay_coaching_ready', 'job_id': str(job['id']), 'call_id': call_id}), flush=True)
     except Exception as error:
         code = str(error) if isinstance(error, ValueError) and str(error) in _SAFE_FAILURES else 'REPLAY_COACH_UNAVAILABLE'
-        report['coaching'] = {'status': 'unavailable', 'failure_code': code, 'summary': '', 'points': [], 'next_game': []}
-        print(json.dumps({'event': 'replay_coaching_unavailable', 'job_id': str(job['id']), 'code': code}), flush=True)
+        category = failure_category(error, code)
+        report['coaching'] = {'status': 'unavailable', 'failure_code': code, 'failure_category': category,
+                              'summary': '', 'points': [], 'next_game': []}
+        restored = carry_forward_coaching(job.get('previous_report') or job.get('result_payload'),
+                                         report, job.get('previous_report_id'))
+        print(json.dumps({'event': 'replay_coaching_unavailable', 'job_id': str(job['id']),
+                          'code': code, 'category': category, 'previous_coaching_carried_forward': restored}), flush=True)
     finally:
         if owned_coach and coach is not None:
             try:

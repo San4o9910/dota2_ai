@@ -50,6 +50,10 @@ def ready():
             connection.execute("SELECT 1 FROM video_jobs LIMIT 1")
             connection.execute("SELECT 1 FROM replay_jobs LIMIT 1")
             connection.execute("SELECT 1 FROM hero_pool_match_notes LIMIT 1")
+            migrated = connection.execute("""SELECT count(*) AS n FROM video_schema_migrations
+                WHERE name IN ('010_hero_pool_progress.sql','008_replay_coaching_history.sql','009_hermes_reviews.sql')""").fetchone()
+            if migrated["n"] != 3:
+                raise RuntimeError("Progress schema not ready")
         with tempfile.TemporaryFile(dir=media_root()) as handle:
             handle.write(b"ready"); handle.flush()
         return {"status":"ready", "checks":["config","postgresql","schema","media"]}
@@ -222,6 +226,12 @@ from .web import attach_web
 attach_web(app)
 from .replay_jobs import attach_replays
 attach_replays(app)
+from .replay_archive import attach_replay_archive
+attach_replay_archive(app)
+from .hero_pool import attach_hero_pool
+attach_hero_pool(app)
+from .hermes_bridge import attach_hermes
+attach_hermes(app)
 
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
@@ -232,8 +242,8 @@ app.mount('/assets',StaticFiles(directory=STATIC_ROOT),name='portal-assets')
 @app.get('/setup')
 @app.get('/videos')
 @app.get('/replays')
-@app.get('/account')
 @app.get('/hero-pool')
+@app.get('/account')
 def portal_page():
     return FileResponse(STATIC_ROOT/'index.html',media_type='text/html',headers={'Cache-Control':'no-store'})
 

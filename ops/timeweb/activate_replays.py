@@ -65,9 +65,12 @@ SCHEMA_CHECK = '''import json
 from narma_video.db import database
 with database() as c:
  names={r['name'] for r in c.execute('SELECT name FROM video_schema_migrations').fetchall()}
- assert {'005_replay_analysis.sql','006_replay_shared_ai_budget.sql','007_hero_pool.sql'}<=names
- assert c.execute("SELECT to_regclass('public.replay_jobs') AS r").fetchone()['r']
- assert c.execute("SELECT to_regclass('public.replay_workers') AS r").fetchone()['r']
+ assert {'005_replay_analysis.sql','006_replay_shared_ai_budget.sql','007_hero_pool.sql',
+         '008_replay_coaching_history.sql','009_hermes_reviews.sql','010_hero_pool_progress.sql'}<=names
+ for table in ('replay_jobs','replay_workers','hero_pool_match_notes','hero_pool_matches',
+               'hero_pool_favorites','hero_pool_goals','hero_pool_goal_checks',
+               'replay_report_history','hermes_exports','hermes_reviews'):
+  assert c.execute("SELECT to_regclass(%s) AS r",('public.'+table,)).fetchone()['r']
  assert c.execute("SELECT 1 FROM pg_constraint WHERE conname='provider_call_exactly_one_job' AND conrelid='video_provider_calls'::regclass").fetchone()
  print('REPLAY_SCHEMA_OK')
 '''
@@ -76,15 +79,29 @@ POOL_CHECK = '''import json
 from narma_video.db import database
 from narma_video.hero_pool import get_pool
 with database() as c:
- owners=c.execute('SELECT owner_id FROM portal_dota_profiles').fetchall()
+ owners=c.execute('SELECT owner_id,account_id FROM portal_dota_profiles ORDER BY owner_id').fetchall()
+ calls_before=c.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']
 counts=[]
 for owner in owners:
  pool=get_pool(owner['owner_id'])
  assert pool['schema_version']=='narma.hero-pool.v1'
- assert len({m['match_id'] for m in pool['matches']})==len(pool['matches'])
- assert pool['summary']['wins']+pool['summary']['losses']+pool['summary']['unknown']==pool['summary']['matches']
- counts.append({'matches':pool['summary']['matches'],'heroes':len(pool['heroes'])})
-print(json.dumps({'verified':True,'owners':len(owners),'counts':counts}))
+ assert pool['profile']['account_id']==owner['account_id']
+ history=pool['history']
+ summary=pool['summary']
+ assert len({m['match_id'] for m in history})==len(history)==summary['matches']
+ assert all(m['outcome'] in ('win','loss',None) for m in history)
+ wins=sum(m['outcome']=='win' for m in history)
+ losses=sum(m['outcome']=='loss' for m in history)
+ assert summary['wins']==wins and summary['losses']==losses
+ assert summary['known_outcomes']==wins+losses
+ assert summary['unknown_outcomes']==len(history)-wins-losses
+ assert summary['winrate_pct']==(round(100*wins/(wins+losses),1) if wins+losses else None)
+ assert sum(hero['matches'] for hero in pool['heroes'])==len(history)
+ counts.append({'matches':len(history),'heroes':len(pool['heroes']),
+                'known_outcomes':summary['known_outcomes'],'unknown_outcomes':summary['unknown_outcomes']})
+with database() as c:
+ assert c.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']==calls_before
+print(json.dumps({'verified':True,'owners':len(owners),'counts':counts,'provider_calls_created':0}))
 '''
 
 
