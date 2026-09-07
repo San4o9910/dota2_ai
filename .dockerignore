@@ -15,3 +15,5 @@ dist
 **/target
 **/tooling
 **/private-output
+
+**/native

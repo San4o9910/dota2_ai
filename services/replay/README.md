@@ -67,3 +67,9 @@ A real 169,982,117-byte source was verified locally through the complete API upl
 Optional Gemini coaching uses the existing shared durable allowance and must cite report evidence. Provider failures leave the factual report available with coaching explicitly unavailable. This parser does not require video conversion, OpenDota, or a Steam login for an uploaded file. Arbitrary Match ID retrieval still requires a separately configured Steam Game Coordinator session; an ID alone is not a replay file.
 
 Deploy `services/replay/Dockerfile` with the `replay-worker` Compose service. The pilot stops the old video worker before starting it, preserving the VM memory budget. Logs contain job IDs and fixed failure codes, never full rosters, raw parser stderr, prompts or secrets.
+
+## Native decoder incident correction
+
+The first container deployment could import the parser but failed before reading a packet because Snappy attempted to extract executable native code into `/tmp`, which is mounted `noexec`. The owner upload was intact. Bootstrap now extracts the native ELF library from the checksum-verified Snappy JAR into the root-owned, read-only image. Both worker parsing and its startup test load that fixed library path. `/tmp` remains `noexec`.
+
+The deployment gate performs a real synthetic compression/decompression roundtrip under the same non-root UID, read-only root, noexec tmpfs, memory, CPU and process limits as production. Worker heartbeat starts only after this succeeds. Native library, resource and storage failures receive separate fixed error codes; raw parser error text is never published in logs.

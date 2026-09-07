@@ -17,6 +17,8 @@ output = args.new_output_directory.resolve()
 command = ["java", "-Xms256m", "-Xmx2g", "-Dorg.slf4j.simpleLogger.defaultLogLevel=warn", "-cp",
            str(root / "target/classes") + ":" + str(root / "target/dependency/*"),
            "vision.narma.replay.ReplayProbe", str(args.replay.resolve()), str(output / "events.jsonl")]
+command[1:1] = ["-Dorg.xerial.snappy.lib.path=" + str(root / "native"),
+                "-Dorg.xerial.snappy.lib.name=libsnappyjava.so"]
 
 def limits():
     resource.setrlimit(resource.RLIMIT_CPU, (295, 300))

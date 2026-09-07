@@ -4,3 +4,5 @@
 *.dem
 *.dem.bz2
 __pycache__/
+
+native/

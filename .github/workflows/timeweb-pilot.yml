@@ -41,7 +41,10 @@ jobs:
           docker build --tag narma-video-check services/video
           docker run --rm narma-video-check python -c "import narma_video.api, narma_video.worker, narma_video.db; print('Runtime imports passed')"
           docker build --tag narma-replay-check --file services/replay/Dockerfile .
-          docker run --rm narma-replay-check python -c "from narma_video.replay_worker import parser_home; parser_home(); print('Full replay parser installed')"
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user 10001:10001 --memory 3g --cpus 2 --pids-limit 128 \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777 \
+            narma-replay-check python -m narma_video.replay_runtime_check
       - name: Start PostgreSQL and private API in an isolated local test
         env:
           POSTGRES_PASSWORD: narma_ci_only

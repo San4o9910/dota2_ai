@@ -4,6 +4,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends openjdk-17-jre-
 WORKDIR /opt/narma/replay
 COPY services/replay/bootstrap.py services/replay/dependencies.lock.json ./
 COPY services/replay/src ./src
+# Build installs the checksum-verified native Snappy library into the read-only image.
+# /tmp can keep its noexec mount policy at runtime.
 RUN python bootstrap.py && rm -rf tooling
 WORKDIR /app
 COPY services/video/requirements.txt ./

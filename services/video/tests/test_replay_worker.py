@@ -190,6 +190,7 @@ def test_success_persists_with_exact_lease_and_preserves_other_attempt_files(rep
 
 def test_main_logs_only_safe_failure_code(replay, monkeypatch, capsys):
     directory, home, job = replay
+    monkeypatch.setattr(worker, "verify_runtime", lambda: None)
     monkeypatch.setattr(worker, "cleanup", lambda: None)
     monkeypatch.setattr(worker, "claim_replay", lambda *a: job)
     monkeypatch.setattr("sys.argv", ["replay_worker", "--once", "--job-id", str(job["id"])])

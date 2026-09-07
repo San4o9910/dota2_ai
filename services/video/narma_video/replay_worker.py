@@ -20,6 +20,7 @@ from .replay_coach import enrich_report
 WORKER_ID = 'replay'
 PARSER_TIMEOUT = 300
 OUTPUT_LIMIT = 50 * 1024**2
+PARSER_ENV = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TMPDIR': '/tmp'}
 
 
 def log(event, **fields):
@@ -34,7 +35,8 @@ def renew(job, progress):
 
 def parser_home():
     home = Path(os.environ.get('REPLAY_PARSER_HOME', '/opt/narma/replay')).resolve()
-    if not (home / 'target/classes/vision/narma/replay/ReplayProbe.class').is_file() or not shutil.which('java'):
+    if (not (home / 'target/classes/vision/narma/replay/ReplayProbe.class').is_file()
+            or not (home / 'native/libsnappyjava.so').is_file() or not shutil.which('java')):
         raise ValueError('REPLAY_PARSER_NOT_INSTALLED')
     return home
 
@@ -43,6 +45,42 @@ def parser_limits():
     resource.setrlimit(resource.RLIMIT_CPU, (295, 300))
     resource.setrlimit(resource.RLIMIT_FSIZE, (OUTPUT_LIMIT, OUTPUT_LIMIT))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+def native_arguments(home):
+    return ['-Dorg.xerial.snappy.lib.path=' + str(home / 'native'),
+        '-Dorg.xerial.snappy.lib.name=libsnappyjava.so']
+
+
+def verify_runtime():
+    """Exercise native packet decompression before advertising a healthy worker."""
+    home = parser_home()
+    args = [shutil.which('java'), '-Xms256m', '-Xmx2g', '-XX:ActiveProcessorCount=2',
+        *native_arguments(home), '-cp', str(home / 'target/classes') + ':' + str(home / 'target/dependency/*'),
+        'vision.narma.replay.ReplayNativeSmoke']
+    try:
+        result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True,
+            env=PARSER_ENV, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ValueError('REPLAY_NATIVE_UNAVAILABLE') from None
+    if result.returncode or result.stdout.strip() != b'REPLAY_NATIVE_OK':
+        raise ValueError('REPLAY_NATIVE_UNAVAILABLE')
+
+
+def parser_failure(log_path, returncode):
+    # Only fixed categories are logged. Raw stderr can contain source paths or
+    # user-controlled replay data, so it never leaves the private output folder.
+    with log_path.open('rb') as stream:
+        private = stream.read(256 * 1024).decode(errors='replace').lower()
+    if any(value in private for value in ('unsatisfiedlinkerror', 'failed to map segment', 'no native library')):
+        return 'REPLAY_NATIVE_UNAVAILABLE'
+    if 'outofmemoryerror' in private or returncode == -9:
+        return 'REPLAY_RESOURCE_LIMIT'
+    if 'no space left' in private:
+        return 'REPLAY_STORAGE_FULL'
+    if 'permission denied' in private or 'read-only file system' in private:
+        return 'REPLAY_STORAGE_ACCESS'
+    return 'REPLAY_PARSE_FAILED'
 
 
 def stop_parser(process):
@@ -64,16 +102,16 @@ def parse(job, output):
             raise ValueError('REPLAY_SOURCE_CHANGED')
     renew(job, 5)
     command = [shutil.which('java'), '-Xms256m', '-Xmx2g', '-XX:ActiveProcessorCount=2',
+        *native_arguments(home),
         '-Dorg.slf4j.simpleLogger.defaultLogLevel=warn', '-cp',
         str(home / 'target/classes') + ':' + str(home / 'target/dependency/*'),
         'vision.narma.replay.ReplayProbe', str(source), str(output / 'events.jsonl')]
     # The parser is an offline child. In particular it never inherits the API key,
     # database credentials, cookies, or JVM option injection variables.
-    environment = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TMPDIR': '/tmp'}
     start = time.monotonic()
     with (output / 'summary.json').open('xb') as stdout, (output / 'parser.log').open('xb') as stderr:
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-            env=environment, cwd=output, start_new_session=True, preexec_fn=parser_limits)
+            env=PARSER_ENV, cwd=output, start_new_session=True, preexec_fn=parser_limits)
         try:
             while process.poll() is None:
                 elapsed = time.monotonic() - start
@@ -85,7 +123,9 @@ def parse(job, output):
                 except subprocess.TimeoutExpired:
                     pass
             if process.returncode != 0:
-                raise ValueError('REPLAY_PARSE_FAILED')
+                code = parser_failure(output / 'parser.log', process.returncode)
+                log('replay_parser_failed', job_id=str(job['id']), code=code, exit_code=process.returncode)
+                raise ValueError(code)
         finally:
             stop_parser(process)
     renew(job, 75)
@@ -135,7 +175,7 @@ def main():
     args = parser.parse_args()
     if args.job_id and not args.once:
         parser.error('--job-id requires --once')
-    parser_home()  # No healthy heartbeat for a worker missing the actual parser.
+    verify_runtime()  # Includes actual decompression under runtime restrictions.
     while True:
         cleanup()
         job = claim_replay(WORKER_ID, args.job_id)
@@ -145,7 +185,8 @@ def main():
                 run_job(job)
             except Exception as error:
                 allowed = {'REPLAY_SOURCE_CHANGED', 'REPLAY_LEASE_LOST', 'REPLAY_PARSE_TIMEOUT',
-                    'REPLAY_PARSE_FAILED', 'REPLAY_PARSER_NOT_INSTALLED'}
+                    'REPLAY_PARSE_FAILED', 'REPLAY_PARSER_NOT_INSTALLED', 'REPLAY_NATIVE_UNAVAILABLE',
+                    'REPLAY_RESOURCE_LIMIT', 'REPLAY_STORAGE_FULL', 'REPLAY_STORAGE_ACCESS'}
                 code = str(error) if isinstance(error, ReportError) or (isinstance(error, ValueError) and str(error) in allowed) else 'REPLAY_PARSE_FAILED'
                 fail_replay(job['id'], job['lease_token'], code)
                 log('replay_failed', job_id=str(job['id']), code=code)

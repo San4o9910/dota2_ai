@@ -347,7 +347,7 @@ runcmd:
                     for path in directory.rglob("*"):
                         if not path.is_file() or path.is_symlink():
                             continue
-                        if any(p in {"__pycache__", ".venv", "private-output", "target", "tooling"} for p in path.parts):
+                        if any(p in {"__pycache__", ".venv", "private-output", "target", "tooling", "native"} for p in path.parts):
                             continue
                         if path.name.startswith(".env") or path.suffix in {".key",".pem",".dem",".mp4",".mkv"}:
                             continue

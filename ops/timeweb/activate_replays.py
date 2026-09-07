@@ -55,8 +55,8 @@ for item in json.loads((root/'dependencies.lock.json').read_text()):
  assert p.stat().st_size==item['bytes'] and hashlib.sha256(p.read_bytes()).hexdigest()==item['sha256']
 v=subprocess.run(['java','-version'],capture_output=True,timeout=10)
 assert v.returncode==0 and 'version "17.' in (v.stdout+v.stderr).decode()
-r=subprocess.run(['java','-Xmx128m','-cp',str(root/'target/classes')+':'+str(root/'target/dependency/*'),'vision.narma.replay.ReplayProbe'],capture_output=True,timeout=10)
-assert r.returncode!=0 and b'Usage: ReplayProbe replay.dem new-events.jsonl' in r.stderr
+from narma_video.replay_runtime_check import check_runtime
+check_runtime()
 print('REPLAY_RUNTIME_OK')
 '''
 
