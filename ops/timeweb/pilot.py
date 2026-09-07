@@ -26,6 +26,9 @@ NAME = "narma-vision-pilot-01"
 MARKER = "NARMA managed pilot San4o9910/dota2_ai 2026-09-06"
 PRESET = 6813
 MAX_VM_MONTH_EQUIVALENT = 2760
+# A deployed owner's server is an explicit target, never a name-search fallback.
+# Provisioning remains available only after an intentional source change to None.
+PINNED_TARGET = {"server_id": 9037783, "project_id": 2655641, "ipv4": "72.56.98.68"}
 
 
 def event(name, **values):
@@ -189,6 +192,49 @@ def address(server):
                     return str(ip)
     return None
 
+
+def validate_pinned_server(server):
+    target = PINNED_TARGET
+    if target is None:
+        raise CheckError("pilot_target_not_pinned")
+    if (not isinstance(server, dict) or server.get("id") != target["server_id"]
+            or server.get("project_id") != target["project_id"]
+            or server.get("name") != NAME or server.get("comment") != MARKER
+            or server.get("preset_id") != PRESET):
+        raise CheckError("pinned_server_identity_mismatch")
+    if address(server) != target["ipv4"]:
+        raise CheckError("pinned_server_address_mismatch")
+    return server
+
+
+def pinned_existing_server(cloud):
+    if PINNED_TARGET is None:
+        raise CheckError("pilot_target_not_pinned")
+    result = cloud.call("GET", "/api/v1/servers/" + str(PINNED_TARGET["server_id"]))
+    if not isinstance(result, dict):
+        raise CheckError("pinned_server_identity_mismatch")
+    # HTTP 404/500 and mismatched identity propagate. Never create a replacement.
+    return validate_pinned_server(result.get("server"))
+
+
+def approved_preset(cloud):
+    preset = next((p for p in cloud.list("/api/v1/presets/servers", "server_presets")
+                   if p.get("id") == PRESET), None)
+    if not preset or preset.get("location") != "nl-1" or preset.get("cpu") != 4 or preset.get("ram") != 8192:
+        raise CheckError("pilot_preset_changed")
+    price = preset.get("price")
+    if type(price) not in (int, float) or not 0 < price <= MAX_VM_MONTH_EQUIVALENT:
+        raise CheckError("pilot_price_exceeds_authorized_target")
+    return preset
+
+
+def target_preflight():
+    cloud = Cloud()
+    server = pinned_existing_server(cloud)
+    approved_preset(cloud)
+    event("pilot_target_preflight_passed", server_id=server["id"],
+        target_identity_verified=True, preset_and_budget_verified=True, read_only=True)
+
 def ensure_https(ssh,release,hostname,host):
     if {x[4][0] for x in socket.getaddrinfo(hostname,80,type=socket.SOCK_STREAM)}!={host}:
         raise CheckError('https_public_dns_mismatch')
@@ -286,21 +332,20 @@ def main():
         raise CheckError("missing_gemini_secret")
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise CheckError("invalid_release")
-    preset = next((p for p in cloud.list("/api/v1/presets/servers", "server_presets")
-                   if p.get("id") == PRESET), None)
-    if not preset or preset.get("location") != "nl-1" or preset.get("cpu") != 4 or preset.get("ram") != 8192:
-        raise CheckError("pilot_preset_changed")
+    preset = approved_preset(cloud)
     price = preset.get("price")
-    if type(price) not in (int, float) or not 0 < price <= MAX_VM_MONTH_EQUIVALENT:
-        raise CheckError("pilot_price_exceeds_authorized_target")
-    project = selected_project(cloud)
-    servers = cloud.list("/api/v1/servers?limit=100", "servers")
-    candidates = [s for s in servers if s.get("name") == NAME]
-    if len(candidates) > 1 or (candidates and (candidates[0].get("comment") != MARKER
-                                              or candidates[0].get("project_id") != project)):
-        raise CheckError("existing_server_ownership_mismatch")
-    if len(servers) >= 100:
-        raise CheckError("server_inventory_needs_pagination")
+    if PINNED_TARGET is not None:
+        server = pinned_existing_server(cloud)
+        project, candidates = server["project_id"], [server]
+    else:
+        project = selected_project(cloud)
+        servers = cloud.list("/api/v1/servers?limit=100", "servers")
+        candidates = [s for s in servers if s.get("name") == NAME]
+        if len(candidates) > 1 or (candidates and (candidates[0].get("comment") != MARKER
+                                                  or candidates[0].get("project_id") != project)):
+            raise CheckError("existing_server_ownership_mismatch")
+        if len(servers) >= 100:
+            raise CheckError("server_inventory_needs_pagination")
     event("pilot_plan", preset_id=PRESET, cpu=4, ram_mb=8192, disk_mb=preset.get("disk"),
           vm_month_equivalent_rub=price, ipv4_month_estimate_rub=200,
           server_and_ip_day_estimate_rub=round((price+200)/30, 2),
@@ -360,6 +405,8 @@ runcmd:
             ip_checked = False
             for attempt in range(50):
                 server = cloud.call("GET", f"/api/v1/servers/{server_id}")["server"]
+                if PINNED_TARGET is not None:
+                    validate_pinned_server(server)
                 host = address(server)
                 if host:
                     break
@@ -481,7 +528,12 @@ runcmd:
 
 if __name__ == "__main__":
     try:
-        main()
+        if sys.argv[1:] == ["--preflight"]:
+            target_preflight()
+        elif not sys.argv[1:]:
+            main()
+        else:
+            raise CheckError("invalid_pilot_arguments")
     except CheckError as error:
         event("pilot_failed", code=str(error))
         sys.exit(1)

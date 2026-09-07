@@ -87,6 +87,7 @@ class CloudReadsTest(unittest.TestCase):
                     raise AssertionError("Unexpected API read")
                 cloud = SimpleNamespace(list=listing, call=Mock())
                 with patch.object(pilot, "Cloud", return_value=cloud), \
+                        patch.object(pilot, "PINNED_TARGET", None), \
                         patch.object(pilot, "selected_project", return_value=2655641), \
                         patch.object(pilot, "event"), \
                         patch.dict(pilot.os.environ, {"GEMINI_API_KEY": "synthetic_key_long_enough", "GITHUB_SHA": "a" * 40}), \

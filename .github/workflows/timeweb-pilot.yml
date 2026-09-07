@@ -35,6 +35,10 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python3 ops/timeweb/gemini_preflight.py
+      - name: Verify pinned existing server before building
+        env:
+          TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+        run: python3 ops/timeweb/pilot.py --preflight
       - name: Verify interactive report on mobile and desktop without provider calls
         env:
           PLAYWRIGHT_NODE_MODULES: ${{ runner.temp }}/narma-portal-qa/node_modules
