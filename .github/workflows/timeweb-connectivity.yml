@@ -1,0 +1,39 @@
+name: Timeweb existing server connectivity
+on:
+  push:
+    branches: [codex/replay-map-hardening-8ea829a]
+    paths: [.github/workflows/timeweb-connectivity.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read:
+    if: github.repository == 'San4o9910/dota2_ai' && github.ref == 'refs/heads/codex/replay-map-hardening-8ea829a'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Read and verify the existing server without mutations
+        env:
+          TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'ops/timeweb')
+          from pilot import Cloud, CheckError, NAME, MARKER, PRESET, address, event
+          try:
+              server = Cloud().call('GET', '/api/v1/servers/9037783')['server']
+              if not (server.get('id') == 9037783 and server.get('project_id') == 2655641
+                      and server.get('name') == NAME and server.get('comment') == MARKER
+                      and server.get('preset_id') == PRESET and address(server) == '72.56.98.68'):
+                  raise CheckError('existing_server_identity_mismatch')
+              event('existing_server_direct_read_passed', server_id=9037783, identity_verified=True)
+          except CheckError as error:
+              event('existing_server_direct_read_failed', code=str(error))
+              raise SystemExit(1)
+          except Exception:
+              event('existing_server_direct_read_failed', code='response_schema_invalid')
+              raise SystemExit(1)
+          PY
