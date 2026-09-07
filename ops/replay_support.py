@@ -1,0 +1,128 @@
+"""Inspect an existing pilot through ephemeral SSH; never provisions resources.
+
+Only safe operational categories leave the host. Raw parser output stays in its
+owner's private directory. Inspection does not change job state or call Gemini.
+"""
+import json
+from pathlib import Path
+import re
+import sys
+import tempfile
+import time
+
+sys.path.insert(0, str(Path(__file__).parent / 'timeweb'))
+from pilot import Cloud, CheckError, MARKER, NAME, PRESET, address, command, event
+
+SERVER = 9037783
+PROJECT = 2655641
+
+PROBE = r'''
+import hashlib,json,os,pathlib,re,resource,shutil,subprocess,time
+from narma_video.db import database
+from narma_video.replay_jobs import replay_directory
+with database() as c:
+ rows=c.execute("SELECT id,state,progress,failure_code,attempt,size_bytes,source_sha256,created_at::text FROM replay_jobs WHERE state<>'deleted' ORDER BY created_at DESC LIMIT 8").fetchall()
+ active=c.execute("SELECT count(*) AS n FROM replay_jobs WHERE state='processing' AND lease_expires_at>now()").fetchone()['n']
+print(json.dumps({'event':'replay_jobs_state','jobs':[{k:r[k] if k!='id' else str(r[k]) for k in ('id','state','progress','failure_code','attempt','size_bytes','created_at')} for r in rows]}),flush=True)
+print(json.dumps({'event':'replay_environment','tmp_mounts':[x.split()[3] for x in pathlib.Path('/proc/mounts').read_text().splitlines() if x.split()[1]=='/tmp'],'tmp_free_bytes':shutil.disk_usage('/tmp').free}),flush=True)
+job=next((r for r in rows if r['state']=='failed'),None)
+if active or not job:
+ print(json.dumps({'event':'replay_probe_skipped','active_jobs':active,'failed_job_found':bool(job)}),flush=True)
+ raise SystemExit(0)
+source=replay_directory(job['id'])/'source.dem'
+if not source.is_file():
+ print(json.dumps({'event':'replay_source_missing','job_id':str(job['id'])}),flush=True);raise SystemExit(0)
+with source.open('rb') as stream:valid=source.stat().st_size==job['size_bytes'] and hashlib.file_digest(stream,'sha256').hexdigest()==job['source_sha256']
+print(json.dumps({'event':'replay_source_integrity','job_id':str(job['id']),'matches_uploaded_source':valid}),flush=True)
+if not valid:raise SystemExit(1)
+os.umask(0o077)
+output=pathlib.Path(tempfile.mkdtemp(prefix='diagnostic-',dir=source.parent))
+def limits():
+ resource.setrlimit(resource.RLIMIT_CPU,(295,300));resource.setrlimit(resource.RLIMIT_FSIZE,(50*1024**2,50*1024**2));resource.setrlimit(resource.RLIMIT_CORE,(0,0))
+start=time.monotonic()
+args=['java','-Xms256m','-Xmx2g','-XX:ActiveProcessorCount=2','-Dorg.slf4j.simpleLogger.defaultLogLevel=warn','-cp','/opt/narma/replay/target/classes:/opt/narma/replay/target/dependency/*','vision.narma.replay.ReplayProbe',str(source),str(output/'events.jsonl')]
+with (output/'summary.json').open('wb') as out,(output/'parser.log').open('wb') as err:
+ try:code=subprocess.run(args,stdout=out,stderr=err,stdin=subprocess.DEVNULL,env={'PATH':'/usr/local/bin:/usr/bin:/bin','LANG':'C.UTF-8','TMPDIR':'/tmp'},preexec_fn=limits,timeout=310).returncode
+ except subprocess.TimeoutExpired:code=124
+with (output/'parser.log').open('rb') as stream:private=stream.read(512*1024).decode(errors='replace')
+patterns={'native_library_load':['unsatisfiedlinkerror','failed to map segment','no native library','snappyerror'],'noexec':['failed to map segment','operation not permitted'],'heap_limit':['outofmemoryerror','java heap space'],'disk_full':['no space left'],'read_only':['read-only file system'],'permission':['permission denied','accessdeniedexception'],'packet_invalid':['invalidprotocolbufferexception','invalidwiretypeexception'],'missing_class':['classnotfoundexception','noclassdeffounderror'],'unsupported_property':['fieldpath','unknown property']}
+classes=sorted(set(re.findall(r'\b((?:java|org|com|skadistats)\.[A-Za-z0-9_.$]+(?:Exception|Error))\b',private)))[:15]
+print(json.dumps({'event':'replay_parser_probe','job_id':str(job['id']),'exit_code':code,'seconds':round(time.monotonic()-start,2),'categories':[k for k,patterns_ in patterns.items() if any(p in private.lower() for p in patterns_)],'exception_classes':classes,'output_bytes':(output/'events.jsonl').stat().st_size if (output/'events.jsonl').exists() else 0}),flush=True)
+if code==0:
+ from narma_video.replay_report import build_report
+ with database() as c:full=c.execute('SELECT * FROM replay_jobs WHERE id=%s',(job['id'],)).fetchone()
+ try:
+  report=build_report(output/'events.jsonl',output/'summary.json',full)
+  print(json.dumps({'event':'replay_report_probe','complete':report['coverage']['complete'],'final_tick':report['coverage']['final_tick'],'evidence_count':len(report['evidence'])}),flush=True)
+ except Exception as error:
+  code_=str(error) if isinstance(error,ValueError) and re.fullmatch('REPLAY_[A-Z_]{1,70}',str(error)) else 'REPLAY_REPORT_FAILURE'
+  print(json.dumps({'event':'replay_report_probe','code':code_}),flush=True)
+# Keep only bounded private stderr for incident evidence, not the roster/events.
+for filename in ('events.jsonl','summary.json'):(output/filename).unlink(missing_ok=True)
+'''.replace('import hashlib,json,os,pathlib,re,resource,shutil,subprocess,time', 'import hashlib,json,os,pathlib,re,resource,shutil,subprocess,tempfile,time')
+
+REMOTE = r'''
+import json,pathlib,re,subprocess,sys
+payload=json.loads(sys.stdin.read())
+release=pathlib.Path('/opt/narma/current').resolve()
+if release.name!=payload['expected_release'] or not re.fullmatch('[0-9a-f]{40}',release.name):raise SystemExit('SUPPORT_RELEASE_MISMATCH')
+compose=['docker','compose','--project-name','narma-video','--env-file','/opt/narma/secrets/video.env','--file',str(release/'services/video/compose.yaml')]
+ids=subprocess.run(compose+['--profile','analysis','ps','--quiet','replay-worker'],capture_output=True,check=True).stdout.splitlines()
+if len(ids)!=1:raise SystemExit('SUPPORT_WORKER_NOT_RUNNING')
+template='{"running":{{json .State.Running}},"oom_killed":{{json .State.OOMKilled}},"exit_code":{{json .State.ExitCode}},"restart_count":{{json .RestartCount}}}'
+status=json.loads(subprocess.run(['docker','inspect','--format',template,ids[0].decode()],capture_output=True,check=True).stdout)
+print(json.dumps({'event':'replay_container_state',**status}),flush=True)
+result=subprocess.run(compose+['exec','-T','replay-worker','python','-c',payload['probe']],capture_output=True,timeout=370)
+for line in result.stdout.splitlines():
+ try:item=json.loads(line)
+ except ValueError:continue
+ if item.get('event') in ('replay_jobs_state','replay_environment','replay_probe_skipped','replay_source_missing','replay_source_integrity','replay_parser_probe','replay_report_probe'):print(json.dumps(item),flush=True)
+if result.returncode:raise SystemExit('SUPPORT_PROBE_FAILED')
+'''
+
+
+def main():
+    request = json.loads((Path(__file__).parent/'replay-support-request.json').read_text())
+    if request.get('action') != 'inspect' or not re.fullmatch('[0-9a-f]{40}',request.get('expected_release','')):
+        raise CheckError('support_request_invalid')
+    cloud = Cloud()
+    server = cloud.call('GET', f'/api/v1/servers/{SERVER}')['server']
+    if server.get('project_id') != PROJECT or server.get('comment') != MARKER or server.get('name') != NAME or server.get('preset_id') != PRESET:
+        raise CheckError('support_server_identity_mismatch')
+    host = address(server)
+    if host != '72.56.98.68':
+        raise CheckError('support_server_address_mismatch')
+    ssh_id = None
+    with tempfile.TemporaryDirectory(prefix='narma-support-') as folder:
+        folder = Path(folder); private = folder/'key'
+        command(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(private)])
+        try:
+            key = cloud.call('POST','/api/v1/ssh-keys',{'name':'narma-replay-support','body':private.with_suffix('.pub').read_text().strip(),'is_default':False})
+            ssh_id = int(key['ssh_key']['id'])
+            cloud.call('POST',f'/api/v1/servers/{SERVER}/ssh-keys',{'ssh_key_ids':[ssh_id]})
+            ssh=['ssh','-i',str(private),'-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=accept-new','-o','UserKnownHostsFile='+str(folder/'known_hosts'),'-o','ConnectTimeout=8','-o','ServerAliveInterval=15','root@'+host]
+            for attempt in range(12):
+                try:command(ssh+['true'],timeout=15);break
+                except CheckError:
+                    if attempt==11:raise
+                    time.sleep(5)
+            # The remote script is source code from this reviewed checkout. JSON
+            # travels on stdin; no secret, replay, or prompt enters command text.
+            import shlex
+            body=json.dumps({'expected_release':request['expected_release'],'probe':PROBE}).encode()
+            output=command(ssh+['python3 -c '+shlex.quote(REMOTE)],input=body,timeout=390)
+            for line in output.splitlines():
+                item=json.loads(line)
+                if item.get('event','').startswith('replay_'):print(json.dumps(item),flush=True)
+        finally:
+            if ssh_id is not None:
+                try:cloud.call('DELETE',f'/api/v1/servers/{SERVER}/ssh-keys/{ssh_id}')
+                except CheckError:event('support_key_binding_cleanup_unconfirmed')
+                try:cloud.call('DELETE',f'/api/v1/ssh-keys/{ssh_id}')
+                except CheckError:event('support_key_cleanup_unconfirmed')
+
+
+if __name__=='__main__':
+    try:main()
+    except Exception:
+        event('support_failed',code='support_inspection_failed');raise SystemExit(1)
