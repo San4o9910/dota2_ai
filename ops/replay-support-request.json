@@ -1,6 +1,6 @@
 {
   "action": "refresh",
-  "expected_release": "6b5797d929bed9ca57e915bc8a4b9347056d8eb5",
+  "expected_release": "2601a5fca0e42abb970047ae4970b540c4ee14c6",
   "job_id": "354d95b9-2bb7-4700-923d-796566a7cc01",
   "source_sha256": "db9df23273bdac450a027ff11992428e6610403de78301c86e9adbe26320e0bc",
   "expected_attempt": 2,
