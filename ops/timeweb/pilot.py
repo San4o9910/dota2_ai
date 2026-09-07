@@ -231,9 +231,9 @@ def approved_preset(cloud):
 def target_preflight():
     cloud = Cloud()
     server = pinned_existing_server(cloud)
-    approved_preset(cloud)
     event("pilot_target_preflight_passed", server_id=server["id"],
-        target_identity_verified=True, preset_and_budget_verified=True, read_only=True)
+        target_identity_verified=True, approved_preset_id_verified=True,
+        infrastructure_change_requested=False, read_only=True)
 
 def ensure_https(ssh,release,hostname,host):
     if {x[4][0] for x in socket.getaddrinfo(hostname,80,type=socket.SOCK_STREAM)}!={host}:
@@ -332,12 +332,15 @@ def main():
         raise CheckError("missing_gemini_secret")
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise CheckError("invalid_release")
-    preset = approved_preset(cloud)
-    price = preset.get("price")
     if PINNED_TARGET is not None:
         server = pinned_existing_server(cloud)
         project, candidates = server["project_id"], [server]
+        event("pilot_plan", action="update_existing_server", server_id=server["id"],
+            preset_id=PRESET, existing=True, infrastructure_change_requested=False,
+            budget_change_requested=False)
     else:
+        preset = approved_preset(cloud)
+        price = preset.get("price")
         project = selected_project(cloud)
         servers = cloud.list("/api/v1/servers?limit=100", "servers")
         candidates = [s for s in servers if s.get("name") == NAME]
@@ -346,10 +349,10 @@ def main():
             raise CheckError("existing_server_ownership_mismatch")
         if len(servers) >= 100:
             raise CheckError("server_inventory_needs_pagination")
-    event("pilot_plan", preset_id=PRESET, cpu=4, ram_mb=8192, disk_mb=preset.get("disk"),
-          vm_month_equivalent_rub=price, ipv4_month_estimate_rub=200,
-          server_and_ip_day_estimate_rub=round((price+200)/30, 2),
-          billing="hourly_balance_no_period_purchase", existing=bool(candidates))
+        event("pilot_plan", preset_id=PRESET, cpu=4, ram_mb=8192, disk_mb=preset.get("disk"),
+              vm_month_equivalent_rub=price, ipv4_month_estimate_rub=200,
+              server_and_ip_day_estimate_rub=round((price+200)/30, 2),
+              billing="hourly_balance_no_period_purchase", existing=bool(candidates))
     server_id = int(candidates[0]["id"]) if candidates else None
     if server_id is not None and candidates[0].get("preset_id") != PRESET:
         raise CheckError("existing_server_configuration_unverified")
@@ -401,21 +404,24 @@ runcmd:
             else:
                 cloud.call("POST", f"/api/v1/servers/{server_id}/ssh-keys", {"ssh_key_ids":[ssh_id]})
                 event("server_reused", server_id=server_id)
-            host = None
-            ip_checked = False
-            for attempt in range(50):
-                server = cloud.call("GET", f"/api/v1/servers/{server_id}")["server"]
-                if PINNED_TARGET is not None:
-                    validate_pinned_server(server)
+            if PINNED_TARGET is not None:
+                # This exact server/IP was freshly validated before preparing the
+                # deployment. Binding an SSH key does not allocate or move its IP.
                 host = address(server)
-                if host:
-                    break
-                if server.get("status") == "on" and not ip_checked:
-                    ensure_public_ip(cloud, server)
-                    ip_checked = True
-                if attempt % 6 == 0:
-                    event("waiting_for_public_ip", server_id=server_id)
-                time.sleep(10)
+            else:
+                host = None
+                ip_checked = False
+                for attempt in range(50):
+                    server = cloud.call("GET", f"/api/v1/servers/{server_id}")["server"]
+                    host = address(server)
+                    if host:
+                        break
+                    if server.get("status") == "on" and not ip_checked:
+                        ensure_public_ip(cloud, server)
+                        ip_checked = True
+                    if attempt % 6 == 0:
+                        event("waiting_for_public_ip", server_id=server_id)
+                    time.sleep(10)
             if not host:
                 raise CheckError("server_has_no_public_ipv4")
             # First-connection trust is explicit. The ephemeral known_hosts file
@@ -435,11 +441,14 @@ runcmd:
                         event("waiting_for_ssh", server_id=server_id)
                     time.sleep(10)
             event("ssh_ready", server_id=server_id)
-            domains = cloud.call("GET", "/api/v1/domains?limit=100")
-            event("technical_domain_inventory", domains=[{"fqdn":d.get("fqdn"),"linked_ip":d.get("linked_ip")}
-                for d in domains.get("domains",[]) if d.get("is_technical") is True and d.get("linked_ip")==host])
-            technical=[d.get('fqdn') for d in domains.get('domains',[]) if d.get('is_technical') is True and d.get('linked_ip')==host]
-            hostname=technical[0] if len(technical)==1 else 'narma-'+host.replace('.','-')+'.sslip.io'
+            if PINNED_TARGET is not None:
+                hostname = "narma-72-56-98-68.sslip.io"
+            else:
+                domains = cloud.call("GET", "/api/v1/domains?limit=100")
+                event("technical_domain_inventory", domains=[{"fqdn":d.get("fqdn"),"linked_ip":d.get("linked_ip")}
+                    for d in domains.get("domains",[]) if d.get("is_technical") is True and d.get("linked_ip")==host])
+                technical=[d.get('fqdn') for d in domains.get('domains',[]) if d.get('is_technical') is True and d.get('linked_ip')==host]
+                hostname=technical[0] if len(technical)==1 else 'narma-'+host.replace('.','-')+'.sslip.io'
             release = "/opt/narma/releases/" + sha
             command(ssh+["mkdir -p " + release], timeout=30, phase="release_directory")
             archive = temporary/"source.tar.gz"
