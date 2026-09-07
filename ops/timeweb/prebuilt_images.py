@@ -12,12 +12,15 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 MAX_ARCHIVE_BYTES = 4 * 1024**3
+MAX_METADATA_BYTES = 16 * 1024**2
+CONFIG_PATH = re.compile(r"(?:blobs/sha256/)?([0-9a-f]{64})(?:\.json)?")
 SOURCES = {
     "narma-video-check": ("narma-video-api", "narma-video-migrate", "narma-video-worker"),
     "narma-replay-check": ("narma-video-replay-worker",),
@@ -66,7 +69,7 @@ def validate_manifest(value, release):
     if not isinstance(value, dict) or set(value) != {
             "schema", "release", "source_tree", "images", "archive_sha256", "archive_bytes"}:
         raise ImageError("prebuilt_manifest_invalid")
-    if (value["schema"] != 1 or value["release"] != release
+    if (value["schema"] != 2 or value["release"] != release
             or not SHA.fullmatch(value.get("source_tree", ""))
             or not DIGEST.fullmatch(value.get("archive_sha256", ""))
             or type(value["archive_bytes"]) is not int
@@ -74,16 +77,105 @@ def validate_manifest(value, release):
             or not isinstance(value["images"], dict) or set(value["images"]) != set(TAGS)):
         raise ImageError("prebuilt_manifest_invalid")
     for info in value["images"].values():
-        if (not isinstance(info, dict) or set(info) != {"id", "os", "architecture"}
+        if (not isinstance(info, dict) or set(info) != {
+                    "id", "os", "architecture", "config_digest", "rootfs_diff_ids"}
                 or not IMAGE_ID.fullmatch(info.get("id", ""))
+                or not IMAGE_ID.fullmatch(info.get("config_digest", ""))
+                or not isinstance(info.get("rootfs_diff_ids"), list)
+                or not 0 < len(info["rootfs_diff_ids"]) <= 256
+                or any(not isinstance(item, str) or not IMAGE_ID.fullmatch(item)
+                       for item in info["rootfs_diff_ids"])
                 or info["os"] != "linux" or info["architecture"] != "amd64"):
             raise ImageError("prebuilt_manifest_invalid")
-    if len({value["images"][tag]["id"] for tag in SOURCES["narma-video-check"]}) != 1:
+    if any(value["images"][tag] != value["images"]["narma-video-api"]
+           for tag in SOURCES["narma-video-check"]):
         raise ImageError("prebuilt_manifest_invalid")
     return value
 
 
-def save_archive(path):
+def archive_image_contents(path):
+    """Read canonical config hashes from docker-save metadata without extracting.
+
+    Docker's classic store reports a config digest as .Id; its containerd store
+    can report a manifest/index digest instead. The exact immutable config bytes
+    (which include ordered layer DiffIDs) survive export/load across both stores.
+    Only small metadata members are retained; image layers stay in the stream.
+    """
+    metadata = {}; total = 0; members = 0
+    try:
+        with tarfile.open(path, mode="r|gz") as archive:
+            for member in archive:
+                members += 1
+                if members > 4096:
+                    raise ImageError("prebuilt_archive_metadata_invalid")
+                if member.name != "manifest.json" and not CONFIG_PATH.fullmatch(member.name):
+                    continue
+                if member.size > 1024**2:
+                    if member.name == "manifest.json":
+                        raise ImageError("prebuilt_archive_metadata_invalid")
+                    continue  # Large content-addressed blobs are image layers.
+                if not member.isfile() or member.name in metadata:
+                    raise ImageError("prebuilt_archive_metadata_invalid")
+                total += member.size
+                if total > MAX_METADATA_BYTES:
+                    raise ImageError("prebuilt_archive_metadata_invalid")
+                stream = archive.extractfile(member)
+                data = stream.read(1024**2 + 1)
+                if len(data) != member.size:
+                    raise ImageError("prebuilt_archive_metadata_invalid")
+                metadata[member.name] = data
+        entries = json.loads(metadata["manifest.json"])
+        if not isinstance(entries, list) or not 0 < len(entries) <= 64:
+            raise ImageError("prebuilt_archive_metadata_invalid")
+        result = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ImageError("prebuilt_archive_metadata_invalid")
+            tags = entry.get("RepoTags")
+            if tags is None or tags == []:
+                continue  # Untagged attestations cannot select an application image.
+            if not isinstance(tags, list) or not 0 < len(tags) <= len(TAGS):
+                raise ImageError("prebuilt_archive_metadata_invalid")
+            config_path = entry.get("Config")
+            if not isinstance(config_path, str) or not CONFIG_PATH.fullmatch(config_path):
+                raise ImageError("prebuilt_archive_metadata_invalid")
+            config_data = metadata[config_path]
+            digest = hashlib.sha256(config_data).hexdigest()
+            if CONFIG_PATH.fullmatch(config_path).group(1) != digest:
+                raise ImageError("prebuilt_archive_config_integrity")
+            config = json.loads(config_data)
+            rootfs = config.get("rootfs", {}) if isinstance(config, dict) else {}
+            if not isinstance(rootfs, dict):
+                raise ImageError("prebuilt_archive_platform_invalid")
+            layers = rootfs.get("diff_ids")
+            if (not isinstance(config, dict) or config.get("os") != "linux"
+                    or config.get("architecture") != "amd64" or rootfs.get("type") != "layers"
+                    or not isinstance(layers, list) or not 0 < len(layers) <= 256
+                    or any(not isinstance(item, str) or not IMAGE_ID.fullmatch(item) for item in layers)):
+                raise ImageError("prebuilt_archive_platform_invalid")
+            for tag in tags:
+                if not isinstance(tag, str):
+                    raise ImageError("prebuilt_archive_tags_invalid")
+                # Docker stores may export familiar or fully qualified names.
+                # Only Docker Hub's canonical spelling of these exact tags is
+                # equivalent; another registry or namespace is never accepted.
+                familiar = tag.removeprefix("docker.io/library/")
+                if familiar not in {item + ":latest" for item in TAGS}:
+                    raise ImageError("prebuilt_archive_tags_invalid")
+                alias = familiar.removesuffix(":latest")
+                if alias in result:
+                    raise ImageError("prebuilt_archive_tags_invalid")
+                result[alias] = {"config_digest": "sha256:" + digest,
+                    "os": config["os"], "architecture": config["architecture"],
+                    "rootfs_diff_ids": layers}
+        if set(result) != set(TAGS):
+            raise ImageError("prebuilt_archive_tags_invalid")
+        return result
+    except (OSError, tarfile.TarError, ValueError, KeyError, TypeError):
+        raise ImageError("prebuilt_archive_metadata_invalid") from None
+
+
+def save_archive(path, *, export_timeout=600):
     """Pipe docker save through gzip into a mode-0600 file with bounded waits."""
     producer = compressor = None
     try:
@@ -94,7 +186,7 @@ def save_archive(path):
             compressor = subprocess.Popen(["gzip", "-1"], stdin=producer.stdout,
                 stdout=destination, stderr=errors)
             producer.stdout.close()
-            if producer.wait(timeout=600) or compressor.wait(timeout=120):
+            if producer.wait(timeout=export_timeout) or compressor.wait(timeout=120):
                 raise ImageError("prebuilt_export_failed")
             destination.flush(); os.fsync(destination.fileno())
         if not 0 < Path(path).stat().st_size <= MAX_ARCHIVE_BYTES:
@@ -130,7 +222,9 @@ def prepare_bundle(release, directory):
     save_archive(archive)
     if any(image_info(tag) != info for tag, info in images.items()):
         raise ImageError("prebuilt_export_image_changed")
-    value = validate_manifest({"schema": 1, "release": release, "source_tree": tree,
+    contents = archive_image_contents(archive)
+    images = {tag: {**info, **contents[tag]} for tag, info in images.items()}
+    value = validate_manifest({"schema": 2, "release": release, "source_tree": tree,
         "images": images, "archive_sha256": file_hash(archive), "archive_bytes": archive.stat().st_size}, release)
     from snapshot_worker_state import write_private
     manifest = directory / "images-manifest.json"
@@ -146,7 +240,7 @@ def release_path(release):
 
 def read_manifest(release):
     path = release_path(release) / "images-manifest.json"
-    if not path.is_file() or path.is_symlink() or path.stat().st_size > 16384:
+    if not path.is_file() or path.is_symlink() or path.stat().st_size > 128 * 1024:
         raise ImageError("prebuilt_manifest_invalid")
     try:
         return validate_manifest(json.loads(path.read_text()), release)
@@ -204,18 +298,28 @@ def install_bundle(release):
     write_private(checkpoint_path(release), {"release": release, "images": previous,
         "api": inspect_service("api"), "previous_release": old_release})
     run(["docker", "image", "load", "--quiet", "--input", str(archive)], timeout=600)
-    verify_images(manifest)
+    local_images = verify_images(manifest)
     # The existing database image stays local and untouched; no implicit registry pull.
     try: image_info("postgres:17-bookworm")
     except ImageError:
         raise ImageError("prebuilt_database_image_missing") from None
     write_private(root / "images-validated.json", {"release": release,
-        "manifest_sha256": file_hash(root / "images-manifest.json")})
+        "manifest_sha256": file_hash(root / "images-manifest.json"), "images": local_images})
 
 
 def verify_images(manifest):
-    if any(image_info(tag) != info for tag, info in manifest["images"].items()):
+    # Capture local IDs, but do not trust them until canonical content is verified.
+    before = {tag: image_info(tag) for tag in TAGS}
+    with tempfile.TemporaryDirectory(prefix="narma-image-proof-") as directory:
+        archive = Path(directory) / "loaded-images.tar.gz"
+        save_archive(archive, export_timeout=180)
+        contents = archive_image_contents(archive)
+    if any(image_info(tag) != info for tag, info in before.items()):
+        raise ImageError("prebuilt_loaded_image_changed")
+    if any(contents[tag] != {key: value for key, value in info.items() if key != "id"}
+           for tag, info in manifest["images"].items()):
         raise ImageError("prebuilt_loaded_image_mismatch")
+    return before
 
 
 def validate_installed(release):
@@ -224,9 +328,14 @@ def validate_installed(release):
     try: marker = json.loads((root / "images-validated.json").read_text())
     except (OSError, ValueError):
         raise ImageError("prebuilt_validation_missing") from None
-    if marker != {"release": release, "manifest_sha256": file_hash(root / "images-manifest.json")}:
+    if (not isinstance(marker, dict) or set(marker) != {"release", "manifest_sha256", "images"}
+            or marker["release"] != release
+            or marker["manifest_sha256"] != file_hash(root / "images-manifest.json")
+            or not isinstance(marker["images"], dict) or set(marker["images"]) != set(TAGS)):
         raise ImageError("prebuilt_validation_mismatch")
-    verify_images(manifest)
+    # The root-owned marker pins IDs whose full config/layers were already proved.
+    if any(image_info(tag) != info for tag, info in marker["images"].items()):
+        raise ImageError("prebuilt_loaded_image_changed")
 
 
 def rollback_images(release):

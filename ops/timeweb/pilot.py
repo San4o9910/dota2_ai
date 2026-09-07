@@ -474,7 +474,7 @@ runcmd:
             command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
             try:
                 transfer_image_archive(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py receive " + sha], image_archive)
-                command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py install " + sha], timeout=650)
+                command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py install " + sha], timeout=1000)
                 event("prebuilt_images_installed", release=sha, immutable_ids_verified=True)
                 command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha + " --prebuilt"], timeout=1200, bootstrap=True, phase="bootstrap")
                 ensure_https(ssh,release,hostname,host)
