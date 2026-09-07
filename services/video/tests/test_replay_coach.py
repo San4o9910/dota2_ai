@@ -92,6 +92,40 @@ def test_next_game_plan_is_required_and_coach_uses_only_selected_analytics():
     assert 'nickname' not in payload['player'] and 'account_id' not in payload['player']
 
 
+def test_coach_receives_selected_hero_and_recorded_spells_without_private_fields():
+    original = {**deepcopy(FACTS),
+        'player': {**FACTS['player'], 'hero': 'npc_dota_hero_necrolyte', 'team': 'radiant'},
+        'ability_usage': [{'name': 'necrolyte_death_pulse', 'casts': 12,
+                           'first_time': -10, 'last_time': 500, 'private_note': 'never-send'}],
+        'item_usage': [{'name': 'item_hood_of_defiance', 'casts': 4, 'first_time': 200,
+                       'last_time': 700, 'owner_id': 'never-send'}],
+        'other_player': {'hero': 'npc_dota_hero_lina'},
+    }
+    snapshot = deepcopy(original)
+    encoded, ids = coach.prepare_evidence(original)
+    payload = json.loads(encoded)
+    assert payload['player'] == {'hero': 'npc_dota_hero_necrolyte', 'team': 'radiant'}
+    assert payload['ability_usage'] == [{'name': 'necrolyte_death_pulse', 'casts': 12,
+                                         'first_time': -10, 'last_time': 500}]
+    assert payload['item_usage'][0]['name'] == 'item_hood_of_defiance'
+    assert payload['hero_context']['hero'] == payload['player']['hero']
+    assert payload['hero_context']['position'] is None
+    assert 'never-send' not in encoded and 'npc_dota_hero_lina' not in encoded
+    assert 'training_plan' not in payload['hero_context'] and 'focus' not in payload['hero_context']
+    assert original == snapshot and ids == {'death.1', 'buyback.1'}
+
+
+def test_usage_projection_keeps_unknown_and_invalid_telemetry_out_of_prompt():
+    rows = [None, {'name': '<injected>', 'casts': 2}, {'name': 'valid', 'casts': True},
+            {'name': 'valid', 'casts': -1}, {'name': 'valid', 'casts': 3,
+             'first_time': float('inf'), 'last_time': float('nan')},
+            {'name': 'valid', 'casts': 99}, {'name': 'second', 'casts': 1,
+             'first_time': -2, 'last_time': 20}]
+    assert coach.usage_facts(rows) == [{'name': 'valid', 'casts': 3},
+        {'name': 'second', 'casts': 1, 'first_time': -2, 'last_time': 20}]
+    assert coach.usage_facts({'name': 'not-a-list'}) == []
+
+
 def response(value=RESULT, **changes):
     body = {
         'usageMetadata': {'promptTokenCount': 100, 'candidatesTokenCount': 20, 'totalTokenCount': 120},

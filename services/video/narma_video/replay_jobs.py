@@ -23,6 +23,7 @@ from starlette.concurrency import run_in_threadpool
 from .config import PART_BYTES, media_root
 from .db import database
 from .replay_metadata import parse_demo_metadata, resolve_player
+from .replay_hero_context import build_hero_context
 from .web import account_required, csrf, json_body, reject
 
 MAX_REPLAY_BYTES = 512 * 1024**2
@@ -122,10 +123,39 @@ def get_replay(job_id, owner_id):
         row = owned(connection, owner_id, job_id)
         parts = connection.execute("SELECT part_number FROM replay_parts WHERE job_id=%s ORDER BY part_number", (job_id,)).fetchall()
         archive = previous_report(connection, row)
-    current = row["state"] == "ready"
+        current = row["state"] == "ready"
+        report = row["result_payload"] if current else (archive["report"] if archive else None)
+        context = report_hero_context(connection, row, report)
+        if archive:
+            archive = {**archive, "hero_context": report_hero_context(connection, row, archive["report"])}
     return {"replay": public(row), "parts": [part["part_number"] for part in parts],
-            "report": row["result_payload"] if current else (archive["report"] if archive else None),
+            "report": report, "hero_context": context,
             "report_is_previous": bool(not current and archive), "archived_report": archive}
+
+
+def report_hero_context(connection, row, report):
+    """Read-time guidance beside immutable reports, scoped to their own identity.
+
+    A saved report and its provider text are never rewritten on a GET. Manual
+    position is matched to this report's owner/account/match, not the most
+    recently played hero in the account profile. No provider call is made.
+    """
+    if not isinstance(report, dict):
+        return None
+    player, coverage = report.get("player"), report.get("coverage")
+    if (report.get("schema_version") != "narma.replay-report.v1"
+            or not isinstance(player, dict) or not isinstance(coverage, dict)
+            or coverage.get("complete") is not True
+            or type(player.get("account_id")) is not int
+            or player["account_id"] != row["account_id"]
+            or str(report.get("match_id")) != row["match_id"]
+            or not row.get("source_sha256")
+            or coverage.get("source_sha256") != row["source_sha256"]):
+        return None
+    metadata = connection.execute("""SELECT position FROM hero_pool_matches
+        WHERE owner_id=%s AND account_id=%s AND match_id=%s""",
+        (row["owner_id"], row["account_id"], row["match_id"])).fetchone()
+    return build_hero_context(report, position=metadata["position"] if metadata else None)
 
 
 def previous_report(connection, row):

@@ -78,10 +78,12 @@ with database() as c:
 POOL_CHECK = '''import json
 from narma_video.db import database
 from narma_video.hero_pool import get_pool
+from narma_video.replay_jobs import get_replay
 with database() as c:
  owners=c.execute('SELECT owner_id,account_id FROM portal_dota_profiles ORDER BY owner_id').fetchall()
  calls_before=c.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']
 counts=[]
+context_reports=0
 for owner in owners:
  pool=get_pool(owner['owner_id'])
  assert pool['schema_version']=='narma.hero-pool.v1'
@@ -97,11 +99,19 @@ for owner in owners:
  assert summary['unknown_outcomes']==len(history)-wins-losses
  assert summary['winrate_pct']==(round(100*wins/(wins+losses),1) if wins+losses else None)
  assert sum(hero['matches'] for hero in pool['heroes'])==len(history)
+ for match in history[:3]:
+  detail=get_replay(match['job_id'],owner['owner_id'])
+  context=detail['hero_context']
+  assert context and context['schema_version']=='narma.hero-context.v1'
+  assert context['hero']==match['hero']==detail['report']['player']['hero']
+  assert context['position']==match['position']
+  context_reports+=1
  counts.append({'matches':len(history),'heroes':len(pool['heroes']),
                 'known_outcomes':summary['known_outcomes'],'unknown_outcomes':summary['unknown_outcomes']})
 with database() as c:
  assert c.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']==calls_before
-print(json.dumps({'verified':True,'owners':len(owners),'counts':counts,'provider_calls_created':0}))
+print(json.dumps({'verified':True,'owners':len(owners),'counts':counts,
+                 'hero_context_reports':context_reports,'provider_calls_created':0}))
 '''
 
 

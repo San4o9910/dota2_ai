@@ -194,20 +194,41 @@ function updateMoment() {
 function itemGoalKey(item) { const player=displayedReport()?.player??{}; return `narma.item-goal.v1:${player.account_id??'unknown'}:${player.hero??'unknown'}:${item.item}`; }
 function readGoal(item) { try { const value=localStorage.getItem(itemGoalKey(item)); return value&&/^\d{1,3}:[0-5]\d$/.test(value)?value:''; } catch { return ''; } }
 function goalSeconds(text) { if(!/^\d{1,3}:[0-5]\d$/.test(text)) return null; const [minutes,seconds]=text.split(':').map(Number); return minutes*60+seconds; }
+// Inventory art comes directly from Valve's fixed CDN path. Replay text never
+// supplies a host, extension or arbitrary URL; missing art keeps a neutral tile.
+function itemIconUrl(value) {
+  const match=typeof value==='string'&&/^item_([a-z0-9_]{1,80})$/.exec(value);
+  return match?`https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${match[1]}.png`:null;
+}
+function itemIcon(value) {
+  const tile=node('span',undefined,'item-icon'), fallback=node('span','◇','item-icon-fallback'); tile.setAttribute('aria-hidden','true'); tile.append(fallback);
+  const url=itemIconUrl(value); if(!url) return tile;
+  const picture=node('img',undefined,'item-image'); picture.alt=''; picture.width=88; picture.height=64; picture.loading='lazy'; picture.decoding='async'; picture.referrerPolicy='no-referrer';
+  picture.addEventListener('load',()=>{picture.hidden=false;picture.classList.add('item-image-loaded');fallback.hidden=true;});
+  picture.addEventListener('error',()=>{picture.hidden=true;fallback.hidden=false;});
+  picture.src=url; tile.append(picture); return tile;
+}
 function renderItems() {
   const report=displayedReport(), data=insight(), provided=Array.isArray(data.items), items=provided?data.items:(report.inventory??[]).filter(entry=>finite(entry.time)).map((entry,index)=>({id:`legacy-${index}`,item:entry.item,label:itemName(entry.item),time:entry.time,event_id:entry.event_id,acquisition:'purchase',timing:{label:'Без эталона',basis:'Нет сопоставимого ориентира по герою, роли и рейтингу.'},realization:{note:'В этом отчёте нет данных о доставке и применении предмета.'}}));
   const rail=$('item-rail'), cards=$('item-cards'); rail.replaceChildren(); cards.replaceChildren(); $('item-count').textContent=`${items.length} предметов`;
   if(!items.length) { cards.append(node('p','В этом отчёте нет подтверждённых покупок ключевых предметов.','muted')); return; }
   for(const [index,item] of items.entries()) {
     const label=item.label??itemName(item.item), card=node('article',undefined,'item-card'); card.dataset.time=String(item.time);
-    rail.append(timeButton(item.time,label,'item-chip'));
-    const heading=node('div',undefined,'item-heading'), identity=node('div',undefined,'item-identity'), icon=node('span',String(index+1).padStart(2,'0'),'item-number'); icon.setAttribute('aria-hidden','true'); identity.append(icon,node('h4',label)); heading.append(identity,timeButton(item.time,item.acquisition==='inventory'?'В инвентаре':'Покупка'));
-    card.append(heading);
+    const chip=timeButton(item.time,label,'item-chip'); chip.prepend(itemIcon(item.item)); rail.append(chip);
+    const heading=node('div',undefined,'item-heading'), identity=node('div',undefined,'item-identity'); identity.append(itemIcon(item.item),node('h4',label)); heading.append(identity); card.append(heading);
+    const milestones=node('dl',undefined,'item-milestones');
+    for(const [title,value] of [[item.acquisition==='inventory'?'Первое появление':'Покупка',item.time],['Первое применение',item.realization?.first_use_time]]) {
+      const row=node('div'), amount=node('dd');
+      if(finite(value)) {const button=timeButton(value,'','item-milestone-time');button.setAttribute('aria-label',`${title}: ${stamp(value)}`);amount.append(button);}
+      else amount.append(node('span','Нет записи','item-missing'));
+      row.append(node('dt',title),amount); milestones.append(row);
+    }
+    card.append(milestones);
     const timing=node('div',undefined,'item-timing'), badge=node('span',item.timing?.label??'Без эталона','timing-badge'), basis=node('p',item.timing?.basis??'Нет сопоставимого ориентира по герою, роли и рейтингу.','help'); timing.append(badge,basis); card.append(timing);
     const steps=node('dl',undefined,'item-steps');
-    for(const [title,value] of [['Первый снимок у героя',item.first_hero_inventory_time],['В активном слоте',item.first_active_inventory_time],['Первое применение',item.realization?.first_use_time]]) { const row=node('div'), amount=node('dd'); if(finite(value)) {const button=timeButton(value,'','item-step-time');button.setAttribute('aria-label',`${title}: ${stamp(value)}`);amount.append(button);} else amount.textContent='—'; row.append(node('dt',title),amount); steps.append(row); }
+    for(const [title,value] of [['Первый снимок у героя',item.first_hero_inventory_time],['В активном слоте',item.first_active_inventory_time]]) { const row=node('div'), amount=node('dd'); if(finite(value)) {const button=timeButton(value,'','item-step-time');button.setAttribute('aria-label',`${title}: ${stamp(value)}`);amount.append(button);} else amount.textContent='—'; row.append(node('dt',title),amount); steps.append(row); }
     card.append(steps);
-    const realization=item.realization??{}, summary=node('div',undefined,'item-realization');
+    const realization=item.realization??{}, summary=node('div',undefined,'item-realization'); summary.append(node('p','Реализация · что видно в реплее','eyebrow'));
     const statusLabels={used_soon:'Применён в первые 2 минуты',used_later:'Первое применение позже 2 минут',no_recorded_use:'Применение не записано',passive_item:'Пассивный эффект',no_window:'Недостаточно времени после покупки'};
     if(statusLabels[realization.status]) summary.append(node('p',statusLabels[realization.status],'realization-status'));
     summary.append(node('p',finite(realization.observed_seconds)?`После ${item.acquisition==='inventory'?'появления в инвентаре':'покупки'} · ${stamp(realization.observed_seconds)}`:'События после приобретения','eyebrow'));
@@ -234,8 +255,39 @@ function renderItems() {
     applyGoal(input.value); controls.append(input,save,clear); goal.append(inputLabel,controls,help,feedback); card.append(goal); cards.append(card);
   }
 }
+function selectedHeroContext() {
+  const context=state.showArchived?state.detail?.archived_report?.hero_context:state.detail?.hero_context;
+  return context?.hero===displayedReport()?.player?.hero?context:null;
+}
+function renderHeroContext() {
+  const target=$('hero-context'), context=selectedHeroContext(); target.replaceChildren(); target.hidden=!context;
+  if(!context) return;
+  const heading=node('h4',`Разбор за ${context.label??heroName(context.hero)}`); heading.id='hero-context-heading';
+  target.append(heading,node('p',context.position_label??positionName(context.position),'hero-context-role'));
+  if(context.summary) target.append(node('p',context.summary,'hero-context-summary'));
+  if(context.abilities?.length) {
+    target.append(node('p','Применения способностей из реплея','eyebrow'));
+    const abilities=node('ul',undefined,'hero-abilities');
+    for(const ability of context.abilities.slice(0,8)) {
+      const row=node('li'); row.append(node('strong',ability.label??ability.name??'Способность'),node('span',`${num(ability.casts)} применений`));
+      if(finite(ability.first_time)) row.append(node('span',`${stamp(ability.first_time)}${finite(ability.last_time)&&ability.last_time!==ability.first_time?` — ${stamp(ability.last_time)}`:''}`,'help'));
+      abilities.append(row);
+    }
+    target.append(abilities,node('p','Счётчик может включать применения до начала матча. Число применений само по себе не показывает их качество.','help'));
+  }
+  if(context.focus?.length) {
+    const focus=node('div',undefined,'hero-focus'); renderPoints(focus,context.focus.slice(0,3)); target.append(focus);
+  }
+  if(context.limits?.length) { const limits=node('ul',undefined,'hero-context-limits help'); limits.append(...context.limits.slice(0,5).map(value=>node('li',value))); target.append(limits); }
+  const sources=node('div',undefined,'hero-context-sources');
+  for(const source of (context.sources??[]).slice(0,3)) {
+    let url; try {url=new URL(source.url);} catch {continue;} if(url.protocol!=='https:') continue;
+    const link=node('a',source.title??url.hostname); link.href=url.href; link.target='_blank'; link.rel='noopener noreferrer'; sources.append(link);
+  }
+  if(sources.childElementCount) target.append(sources);
+}
 function renderTraining() {
-  const target=$('next-game-plan'), coach=displayedReport().coaching, plans=coach?.status==='ready'&&coach.next_game?.length?coach.next_game:insight().training_plan??[]; target.replaceChildren();
+  const target=$('next-game-plan'), coach=displayedReport().coaching, context=selectedHeroContext(), plans=context?.training_plan?.length?context.training_plan:coach?.status==='ready'&&coach.next_game?.length?coach.next_game:insight().training_plan??[]; target.replaceChildren();
   for(const [index,plan] of plans.slice(0,3).entries()) { const card=node('article',undefined,'training-card'); card.append(node('p',`0${index+1}`,'training-number'),node('h4',plan.title??'Приоритет на матч'),node('p',plan.action??'','training-action'));
     if(plan.measure) {const measure=node('div',undefined,'training-measure');measure.append(node('span','Как проверить'),node('p',plan.measure));card.append(measure);}
     const links=node('div',undefined,'evidence-links'); for(const id of (plan.evidence_ids??[]).slice(0,2)) {const evidence=state.evidence.get(id);if(!evidence)continue;const button=node('button',`${stamp(evidence.time)} · ${eventLabels[evidence.type]??'Эпизод'}`,'evidence-link');button.addEventListener('click',()=>focusEvidence(id));links.append(button);} if(links.childElementCount)card.append(links);target.append(card);
@@ -305,7 +357,7 @@ function renderDetail() {
   for(const [label,value] of [['Убийства / смерти / помощи',`${num(m.kills)} / ${num(m.deaths)} / ${num(m.assists)}`],['Добивания / денаи',`${num(m.last_hits)} / ${num(m.denies)}`],['Ценность предметов и золота',num(m.net_worth)],['Всего заработано золота',num(m.total_earned_gold)],['Полученный опыт',num(m.xp)],['Время вне игры',stamp(m.confirmed_dead_seconds)]]) { const metric=node('div',undefined,'metric'); metric.append(node('dt',label),node('dd',value)); metrics.append(metric); }
   const duration=Math.max(1,m.duration_seconds??0), samples=(report.economy??[]).filter(sample=>Number.isFinite(sample.time)&&sample.time>=0&&sample.time<=duration);
   $('timeline').max=String(Math.ceil(duration)); state.graphs=[]; drawGraph('gold-chart',samples,'net_worth',duration); drawGraph('xp-chart',samples,'xp',duration);
-  drawBars('income-chart',insight().gold?.bins??[],'income',duration); drawBars('farm-chart',insight().pace??[],'last_hits',duration); drawCombat(duration); renderSources(); renderItems(); renderTraining();
+  drawBars('income-chart',insight().gold?.bins??[],'income',duration); drawBars('farm-chart',insight().pace??[],'last_hits',duration); drawCombat(duration); renderSources(); renderItems(); renderHeroContext(); renderTraining();
   renderPoints($('findings'),report.findings); renderEvents();
   const coach=report.coaching; $('coaching-section').hidden=false;
   if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points); }

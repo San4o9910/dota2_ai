@@ -39,6 +39,9 @@ const report={
     training_plan:[{id:'next-1',title:'Проверь следующий выход',action:'Перед следующим выходом проверь готовность предметов.',measure:'Найди первое применение после покупки.',evidence_ids:['purchase-1']}]},
   coverage:{complete:true,limits:['Причины решений и видимость не угадываются.']}
 };
+const heroContext={hero:'npc_dota_hero_necrolyte',label:'Necrophos',position:2,position_label:'Позиция 2 · указана тобой',summary:'У Necrophos свой план на затяжной бой.',abilities:[{name:'necrolyte_death_pulse',label:'Death Pulse',casts:42,first_time:-5,last_time:4600}],focus:[{title:'Death Pulse в эпизоде',observation:'Способность записана в журнале.',advice:'Проверь, кому помогло применение.',evidence_ids:['death-1']}],training_plan:[{id:'hero-next',title:'План за Necrophos',action:'Проверь применение Death Pulse в одном эпизоде.',measure:'Найди эпизод и оцени результат.',evidence_ids:['death-1']}],limits:['Число применений не доказывает качество решения.'],sources:[{title:'Necrophos · Dota 2',url:'https://www.dota2.com/hero/necrophos'},{title:'Unsafe link',url:'javascript:alert(1)'}]};
+const itemImageUrl='https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/radiance.png';
+const itemImage=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
 // Synthetic dense timeline: enough distinct minutes to exercise full match visuals.
 const syntheticDuration=report.metrics.duration_seconds;
 report.economy=Array.from({length:80},(_,index)=>{
@@ -71,7 +74,12 @@ try {
     }
     const errors=[], requests=[];
     page.on('pageerror',error=>errors.push(error.message));
-    await page.route('**/*',async route=>{if(new URL(route.request().url()).origin!==origin){externalRequests.push(route.request().url());await route.abort();}else await route.fallback();});
+    await page.route('**/*',async route=>{
+      const url=route.request().url();
+      if(url===itemImageUrl) { if(width===1440) await route.fulfill({contentType:'image/png',body:itemImage}); else await route.abort(); }
+      else if(new URL(url).origin!==origin) {externalRequests.push(url);await route.abort();}
+      else await route.fallback();
+    });
     await page.route('**/api/**',async route=>{
       const request=route.request(), url=new URL(request.url()), endpoint=url.pathname, method=request.method(); requests.push(endpoint);
       let body, status=200;
@@ -93,7 +101,7 @@ try {
       else if(job&&endpoint===`/api/replays/${job.id}/parts/1`&&method==='PUT') { uploaded=true; assert.equal(request.postDataBuffer().subarray(0,8).toString('binary'),'PBDEMS2\x00'); body={uploaded:true,part_number:1}; }
       else if(job&&endpoint===`/api/replays/${job.id}/complete`) { assert.equal(uploaded,true); bound=true; job={...job,state:'ready',progress:100,match_id:'8984479726'}; body={replay:job}; }
       else if(job&&endpoint===`/api/replays/${job.id}/source`&&method==='DELETE') {job.source_retained=false;body={source_deleted:true,report_retained:true};}
-      else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,parts:uploaded?[1]:[],archived_report:job.state==='ready'?{id:1,created_at:new Date().toISOString(),report:{...report,metrics:{...report.metrics,kills:9},evidence:[{id:'old-death',type:'death',time:500,title:'Старый эпизод'}],coaching:{status:'ready',summary:'Сохранённый комментарий',points:[{title:'Сохранённый эпизод',observation:'Предыдущий разбор.',evidence_ids:['old-death']}]}}}:null,report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{})}:null};
+      else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,hero_context:legacy?{...heroContext,hero:'npc_dota_hero_lion',label:'Lion'}:heroContext,parts:uploaded?[1]:[],archived_report:job.state==='ready'?{id:1,created_at:new Date().toISOString(),hero_context:{...heroContext,summary:'Контекст сохранённого разбора.',abilities:[{...heroContext.abilities[0],casts:7}]},report:{...report,metrics:{...report.metrics,kills:9},evidence:[{id:'old-death',type:'death',time:500,title:'Старый эпизод'}],coaching:{status:'ready',summary:'Сохранённый комментарий',points:[{title:'Сохранённый эпизод',observation:'Предыдущий разбор.',evidence_ids:['old-death']}]}}}:null,report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{})}:null};
       else throw Error(`Unexpected frontend API request: ${method} ${endpoint}`);
       await route.fulfill({status,json:body});
     });
@@ -130,8 +138,38 @@ try {
     assert.equal(await page.locator('#income-chart .chart-bar').count(),79);
     assert.equal(await page.locator('#farm-chart .chart-bar').count(),79);
     assert.equal(await page.locator('#gold-sources .source-row').count(),3);
+    const incomeLayout=await page.evaluate(()=>{
+      const rect=selector=>{const {x,y,width,height}=document.querySelector(selector).getBoundingClientRect();return {x,y,width,height};};
+      return {sources:rect('#gold-sources'),income:rect('.economy-card.income'),farm:rect('.economy-card.farming'),summary:rect('#moment-summary')};
+    });
+    assert.ok(Math.abs(incomeLayout.income.x-incomeLayout.farm.x)<1,'Income and last hits share one column.');
+    assert.ok(Math.abs(incomeLayout.income.width-incomeLayout.farm.width)<1,'Income and last hits have equal widths.');
+    assert.ok(Math.abs(incomeLayout.farm.y-incomeLayout.income.y-incomeLayout.income.height-18)<1,'Last hits sit directly below income, without waiting for the source list.');
+    assert.ok(incomeLayout.summary.y>=incomeLayout.farm.y+incomeLayout.farm.height,'Selected interval follows both charts.');
+    if(width>680) assert.ok(incomeLayout.income.x>=incomeLayout.sources.x+incomeLayout.sources.width,'Both interval charts occupy the right column.');
+    else assert.ok(incomeLayout.income.y>=incomeLayout.sources.y+incomeLayout.sources.height,'Income sources and charts stack on mobile.');
+    await page.locator('#farm-chart').click();
+    assert.equal(await page.locator('#farm-chart .chart-cursor').getAttribute('x1'),await page.locator('#income-chart .chart-cursor').getAttribute('x1'));
+    assert.equal(await page.locator('#farm-chart .chart-cursor').getAttribute('x1'),await page.locator('#xp-chart .chart-cursor').getAttribute('x1'));
+    if(screenshotDir) await page.locator('[aria-labelledby="income-heading"]').screenshot({path:path.join(screenshotDir,`portal-${width}-income.png`)});
     assert.equal(await page.locator('#next-game-plan .training-card').count(),1);
     assert.equal(await page.locator('#item-cards .item-card').count(),1);
+    await page.getByRole('heading',{name:'Разбор за Necrophos',exact:true}).waitFor();
+    assert.match(await page.locator('#hero-context').textContent(),/Позиция 2 · указана тобой/);
+    assert.match(await page.locator('#hero-context').textContent(),/Death Pulse42 применений−0:05 — 76:40/);
+    assert.equal(await page.locator('#hero-context a').count(),1,'Only safe source links are shown.');
+    assert.equal(await page.locator('#next-game-plan h4').textContent(),'План за Necrophos','The hero plan replaces generic training even without Gemini.');
+    if(screenshotDir) await page.locator('#hero-context').screenshot({path:path.join(screenshotDir,`portal-${width}-hero-context.png`)});
+    const itemCard=page.locator('#item-cards .item-card').first();
+    await itemCard.scrollIntoViewIfNeeded();
+    assert.equal(await itemCard.locator('.item-image').getAttribute('src'),itemImageUrl);
+    assert.equal(await itemCard.locator('.item-image').getAttribute('referrerpolicy'),'no-referrer');
+    assert.equal(await itemCard.locator('.item-image').getAttribute('alt'),'');
+    if(width===1440) await itemCard.locator('.item-image-loaded').waitFor();
+    else {await page.waitForFunction(()=>document.querySelector('#item-cards .item-image').hidden);assert.equal(await itemCard.locator('.item-icon-fallback').isVisible(),true);}
+    assert.equal(await itemCard.getByRole('button',{name:'Покупка: 11:40',exact:true}).textContent(),'11:40');
+    assert.equal(await itemCard.locator('.item-milestones .item-missing').textContent(),'Нет записи');
+
     await page.locator('.item-chip').first().click();
     assert.equal(await page.locator('#timeline-value').textContent(),'11:40');
     assert.match(await page.locator('#income-value').textContent(),/1\s?000/);
@@ -148,8 +186,18 @@ try {
     const accessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
     assert.deepEqual(accessibility.violations.map(violation=>({id:violation.id,nodes:violation.nodes.map(item=>item.target)})),[]);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    const originalItemId=report.insights.items[0].item;
+    report.insights.items[0].item='item_../../foreign';
+    await page.getByRole('button',{name:'Обновить',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('#item-cards .item-image').length===0);
+    assert.equal(await page.locator('#item-rail .item-image').count(),0,'Malformed item identifiers cannot create external image URLs.');
+    report.insights.items[0].item=originalItemId;
+    await page.getByRole('button',{name:'Обновить',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('#item-cards .item-image').length===1);
     await page.getByRole('button',{name:'Предыдущий тренерский разбор',exact:true}).click();
     await page.getByRole('heading',{name:'Сохранённый эпизод',exact:true}).waitFor();
+    assert.match(await page.locator('#hero-context').textContent(),/Контекст сохранённого разбора/);
+    assert.match(await page.locator('#hero-context .hero-abilities').textContent(),/7 применений/);
     assert.match(await page.locator('#metrics').textContent(),/9 \/ 16 \/ 20/);
     await page.getByRole('button',{name:'8:20 · Смерть',exact:true}).click();
     assert.equal(await page.locator('#timeline-value').textContent(),'8:20');
@@ -161,6 +209,7 @@ try {
     assert.equal(await page.locator('#gold-chart .chart-line').count(),1);
     assert.equal(await page.locator('#item-cards .item-card').count(),1);
     assert.equal(await page.locator('#income-chart .chart-bar').count(),0);
+    assert.equal(await page.locator('#hero-context').isHidden(),true,'Context for another hero is never attached to this report.');
     await page.getByRole('button',{name:'Пул героев',exact:true}).click();
     await page.getByRole('heading',{name:'Пул героев',exact:true}).waitFor();
     await page.locator('#pool-roster .pool-hero-row').first().waitFor();

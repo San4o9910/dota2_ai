@@ -229,6 +229,61 @@ def queue_saved_refresh(job_id):
             result_payload=NULL,updated_at=now() WHERE id=%s""", (job_id,))
 
 
+def test_saved_and_archived_reports_gain_own_hero_context_without_regeneration(browser):
+    from test_replay_coach import prior_report
+    command, _ = queued(browser)
+    job = replay.claim_replay('synthetic-worker', command['id'])
+    report = prior_report()
+    report.update(schema_version='narma.replay-report.v1', match_id=job['match_id'])
+    report['player'].update(account_id=job['account_id'], hero='npc_dota_hero_necrolyte', team='radiant')
+    report['coverage']['source_sha256'] = job['source_sha256']
+    report['ability_usage'] = [{'name': 'necrolyte_death_pulse', 'casts': 7,
+                                'first_time': 10, 'last_time': 600}]
+    assert replay.finish_replay(job['id'], job['lease_token'], report)
+    with database() as connection:
+        connection.execute("""INSERT INTO hero_pool_matches
+            (owner_id,account_id,match_id,position,first_analyzed_at)
+            VALUES (%s,%s,%s,3,now()) ON CONFLICT(owner_id,account_id,match_id)
+            DO UPDATE SET position=3""", (OWNER, job['account_id'], job['match_id']))
+        # The pilot intentionally has one portal owner. The same match ID for
+        # a different game account must still not supply this report's role.
+        connection.execute("""INSERT INTO hero_pool_matches
+            (owner_id,account_id,match_id,position,first_analyzed_at)
+            VALUES (%s,%s,%s,5,now())""", (OWNER, job['account_id'] + 1, job['match_id']))
+        before = connection.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']
+    detail = browser.get(f"/api/replays/{job['id']}").json()
+    assert detail['report'] == report
+    assert detail['hero_context']['hero'] == report['player']['hero']
+    assert detail['hero_context']['position'] == 3
+    assert detail['hero_context']['abilities'][0]['casts'] == 7
+    assert detail['hero_context']['training_plan']
+    queue_saved_refresh(job['id'])
+    archived = browser.get(f"/api/replays/{job['id']}").json()
+    assert archived['report_is_previous'] and archived['report'] == report
+    assert archived['archived_report']['report'] == report
+    assert archived['hero_context'] == archived['archived_report']['hero_context']
+    assert archived['hero_context']['position'] == 3
+    with database() as connection:
+        assert connection.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n'] == before
+        assert connection.execute('SELECT report FROM replay_report_history WHERE job_id=%s',
+                                  (job['id'],)).fetchone()['report'] == report
+
+
+@pytest.mark.parametrize('mismatch', ['account', 'match', 'source', 'complete'])
+def test_context_does_not_join_manual_position_to_unverified_report(mismatch):
+    from types import SimpleNamespace
+    report = {'schema_version': 'narma.replay-report.v1', 'match_id': '8984479726',
+              'player': {'account_id': 123, 'hero': 'npc_dota_hero_necrolyte'},
+              'coverage': {'source_sha256': 'a' * 64, 'complete': True}}
+    row = {'owner_id': 'owner', 'account_id': 123, 'match_id': '8984479726', 'source_sha256': 'a' * 64}
+    if mismatch == 'account': report['player']['account_id'] = 124
+    elif mismatch == 'match': report['match_id'] = '8984479727'
+    elif mismatch == 'source': report['coverage']['source_sha256'] = 'b' * 64
+    elif mismatch == 'complete': report['coverage']['complete'] = False
+    connection = SimpleNamespace(execute=lambda *args: pytest.fail('Unverified context must not read metadata'))
+    assert replay.report_hero_context(connection, row, report) is None
+
+
 def test_refresh_archive_is_transactional_and_survives_failed_worker(browser):
     job, report = saved_coached_replay(browser)
     with pytest.raises(RuntimeError, match='synthetic rollback'):
