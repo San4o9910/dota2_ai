@@ -1,7 +1,7 @@
-import { fetchOpenDotaRoster, type AnalysisFetch } from "@/lib/analysis/opendota";
+import type { AnalysisFetch } from "@/lib/analysis/opendota";
 import { D1FixedWindowRateLimiter } from "@/lib/scan/storage";
 import {canonicalSha256} from "@/lib/analysis/canonical-json";
-import { IdentityRosterSchema, extractIdentityRoster, selectIdentity, playerError, type PlayerMatchRequest, type PlayerTarget } from "@/lib/dota/player-identity";
+import { IdentityRosterSchema, selectIdentity, playerError, type PlayerMatchRequest, type PlayerTarget } from "@/lib/dota/player-identity";
 
 export type DotaProfile = { accountId: number; nickname: string; sourceMatchId: string; linkedAt: string };
 export class D1PlayerBindingStore {
@@ -32,7 +32,8 @@ export class D1PlayerBindingStore {
       throw playerError("DOTA_PROFILE_LOCKED", "В этом аккаунте уже закреплён другой игрок. Профиль не изменён.");
     return bound;
   }
-  async resolve(userId: string, input: PlayerMatchRequest, options: { fetch?: AnalysisFetch; signal?: AbortSignal } = {}) {
+  async resolve(userId: string, input: PlayerMatchRequest, ..._options: [{ fetch?: AnalysisFetch; signal?: AbortSignal }?]) {
+    void _options;
     const profile = await this.get(userId);
     if (profile) {
       const known = await this.target(userId,input.matchId);
@@ -44,12 +45,8 @@ export class D1PlayerBindingStore {
     // Private replay identities never enter the shared match cache or model input.
     const replay = await this.db.prepare("SELECT identity_payload AS identities FROM replay_uploads WHERE user_id=?1 AND match_id=?2 AND state='ready' AND identity_payload IS NOT NULL ORDER BY updated_at DESC LIMIT 1")
       .bind(userId,input.matchId).first<{identities:string}>();
-    let roster;
-    if (replay) roster = IdentityRosterSchema.parse(JSON.parse(replay.identities));
-    else {
-      const raw = await fetchOpenDotaRoster(input.matchId,options);
-      roster = extractIdentityRoster(raw.players);
-    }
+    if (!replay) throw playerError("DOTA_REPLAY_REQUIRED", "Загрузите и обработайте свой .dem, чтобы определить игрока в этом матче.");
+    const roster = IdentityRosterSchema.parse(JSON.parse(replay.identities));
     const selected = selectIdentity(roster,input.nickname,profile?.accountId);
     const nickname = selected.nickname?.trim() || profile?.nickname || input.nickname!;
     await this.bindSelectedProfile(userId,{accountId:selected.accountId,nickname},input.matchId);

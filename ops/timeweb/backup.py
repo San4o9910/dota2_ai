@@ -87,6 +87,15 @@ def verify_restore(dump):
         expected_tables=8 if state['migrations']>=3 else 7
         if state['tables']!=expected_tables or state['migrations']<2 or state['orphans']!=0 or state['allowance']>10000000:
             raise CheckError('backup_restore_invariants_failed')
+        if state['migrations']>=4:
+            portal_sql="""SELECT json_build_object('tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('portal_accounts','portal_sessions','portal_auth_limits','portal_dota_profiles','portal_replay_uploads')),
+                'accounts',(SELECT count(*) FROM portal_accounts),
+                'orphan_sessions',(SELECT count(*) FROM portal_sessions s LEFT JOIN portal_accounts a ON a.owner_id=s.owner_id WHERE a.owner_id IS NULL),
+                'orphan_profiles',(SELECT count(*) FROM portal_dota_profiles p LEFT JOIN portal_accounts a ON a.owner_id=p.owner_id WHERE a.owner_id IS NULL));"""
+            portal=json.loads(command(['docker','exec','-i',name,'psql','-U','drill','-d','narma_restore_drill','-v','ON_ERROR_STOP=1','-At'],input=portal_sql.encode()).decode().splitlines()[0])
+            if portal['tables']!=5 or portal['accounts']>1 or portal['orphan_sessions'] or portal['orphan_profiles']:
+                raise CheckError('backup_portal_restore_invariants_failed')
+            state['portal']=portal
         event('backup_restore_verified',**state)
         return state
     finally:

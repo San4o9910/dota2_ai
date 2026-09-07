@@ -40,6 +40,12 @@ else:
 values.update(GEMINI_API_KEY=key, GEMINI_MODEL="gemini-3.8-flash",
     VIDEO_FRAME_BUDGET="3600", VIDEO_REQUEST_BUDGET="250",
     VIDEO_OWNER_DAILY_REQUEST_BUDGET="250")
+portal=json.loads((Path(__file__).parent/'portal-setup.json').read_text())
+if portal['server_id']!=9037783 or portal['project_id']!=2655641 or portal['origin']!='https://narma-72-56-98-68.sslip.io':
+    raise SystemExit(5)
+if not re.fullmatch('[0-9a-f]{64}',portal['setup_token_sha256']):
+    raise SystemExit(6)
+values.update(APP_ORIGIN=portal['origin'],PORTAL_SETUP_TOKEN_SHA256=portal['setup_token_sha256'],PORTAL_SETUP_EXPIRES_AT=portal['setup_expires_at'])
 temporary = path.with_suffix(".new")
 temporary.write_text("".join(name+"="+value+"\n" for name,value in values.items()))
 temporary.chmod(0o600)

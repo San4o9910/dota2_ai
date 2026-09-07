@@ -83,7 +83,31 @@ def config(hostname,tls):
         proxy_read_timeout 120s;
         proxy_send_timeout 120s;
     }}
-    location / {{ return 404; }}
+    location = /api/profile/replay {{
+        client_max_body_size 512m;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 1800s;
+        proxy_send_timeout 1800s;
+    }}
+    location / {{
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }}
 }}
 '''
     return result

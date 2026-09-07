@@ -40,6 +40,9 @@ services:
       VIDEO_SERVICE_TOKEN: ${VIDEO_SERVICE_TOKEN:?Set VIDEO_SERVICE_TOKEN}
       VIDEO_STORAGE_PATH: /var/lib/narma/video
       VIDEO_FRAME_BUDGET: ${VIDEO_FRAME_BUDGET:-3600}
+      APP_ORIGIN: ${APP_ORIGIN:-https://narma-72-56-98-68.sslip.io}
+      PORTAL_SETUP_TOKEN_SHA256: ${PORTAL_SETUP_TOKEN_SHA256:-}
+      PORTAL_SETUP_EXPIRES_AT: ${PORTAL_SETUP_EXPIRES_AT:-}
     ports: ["127.0.0.1:8080:8080"]
     volumes: [media:/var/lib/narma/video]
     tmpfs: ["/tmp:size=64m,mode=1777"]

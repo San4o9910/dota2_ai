@@ -1,17 +1,9 @@
 import { z } from "zod";
-
 import { MATCH_ID_PATTERN, PlayerSlotSchema } from "@/lib/analysis/contracts";
-import {
-  AnalysisDependencyError,
-  AnalysisPublicError,
-  analysisCancelled,
-  parseRetryAfterSeconds,
-} from "@/lib/analysis/errors";
-import { cancelResponseBody, createTimeoutContext, readBoundedJson } from "@/lib/analysis/http";
+import { AnalysisPublicError } from "@/lib/analysis/errors";
 
-export const OPENDOTA_ORIGIN = "https://api.opendota.com" as const;
-const DEFAULT_TIMEOUT_MS = 8_000;
-const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+// Historical payload validation is retained for stored reports and local replay
+// adapters. This module has no remote transport and cannot contact a provider.
 const CANONICAL_PLAYER_SLOTS = [0, 1, 2, 3, 4, 128, 129, 130, 131, 132] as const;
 
 const nullableInteger = z.number().int().safe().finite().nullable().optional();
@@ -124,150 +116,29 @@ export function parseMatchId(input: string): string {
   return input;
 }
 
-function openDotaFailure(
-  code: "OPENDOTA_RATE_LIMITED" | "OPENDOTA_UNAVAILABLE" | "OPENDOTA_INVALID_RESPONSE",
-  message: string,
-  retryable: boolean,
-  options: { cause?: unknown; retryAfterSeconds?: number } = {},
-) {
-  return new AnalysisDependencyError("opendota", code, message, {
-    cause: options.cause,
-    httpStatus: 503,
-    retryable,
-    retryAfterSeconds: options.retryAfterSeconds,
-  });
+function retiredSource(matchIdInput: string): never {
+  parseMatchId(matchIdInput);
+  throw new AnalysisPublicError(
+    "SOURCE_RETIRED",
+    "Анализ по Match ID отключён. Загрузите игровой файл на новом сайте.",
+    { httpStatus: 410, retryable: false },
+  );
 }
 
-async function fetchOpenDotaMatchPayload(
-  matchIdInput: string,
-  options: FetchOpenDotaMatchOptions = {},
-): Promise<unknown> {
-  const matchId = parseMatchId(matchIdInput);
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
-  if (typeof fetchImplementation !== "function") {
-    throw openDotaFailure("OPENDOTA_UNAVAILABLE", "OpenDota временно недоступен.", true);
-  }
-
-  // The caller controls only a digits-only path segment. The origin, protocol,
-  // method and redirect behavior are deliberately not configurable.
-  const url = new URL(`/api/matches/${matchId}`, OPENDOTA_ORIGIN);
-  const timeout = createTimeoutContext(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.signal);
-  try {
-    if (options.signal?.aborted) throw analysisCancelled(options.signal.reason);
-    let response: Response;
-    try {
-      response = await fetchImplementation(url, {
-        method: "GET",
-        headers: { accept: "application/json" },
-        redirect: "error",
-        signal: timeout.signal,
-      });
-    } catch (error) {
-      if (options.signal?.aborted && !timeout.timedOut()) throw analysisCancelled(error);
-      // Log only a fixed category, never upstream bodies, URLs, player data or raw exception text.
-      const detail = error instanceof Error ? error.message.toLowerCase() : "";
-      const reason = timeout.timedOut() ? "timeout" : /dns|resolve|enotfound/.test(detail) ? "dns"
-        : /certificate|tls|ssl/.test(detail) ? "tls" : /redirect/.test(detail) ? "redirect"
-        : /illegal invocation/.test(detail) ? "runtime_receiver" : "network";
-      console.error(JSON.stringify({event:"opendota_transport_failure",reason}));
-      throw openDotaFailure(
-        "OPENDOTA_UNAVAILABLE",
-        timeout.timedOut() ? "OpenDota не ответил вовремя." : "Не удалось связаться с OpenDota.",
-        true,
-        { cause: error },
-      );
-    }
-
-    if (response.status === 404) {
-      await cancelResponseBody(response);
-      throw new AnalysisPublicError(
-        "OPENDOTA_MATCH_NOT_FOUND",
-        "Матч с таким Match ID не найден в OpenDota.",
-        { httpStatus: 404, retryable: false },
-      );
-    }
-    if (response.status === 429) {
-      await cancelResponseBody(response);
-      throw openDotaFailure("OPENDOTA_RATE_LIMITED", "OpenDota временно ограничил частоту запросов.", true, {
-        retryAfterSeconds: parseRetryAfterSeconds(response.headers.get("retry-after")),
-      });
-    }
-    if (response.status >= 500 && response.status <= 599) {
-      await cancelResponseBody(response);
-      throw openDotaFailure("OPENDOTA_UNAVAILABLE", "OpenDota временно недоступен.", true);
-    }
-    if (!response.ok) {
-      await cancelResponseBody(response);
-      throw openDotaFailure("OPENDOTA_INVALID_RESPONSE", "OpenDota отклонил безопасный запрос матча.", false);
-    }
-
-    let raw: unknown;
-    try {
-      raw = await readBoundedJson(response, {
-        dependency: "opendota",
-        maxBytes: options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
-        signal: timeout.signal,
-      });
-    } catch (error) {
-      if (timeout.timedOut()) {
-        throw openDotaFailure("OPENDOTA_UNAVAILABLE", "OpenDota не ответил вовремя.", true, { cause: error });
-      }
-      if (options.signal?.aborted) throw analysisCancelled(error);
-      throw error;
-    }
-    return raw;
-  } finally {
-    timeout.cleanup();
-  }
-}
-
-// Identity lookup needs a complete roster, not parsed combat/economy data.
-// Explicit slots remain authoritative even if the provider changes row order.
-const OpenDotaRosterSchema = z.object({
-  match_id: z.union([z.string().regex(MATCH_ID_PATTERN), z.number().int().positive().safe()]),
-  players: z.array(z.object({
-    player_slot: PlayerSlotSchema,
-    hero_id: z.number().int().positive().max(1024),
-  }).passthrough()).length(10),
-}).refine(match => new Set(match.players.map(player => player.player_slot)).size === 10,
-  "player slots must be unique");
-
+// Keep the historical call signatures so archived importers remain compatible.
+// Options, including caller-injected fetch functions, cannot re-enable transport.
 export async function fetchOpenDotaRoster(
   matchIdInput: string,
-  options: FetchOpenDotaMatchOptions = {},
-) {
-  const matchId = parseMatchId(matchIdInput);
-  const parsed = OpenDotaRosterSchema.safeParse(await fetchOpenDotaMatchPayload(matchId, options));
-  if (!parsed.success || String(parsed.data.match_id) !== matchId) {
-    throw openDotaFailure("OPENDOTA_INVALID_RESPONSE", "OpenDota не вернул корректный состав этого матча.", false);
-  }
-  return parsed.data;
+  ..._options: [FetchOpenDotaMatchOptions?]
+): Promise<{ match_id: string | number; players: OpenDotaMatch["players"] }> {
+  void _options;
+  return retiredSource(matchIdInput);
 }
 
 export async function fetchOpenDotaMatch(
   matchIdInput: string,
-  options: FetchOpenDotaMatchOptions = {},
+  ..._options: [FetchOpenDotaMatchOptions?]
 ): Promise<OpenDotaMatch> {
-    const matchId = parseMatchId(matchIdInput);
-    const parsed = OpenDotaMatchSchema.safeParse(await fetchOpenDotaMatchPayload(matchId, options));
-    if (!parsed.success) {
-      throw openDotaFailure(
-        "OPENDOTA_INVALID_RESPONSE",
-        "OpenDota вернул неполные или некорректные данные матча.",
-        false,
-        { cause: parsed.error },
-      );
-    }
-    if (String(parsed.data.match_id) !== matchId) {
-      throw openDotaFailure("OPENDOTA_INVALID_RESPONSE", "OpenDota вернул данные другого матча.", false);
-    }
-    if (parsed.data.version == null) {
-      throw new AnalysisDependencyError(
-        "opendota",
-        "OPENDOTA_MATCH_NOT_PARSED",
-        "Матч найден, но расширенная статистика OpenDota ещё не готова.",
-        { httpStatus: 503, retryable: false },
-      );
-    }
-    return parsed.data;
+  void _options;
+  return retiredSource(matchIdInput);
 }

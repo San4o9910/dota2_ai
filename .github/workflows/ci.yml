@@ -48,6 +48,12 @@ jobs:
       - name: Build Worker package
         run: npm run build
 
+      - name: Verify standalone portal in desktop and mobile browsers
+        run: |
+          npm install --prefix "$RUNNER_TEMP/narma-browser" --no-package-lock --ignore-scripts playwright@1.62.1
+          node "$RUNNER_TEMP/narma-browser/node_modules/playwright/cli.js" install --with-deps chromium
+          PLAYWRIGHT_NODE_MODULES="$RUNNER_TEMP/narma-browser/node_modules" node scripts/check-portal-ui.mjs
+
       - name: Verify package contract and build-dependent tests
         run: npm run verify:package
 

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101511"><meta name="robots" content="noindex,nofollow">
+  <title>NARMA VISION — разбор твоей игры</title>
+  <link rel="stylesheet" href="/assets/portal.css">
+  <script type="module" src="/assets/portal.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">К содержанию</a>
+<header class="top"><a class="brand" href="/" aria-label="NARMA VISION, главная"><span class="brand-symbol" aria-hidden="true">N</span><span>NARMA <b>VISION</b><small>ТВОЯ ИГРА. ТВОИ РЕШЕНИЯ.</small></span></a><span class="pilot">Тестовый доступ</span><button id="logout" class="quiet" hidden>Выйти</button></header>
+<div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+<main id="main">
+  <section id="auth" class="auth-panel surface" hidden>
+    <p class="eyebrow">Личный кабинет</p><h1 id="auth-title">Вход в NARMA VISION</h1>
+    <p id="auth-copy" class="muted">Войди, чтобы загрузить запись и посмотреть свои разборы.</p>
+    <form id="auth-form">
+      <label for="email">Email</label><input id="email" type="email" autocomplete="username" required maxlength="254">
+      <label for="password">Пароль</label><input id="password" type="password" autocomplete="current-password" required minlength="12" maxlength="256">
+      <p id="password-help" class="help" hidden>Придумай пароль от 12 символов. Здесь отдельный аккаунт NARMA VISION.</p>
+      <button class="primary" id="auth-submit" type="submit">Войти</button>
+    </form><p id="setup-help" class="help" hidden>Для первого входа открой личную ссылку настройки из чата. Она позволит создать аккаунт владельца.</p>
+  </section>
+  <div id="workspace" class="workspace" hidden>
+    <aside class="sidebar"><p class="eyebrow">Рабочее пространство</p><nav aria-label="Разделы"><button data-tab="review" aria-current="page"><span aria-hidden="true">▻</span>Разбор видео</button><button data-tab="player"><span aria-hidden="true">◎</span>Мой игрок</button><button data-tab="account"><span aria-hidden="true">⚙</span>Аккаунт</button></nav><div class="sidebar-note"><span class="status-dot" aria-hidden="true"></span><span id="worker-status">Проверяем обработчик…</span></div></aside>
+    <div class="content">
+      <section id="review" class="tab-section">
+        <div class="page-heading"><p class="eyebrow">Из записи — к конкретному решению</p><h1>Разбери свой эпизод</h1><p class="muted">Драка, выход на линию или смерть. Загрузи запись и вернись к моменту, который хочешь понять.</p></div>
+        <div id="profile-reminder" class="callout" hidden><strong>Сначала закрепи своего игрока</strong><p>Загрузи .dem и укажи ник из матча. Разборы будут связаны с одним игроком.</p><button class="secondary" data-tab="player">Закрепить игрока</button></div>
+        <div class="review-grid">
+          <section class="surface upload-card" aria-labelledby="upload-heading"><div class="card-heading"><h2 id="upload-heading">Новый разбор</h2><span class="tag" id="bound-nickname">Игрок не выбран</span></div>
+            <form id="video-form"><label class="file-area" for="video-file"><span class="upload-symbol" aria-hidden="true">↑</span><strong>Выбрать видео</strong><span>MP4, MKV, WebM или MOV · до 2 ГБ</span><input id="video-file" type="file" accept=".mp4,.mkv,.webm,.mov" required></label><p id="frame-limit" class="help">До 3 600 кадров: 2 минуты при 30 FPS или 1 минута при 60 FPS.</p><p class="help">Обрабатывается каждый кадр. Сохрани читаемыми миникарту, предметы и способности.</p><button class="primary" id="video-submit" type="submit" disabled>Загрузить и разобрать</button><progress id="video-progress" max="100" value="0" aria-label="Загрузка видео" hidden></progress><p id="upload-status" class="help" role="status"></p></form>
+          </section>
+          <section class="surface history-card" aria-labelledby="history-heading"><div class="card-heading"><h2 id="history-heading">Мои записи</h2><button id="refresh" class="quiet">Обновить</button></div><div id="history"><p class="empty">Здесь появятся твои записи.</p></div></section>
+        </div>
+        <section id="result" class="surface result-card" hidden aria-labelledby="result-title"><div class="card-heading"><div><p class="eyebrow">Результат</p><h2 id="result-title"></h2></div><span id="result-state" class="tag"></span></div><video id="playback" controls playsinline preload="metadata"></video><p id="result-coverage" class="help" role="status"></p><p class="help">Нажми на время рядом с наблюдением, чтобы открыть кадр. Выводы относятся к видимому в записи; события вне камеры требуют проверки.</p><div id="findings"></div><button id="more" class="secondary" hidden>Показать следующие эпизоды</button></section>
+      </section>
+      <section id="player" class="tab-section" hidden><div class="page-heading"><p class="eyebrow">Один аккаунт — один игрок</p><h1>Мой игрок</h1><p class="muted">Ник на экране помогает узнать игрока. Постоянная привязка сохраняется по Steam ID из реплея.</p></div><section class="surface narrow"><div id="player-summary"></div><form id="replay-form"><label for="nickname">Ник в этом матче</label><input id="nickname" maxlength="128" placeholder="papa_prima" autocomplete="off" required><label for="replay-file">Реплей из Dota 2</label><input id="replay-file" type="file" accept=".dem" required><p class="help">Распакованный .dem, до 512 МБ. Прочитаем Match ID и состав игроков прямо из файла. Это закрепление игрока; видео для разбора загружается отдельно.</p><button class="primary" id="replay-submit" type="submit">Прочитать реплей и закрепить игрока</button><progress id="replay-progress" value="0" max="100" aria-label="Загрузка реплея" hidden></progress><p id="replay-status" class="help" role="status"></p></form></section></section>
+      <section id="account" class="tab-section" hidden><div class="page-heading"><p class="eyebrow">Личный кабинет</p><h1>Аккаунт</h1><p class="muted" id="account-email"></p></div><section class="surface narrow"><h2>Изменить пароль</h2><form id="password-form"><label for="current-password">Текущий пароль</label><input id="current-password" type="password" autocomplete="current-password" required maxlength="256"><label for="new-password">Новый пароль</label><input id="new-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256"><p class="help">Не менее 12 символов. После смены пароля нужно войти заново.</p><button class="secondary" type="submit">Сохранить пароль</button></form></section><section class="surface narrow"><h2>Тестовый режим</h2><p class="muted">Один игрок, короткие видео и общий лимит обработки. Когда лимит закончится, новые запросы остановятся, а сохранённые результаты останутся доступны.</p><p class="muted">Автоматический разбор полного .dem пока не запущен.</p></section></section>
+    </div>
+  </div>
+  <p id="loading" class="loading" role="status">Открываем личный кабинет…</p>
+</main><footer>NARMA VISION <span>Сначала наблюдение. Потом вывод.</span></footer>
+</body></html>

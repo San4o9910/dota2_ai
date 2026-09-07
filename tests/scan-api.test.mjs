@@ -78,7 +78,7 @@ function allowRateLimiter(overrides = {}) {
 
 function handlerDependencies(overrides = {}) {
   return {
-    cache: memoryCache(),
+    cache: memoryCache(normalizeOpenDotaMatch(OpenDotaMatchSchema.parse(makeOpenDotaMatch()))),
     resolveTarget:async input=>({matchId:input.matchId,playerSlot:0,accountId:1000,heroId:1,nickname:"Test player"}),
     rateLimiter: allowRateLimiter(),
     rateLimitSecret: RATE_SECRET,
@@ -241,34 +241,24 @@ test("connecting identity comes only from CF-Connecting-IP and is HMACed", async
   assert.equal((await bodyOf(noCloudflareIdentity)).error.code, "SCAN_UNAVAILABLE");
 });
 
-test("account-bound Scan fetches the fixed OpenDota route and returns one target preview", async () => {
-  const upstream = makeOpenDotaMatch();
-  upstream.players[0].kills = null;
-  let providerRequest;
-  const cache = memoryCache();
-  const response = await handleScanPost(request({ matchId: MATCH_ID }), handlerDependencies({
-    cache,
-    fetch: async (input, init) => {
-      providerRequest = { url: String(input), init };
-      return jsonResponse(upstream);
-    },
+test("archived account-bound preview remains scoped and never contacts a provider", async () => {
+  const archived = makeOpenDotaMatch(); archived.players[0].kills = null;
+  let calls = 0;
+  const cache = memoryCache(normalizeOpenDotaMatch(OpenDotaMatchSchema.parse(archived)));
+  const response = await handleScanPost(request({ matchId: MATCH_ID }), handlerDependencies({ cache,
+    fetch: async () => { calls++; assert.fail("network call"); },
   }));
   const body = await bodyOf(response);
-
   assert.equal(response.status, 200);
-  assert.equal(providerRequest.url, `https://api.opendota.com/api/matches/${MATCH_ID}`);
-  assert.equal(providerRequest.init.method, "GET");
-  assert.equal(providerRequest.init.redirect, "error");
+  assert.equal(calls, 0);
   assert.deepEqual(Object.keys(body).sort(), ["preview", "status"]);
   assert.equal(body.status, "ready");
-  assert.equal(body.preview.playerSlot,0);
-  assert.equal(body.preview.matchId,MATCH_ID);
-  assert.equal(body.players,undefined);
-  const serialized = JSON.stringify(body);
-  for (const forbidden of ["personaname", "account_id", "SECRET PLAYER", "SECRET CHAT", "chat"]) {
-    assert.equal(serialized.includes(forbidden), false, `response leaked ${forbidden}`);
-  }
-  assert.equal(cache.puts.length, 1);
+  assert.equal(body.preview.playerSlot, 0);
+  assert.equal(body.preview.matchId, MATCH_ID);
+  assert.equal(body.players, undefined);
+  for (const forbidden of ["personaname", "account_id", "SECRET PLAYER", "SECRET CHAT", "chat"])
+    assert.equal(JSON.stringify(body).includes(forbidden), false);
+  assert.equal(cache.puts.length, 0);
 });
 
 test("repeated scans return the same deterministic target preview", async () => {
@@ -316,9 +306,6 @@ test("storage and rate-limit failures become safe product 503 errors", async () 
     handlerDependencies({
       cache: { async get() { throw new Error(sensitive); }, async put() {} },
     }),
-    handlerDependencies({
-      cache: { async get() { return null; }, async put() { throw new Error(sensitive); } },
-    }),
   ];
   for (const dependencies of failures) {
     const response = await handleScanPost(request({ matchId: MATCH_ID }), dependencies);
@@ -330,23 +317,17 @@ test("storage and rate-limit failures become safe product 503 errors", async () 
   }
 });
 
-test("OpenDota 404 remains 404 while provider auth/status failures are safe 503", async () => {
-  const missing = await handleScanPost(request({ matchId: MATCH_ID }), handlerDependencies({
-    fetch: async () => new Response(null, { status: 404 }),
+test("uncached historical Scan is permanently retired without a network request", async () => {
+  let calls = 0;
+  const response = await handleScanPost(request({ matchId: MATCH_ID }), handlerDependencies({ cache: memoryCache(),
+    fetch: async () => { calls++; assert.fail("network call"); },
   }));
-  assert.equal(missing.status, 404);
-  assert.equal((await bodyOf(missing)).error.code, "OPENDOTA_MATCH_NOT_FOUND");
-
-  for (const status of [401, 402, 429, 500]) {
-    const failed = await handleScanPost(request({ matchId: MATCH_ID }), handlerDependencies({
-      fetch: async () => new Response("provider secret body", { status }),
-    }));
-    const body = await bodyOf(failed);
-    assert.equal(failed.status, 503, `provider ${status} must be a product 503`);
-    assert.equal(["OPENDOTA_INVALID_RESPONSE", "OPENDOTA_RATE_LIMITED", "OPENDOTA_UNAVAILABLE"].includes(body.error.code), true);
-    assert.equal(JSON.stringify(body).includes("provider secret body"), false);
-    assert.notEqual(body.error.code, "UNAUTHORIZED");
-  }
+  assert.equal(response.status, 410);
+  const body = await bodyOf(response);
+  assert.equal(body.error.code, "SOURCE_RETIRED");
+  assert.equal(body.error.retryable, false);
+  assert.equal(response.headers.get("Retry-After"), null);
+  assert.equal(calls, 0);
 });
 
 test("D1 cache validates schema, match identity and canonical hash", async () => {

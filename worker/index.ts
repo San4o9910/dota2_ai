@@ -6,6 +6,7 @@ import {
   isImageOptimizationPath,
 } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { retiredSiteResponse } from "../config/standalone-destination.mjs";
 
 interface Env {
   ASSETS: Fetcher;
@@ -32,6 +33,8 @@ interface ExecutionContext {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const retired = retiredSiteResponse(request);
+    if (retired) return retired;
     const url = new URL(request.url);
 
     if (isImageOptimizationPath(url.pathname)) {

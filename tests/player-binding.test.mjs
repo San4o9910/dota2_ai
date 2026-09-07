@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test,{after} from "node:test";
 import {database} from "./sqlite-d1.mjs";
-import {createAnalysisVite,makeOpenDotaMatch,makeReport,jsonResponse} from "./analysis-test-helpers.mjs";
+import {createAnalysisVite,makeOpenDotaMatch,makeReport} from "./analysis-test-helpers.mjs";
 import {parseReplayEpilogue,replayPlayerIdentity} from "../ops/replay-adapter.mjs";
 const vite=await createAnalysisVite();after(()=>vite.close());
 const identity=await vite.ssrLoadModule("/lib/dota/player-identity.ts");
@@ -14,6 +14,10 @@ function fixture(matchId="8963624400") {
   const raw=makeOpenDotaMatch({match_id:Number(matchId)});
   raw.players.forEach((p,i)=>{p.account_id=1000+i;p.personaname=`Player_${i}`;});
   return raw;
+}
+function seedReplay(sqlite, raw, user="owner") {
+  sqlite.prepare("INSERT INTO replay_uploads(id,user_id,filename,object_key,size_bytes,state,match_id,identity_payload) VALUES (?,?,?, ?,100,'ready',?,?)")
+    .run(crypto.randomUUID(),user,"fixture.dem",crypto.randomUUID(),String(raw.match_id),JSON.stringify(identity.extractIdentityRoster(raw.players)));
 }
 function addUser(sqlite,user="owner") {sqlite.prepare("INSERT INTO users(id,display_name) VALUES (?,?)").run(user,"Test");}
 test("nickname resolution ignores case but fails closed on duplicates, missing or hidden identity",()=>{
@@ -28,7 +32,8 @@ test("nickname resolution ignores case but fails closed on duplicates, missing o
 });
 test("two first bindings race: exactly one player wins and identity cannot be switched or unlinked",async()=>{
   const {sqlite,d1}=await database();addUser(sqlite);const store=new D1PlayerBindingStore(d1);
-  const fetch=async()=>jsonResponse(fixture());
+  seedReplay(sqlite,fixture());
+  const fetch=async()=>assert.fail("remote lookup is retired");
   const attempts=await Promise.allSettled([store.resolve("owner",{matchId:"8963624400",nickname:"Player_0"},{fetch}),store.resolve("owner",{matchId:"8963624400",nickname:"Player_1"},{fetch})]);
   assert.equal(attempts.filter(r=>r.status==="fulfilled").length,1);
   assert.equal(attempts.find(r=>r.status==="rejected").reason.code,"DOTA_PROFILE_LOCKED");
@@ -43,12 +48,15 @@ test("two first bindings race: exactly one player wins and identity cannot be sw
 });
 test("renamed player is found by account ID; other matches fail before reserving a credit",async()=>{
   const {sqlite,d1}=await database();addUser(sqlite);const store=new D1PlayerBindingStore(d1);
-  await store.resolve("owner",{matchId:"8963624400",nickname:"Player_0"},{fetch:async()=>jsonResponse(fixture())});
+  seedReplay(sqlite,fixture());
+  await store.resolve("owner",{matchId:"8963624400",nickname:"Player_0"});
   const raw=fixture("8963624401");raw.players[0].personaname="New Nick";
-  const result=await store.resolve("owner",{matchId:"8963624401"},{fetch:async()=>jsonResponse(raw)});
+  seedReplay(sqlite,raw);
+  const result=await store.resolve("owner",{matchId:"8963624401"});
   assert.equal(result.accountId,1000);assert.equal(result.playerSlot,0);
   const missing=fixture("8963624402");missing.players[0].account_id=2000;
-  await assert.rejects(store.resolve("owner",{matchId:"8963624402"},{fetch:async()=>jsonResponse(missing)}),error=>error.code==="DOTA_PLAYER_NOT_FOUND");
+  seedReplay(sqlite,missing);
+  await assert.rejects(store.resolve("owner",{matchId:"8963624402"}),error=>error.code==="DOTA_PLAYER_NOT_FOUND");
   await assert.rejects(new D1AnalysisStore(d1).create({userId:"owner",matchId:"8963624400",playerSlot:1,idempotencyKey:"forged:slot"}),error=>error.code==="DOTA_TARGET_MISMATCH");
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM analysis_jobs").get().n,0);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM entitlement_ledger").get().n,0);

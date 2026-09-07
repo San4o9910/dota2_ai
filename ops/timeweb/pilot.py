@@ -161,6 +161,26 @@ def ensure_https(ssh,release,hostname,host):
         if error.code!=401:
             raise CheckError('https_auth_check_failed') from None
     event('https_public_endpoint',origin='https://'+hostname,certificate_verified=True,anonymous_api_status=401)
+    portal_origin='https://'+hostname
+    for path,signature in (('/',b'NARMA VISION'),('/assets/portal.js',b'/api/session'),('/assets/portal.css',b'--surface')):
+        with opener.open(portal_origin+path,timeout=20) as response:
+            content=response.read(256*1024)
+            if signature not in content or b'opendota' in content.lower():
+                raise CheckError('standalone_portal_asset_invalid')
+    with opener.open(portal_origin+'/api/session',timeout=20) as response:
+        session=json.loads(response.read(8192))
+        if session.get('authenticated') is not False or session.get('user') is not None:
+            raise CheckError('standalone_portal_session_invalid')
+    for request,expected in (
+        (urllib.request.Request(portal_origin+'/api/videos'),401),
+        (urllib.request.Request(portal_origin+'/api/auth/login',method='POST',data=b'{}',headers={'Origin':'https://invalid.example','Content-Type':'application/json'}),403)):
+        try:
+            opener.open(request,timeout=20)
+            raise CheckError('standalone_portal_access_check_failed')
+        except urllib.error.HTTPError as error:
+            if error.code!=expected:
+                raise CheckError('standalone_portal_access_check_failed') from None
+    event('standalone_portal_ready',origin=portal_origin,anonymous_video_status=401,cross_origin_mutation_status=403,setup_required=session.get('setup_required'))
 
 
 def selected_project(cloud):

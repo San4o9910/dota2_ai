@@ -14,15 +14,20 @@ limitations recorded in `ops/timeweb/README.md` on September 6.
   port; the API binds to 127.0.0.1:8080.
 - HTTPS origin: `https://narma-72-56-98-68.sslip.io`. The free DNS service is an
   external dependency and can later be replaced by an owner-controlled domain.
-- The existing Sites UI, ChatGPT sign-in, D1 accounts and R2 replay uploads stay
-  in place. Video processing, video storage, queue and monetary ledger use the VPS.
-  This milestone is not a complete migration of the website/account database.
+- The independent browser portal now runs in the FastAPI container on the VPS.
+  New portal accounts, password hashes, sessions, locked player profiles, video
+  queue and monetary ledger use PostgreSQL. The old Sites deployment redirects
+  browser pages and returns 410 for old APIs. It does not forward identity or
+  private requests to the new server; old D1/R2 history remains archived there.
 
 ## HTTPS
 
 Host nginx forwards `/v1/` to the private API without injecting authentication.
-Anonymous requests return 401. The Sites server supplies the integration token
-and an account-derived owner ID; browsers never receive the service token.
+Anonymous `/v1/` requests return 401. The independent browser uses a distinct
+Secure/HttpOnly/SameSite=Strict session cookie; the server derives its owner ID
+from PostgreSQL. Browser requests cannot supply the target player or owner.
+Every browser mutation validates the fixed HTTPS Origin. The private service
+token is never delivered to the browser.
 The certificate was issued with an isolated staging check, verified against
 trusted roots and the actual served certificate, and tested for renewal.
 `narma-https-renew.timer` checks hourly with randomized delay. Certificates and
@@ -105,8 +110,10 @@ Failed verification removes only that run's newly created object pair. Automatic
 storage expansion is required to be disabled; any Terraform correction permits
 only that single in-place flag change.
 
-These backups cover the PostgreSQL video module. They do not back up VPS media,
-the Sites/D1 account database, R2 replay files, or private API keys.
+These backups cover PostgreSQL video and portal account tables. The restore
+checker verifies the additional five portal tables after migration 004. They
+do not back up VPS media, archived Sites/D1 accounts, archived R2 replay files,
+or private API keys.
 
 For an actual recovery: stop the worker; restore into a new PostgreSQL 17 database
 with `pg_restore --no-owner --no-acl --single-transaction --exit-on-error`; disable
@@ -141,8 +148,36 @@ budget availability are separate signals shown by the video API.
 
 ## Remaining production gates
 
-Real gameplay quality review; Dota-engine `.dem` rendering; migration of the
-remaining web/auth/account storage if fully standalone hosting is required;
-media and D1/R2 recovery; external alert delivery; measured full-match latency
+Real gameplay quality review; Dota-engine `.dem` rendering; explicit import of
+archived history if needed; media and archived D1/R2 recovery; external alert delivery; measured full-match latency
 and cost. Payments and the old OpenDota analysis flags stay off. A functioning
 video pilot does not establish a production-ready full-match coaching platform.
+
+## Independent portal and OpenDota retirement
+
+The homepage is `https://narma-72-56-98-68.sslip.io`. It serves local HTML/CSS/JS
+without ChatGPT login or remote frontend hosting. The owner creates a separate
+email/password account through a 256-bit invitation in a URL fragment. Only
+the SHA-256 and fixed 24-hour expiry enter deployment source/configuration.
+Account creation is atomic and limited to one owner; the invitation cannot
+create another account after setup. Never put the plaintext invitation in logs,
+query strings, source, or screenshots. Email here is a login identifier, not a
+verified email address; email recovery is not enabled.
+
+Passwords use salted scrypt with at most two concurrent KDF operations. Session
+tokens are stored only as hashes. Logout invalidates the session; password
+change invalidates every session. Login/password-change locking prevents an
+old-password request from creating a new session after rotation. Database rate
+limits cover login, setup and password attempts.
+
+The `.dem` profile upload is a bounded raw stream, up to 512 MiB, outside the
+static directory. Its Source2 footer is read locally; the selected Steam ID is
+locked transactionally. Other roster identities are not returned or persisted.
+The temporary replay is removed after metadata extraction, including failures.
+Uploading a replay establishes the chosen analysis subject, not proof that the
+user owns the Steam account. There is no automatic whole-match rendering yet.
+
+Both physical OpenDota network implementations were removed. Historical fixture
+provenance and parsers remain for regression/archival data; retired live fetch
+functions return SOURCE_RETIRED without making a request. The standalone UI
+contains no match-ID search, provider selector or OpenDota flow.

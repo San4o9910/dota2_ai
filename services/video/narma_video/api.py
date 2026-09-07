@@ -213,3 +213,34 @@ def delete_video(job_id: UUID, owner: Owner):
     with database() as connection:
         connection.execute("UPDATE video_jobs SET storage_deleted_at=now() WHERE id=%s AND state='deleted'",(job_id,))
     return {"deleted": True}
+
+# Browser entrypoint has its own cookie/session boundary and never accepts the
+# service's owner header as an end-user identity.
+from .web import attach_web
+attach_web(app)
+
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+STATIC_ROOT=Path(__file__).parent/'static'
+app.mount('/assets',StaticFiles(directory=STATIC_ROOT),name='portal-assets')
+
+@app.get('/')
+@app.get('/setup')
+@app.get('/videos')
+@app.get('/replays')
+@app.get('/account')
+def portal_page():
+    return FileResponse(STATIC_ROOT/'index.html',media_type='text/html',headers={'Cache-Control':'no-store'})
+
+@app.middleware('http')
+async def portal_headers(request: Request,call_next):
+    response=await call_next(request)
+    response.headers['X-Content-Type-Options']='nosniff'
+    response.headers['X-Frame-Options']='DENY'
+    response.headers['Referrer-Policy']='no-referrer'
+    response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    response.headers['Permissions-Policy']='camera=(), microphone=(), geolocation=()'
+    response.headers['Strict-Transport-Security']='max-age=31536000'
+    if request.url.path.startswith('/assets/'):
+        response.headers['Cache-Control']='no-cache'
+    return response

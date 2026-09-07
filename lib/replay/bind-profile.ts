@@ -12,7 +12,7 @@ export async function bindProfileFromReplay(db: D1Database, bucket: R2Bucket, us
   if (!["uploaded", "processing", "ready", "failed"].includes(upload.state) || upload.failureCode === "DELETE_PENDING")
     throw playerError("DOTA_REPLAY_NOT_UPLOADED", "Дождитесь завершения загрузки реплея.");
   if (!upload.filename.toLowerCase().endsWith(".dem"))
-    throw playerError("DOTA_REPLAY_COMPRESSED", "Для привязки без OpenDota загрузите распакованный файл .dem. Файл .dem.bz2 сохранён для полного разбора.");
+    throw playerError("DOTA_REPLAY_COMPRESSED", "Для привязки загрузите распакованный файл .dem. Файл .dem.bz2 сохранён для полного разбора.");
   const object = await bucket.head(upload.objectKey);
   if (!object || object.size !== upload.sizeBytes)
     throw playerError("DOTA_REPLAY_NOT_UPLOADED", "Файл ещё не загружен полностью. Повторите загрузку.");
@@ -24,7 +24,7 @@ export async function bindProfileFromReplay(db: D1Database, bucket: R2Bucket, us
       return new Uint8Array(await range.arrayBuffer());
     });
   } catch {
-    throw playerError("DOTA_REPLAY_METADATA_UNAVAILABLE", "Не удалось прочитать состав игроков из этого .dem. Файл сохранён; попробуйте другой реплей или OpenDota.");
+    throw playerError("DOTA_REPLAY_METADATA_UNAVAILABLE", "Не удалось прочитать состав игроков из этого .dem. Файл сохранён; попробуйте другой реплей.");
   }
   if (metadata.matchId !== input.matchId)
     throw playerError("DOTA_REPLAY_MATCH_MISMATCH", "Match ID не совпадает с матчем внутри выбранного реплея.");

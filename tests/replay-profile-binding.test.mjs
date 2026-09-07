@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test,{after} from "node:test";
 import {createServer} from "vite";
-import {analysisRoot,jsonResponse,makeOpenDotaMatch} from "./analysis-test-helpers.mjs";
+import {analysisRoot,makeOpenDotaMatch} from "./analysis-test-helpers.mjs";
 import {database} from "./sqlite-d1.mjs";
 import {metadataFixture} from "./demo-metadata-fixture.mjs";
 const vite=await createServer({appType:"custom",configFile:false,root:analysisRoot,resolve:{alias:{"@":analysisRoot}},server:{middlewareMode:true},plugins:[{
@@ -28,7 +28,7 @@ test("owned completed upload binds profile without OpenDota, a slot, gameplay st
     assert.equal(result.profile.accountId,1000);assert.equal(result.target,null);assert.equal(result.status,"awaiting_replay_parse");
     assert.ok(!JSON.stringify(result).includes("Player_1"));assert.equal(db.reads.length,3);noAnalysis(db.sqlite);
     assert.equal(db.sqlite.prepare("SELECT state FROM replay_uploads").get().state,"uploaded");
-    await assert.rejects(db.store.resolve("owner",{matchId}),e=>e.code==="OPENDOTA_UNAVAILABLE");noAnalysis(db.sqlite);
+    await assert.rejects(db.store.resolve("owner",{matchId}),e=>e.code==="DOTA_REPLAY_REQUIRED");noAnalysis(db.sqlite);
   }finally{globalThis.fetch=original;db.sqlite.close();}
 });
 test("only profile endpoint accepts replay IDs; caller-supplied identities and slots stay forbidden",()=>{
@@ -48,13 +48,15 @@ test("foreign, deleted, unfinished, compressed and wrong-match uploads never bin
     }finally{db.sqlite.close();}
   }
 });
-test("immutable binding wins a race between replay metadata and OpenDota; renamed nick cannot change the ID",async()=>{
+test("immutable binding wins a race between two owned replay requests; renamed nick cannot change the ID",async()=>{
   const db=await setup();try{
-    const raw=makeOpenDotaMatch();raw.players.forEach((p,i)=>{p.account_id=1000+i;p.personaname=`Player_${i}`;});
-    const results=await Promise.allSettled([bindProfileFromReplay(db.d1,db.bucket,"owner",input),db.store.resolve("owner",{matchId,nickname:"Player_1"},{fetch:async()=>jsonResponse(raw)})]);
-    assert.equal(results.filter(r=>r.status==="fulfilled").length,1);
-    assert.equal(results.find(r=>r.status==="rejected").reason.code,"DOTA_PROFILE_LOCKED");
+    const results=await Promise.allSettled([bindProfileFromReplay(db.d1,db.bucket,"owner",input),bindProfileFromReplay(db.d1,db.bucket,"owner",{...input,nickname:"Player_1"})]);
+    const fulfilled=results.filter(r=>r.status==="fulfilled");
+    assert.ok(fulfilled.length>=1);
+    for(const rejected of results.filter(r=>r.status==="rejected"))assert.equal(rejected.reason.code,"DOTA_PROFILE_LOCKED");
     const profile=await db.store.get("owner");
+    for(const result of fulfilled)assert.equal(result.value.profile.accountId,profile.accountId);
+    assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM dota_player_profiles").get().n,1);
     const result=await bindProfileFromReplay(db.d1,db.bucket,"owner",{...input,nickname:"Player_8"});
     assert.equal(result.profile.accountId,profile.accountId);
   }finally{db.sqlite.close();}

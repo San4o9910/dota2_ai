@@ -1,5 +1,6 @@
 export type AnalysisErrorCode =
   | "ANALYSIS_CANCELLED"
+  | "SOURCE_RETIRED"
   | "INVALID_MATCH_ID"
   | "INVALID_PLAYER_SLOT"
   | "SCAN_PREVIEW_UNAVAILABLE"

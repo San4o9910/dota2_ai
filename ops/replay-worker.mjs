@@ -50,10 +50,7 @@ async function processJob(job){
     const compiled=await parse(dem,true);const chunks=[];let bytes=0;
     for await(const chunk of Readable.fromWeb(compiled.body)){bytes+=chunk.length;if(bytes>8*1024*1024)throw new Error("PARSER_RESULT_TOO_LARGE");chunks.push(chunk);}
     const match=assembleReplayMatch(metadata,JSON.parse(Buffer.concat(chunks).toString("utf8")));
-    try {
-      const metadataResponse=await fetch(`https://api.opendota.com/api/matches/${match.match_id}`,{redirect:"error",signal:AbortSignal.timeout(10000)});
-      if(metadataResponse.ok){let size=0;const pieces=[];for await(const chunk of Readable.fromWeb(metadataResponse.body)){size+=chunk.length;if(size>8*1024*1024)throw new Error("METADATA_TOO_LARGE");pieces.push(chunk);}const publicMatch=JSON.parse(Buffer.concat(pieces).toString("utf8"));if(String(publicMatch.match_id)===match.match_id&&publicMatch.radiant_win===match.radiant_win&&Math.abs(publicMatch.duration-match.duration)<=10){match.patch=publicMatch.patch;match.start_time=publicMatch.start_time;}}
-    }catch{/* A missing public match never guesses the replay patch. */}
+    // Patch and timestamps come only from the uploaded replay.
     await api(`/api/replay-worker/${job.id}`,{method:"POST",headers:{...lease,"Content-Type":"application/json"},body:JSON.stringify({match})});
     console.log(JSON.stringify({event:"replay_ready",id:job.id,matchId:match.match_id}));
   }catch(error){console.error(JSON.stringify({event:"replay_failed",id:job.id,code:error instanceof Error?error.message.slice(0,80):"FAILED"}));if(error instanceof Error && /^(REPLAY_(INCOMPLETE|PLAYERS_INCOMPLETE|SLOTS_INCOMPLETE|HERO_CHANGED|EPILOGUE_INVALID|TOO_LARGE)|BZIP2_FAILED|SITE_4(00|13|15))$/.test(error.message))await api(`/api/replay-worker/${job.id}`,{method:"DELETE",headers:lease}).catch(()=>{});
