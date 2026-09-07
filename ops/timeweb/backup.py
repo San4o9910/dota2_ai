@@ -20,12 +20,12 @@ PROJECT=2655641
 PRESET=4621
 DESCRIPTION='NARMA PostgreSQL backups VPS 9037783 project 2655641'
 PREFIX='postgres/9037783/'
-MAX_DUMP=1024**3
+MAX_DUMP=1024**3-16*1024**2  # Seven retained copies + next copy + manifests fit within 8 GiB.
 
 def bucket(cloud):
     plans=cloud.list('/api/v1/presets/storages','storages_presets')
     plan=next((p for p in plans if p.get('id')==PRESET),None)
-    if not plan or type(plan.get('price')) not in (int,float) or not 0<plan['price']<=79 or plan.get('storage_class')!='hot':
+    if not plan or type(plan.get('price')) not in (int,float) or not 0<plan['price']<=79 or plan.get('storage_class')!='standard' or plan.get('disk')!=10240:
         event('backup_plan_unverified',plan={k:(plan or {}).get(k) for k in ('id','price','disk','storage_class')})
         raise CheckError('backup_plan_changed')
     existing=cloud.list('/api/v1/storages/buckets','buckets')
@@ -42,11 +42,13 @@ def bucket(cloud):
         event('backup_bucket_created',bucket_id=result['id'],month_equivalent_rub=plan['price'])
     for attempt in range(12):
         result=cloud.call('GET',f"/api/v1/storages/buckets/{int(result['id'])}")['bucket']
-        if result.get('access_key') and result.get('secret_key'):
+        if result.get('access_key') and result.get('secret_key') and result.get('status')=='created':
             break
         time.sleep(5)
     if result.get('project_id')!=PROJECT or result.get('preset_id')!=PRESET or result.get('type')!='private':
         raise CheckError('backup_bucket_configuration_mismatch')
+    if result.get('status')!='created':
+        raise CheckError('backup_bucket_not_ready')
     if result.get('is_allow_auto_upgrade') is not False:
         event('backup_auto_upgrade_status',bucket_id=result['id'],disabled=False)
         raise CheckError('backup_auto_upgrade_must_be_disabled')
@@ -90,7 +92,7 @@ def backup(cloud,ssh,temporary):
     def bound(): resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_DUMP,MAX_DUMP))
     remote='cd /opt/narma/current/services/video && docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env exec -T db pg_dump --username=narma --dbname=narma --format=custom --compress=gzip:6 --lock-wait-timeout=5s --no-password'
     with dump.open('wb') as output:
-        result=subprocess.run(ssh+[remote],stdout=output,stderr=subprocess.PIPE,timeout=600,preexec_fn=bound)
+        result=subprocess.run(ssh+[remote],stdout=output,stderr=subprocess.DEVNULL,timeout=600,preexec_fn=bound)
     if result.returncode or not 16<dump.stat().st_size<=MAX_DUMP:
         raise CheckError('backup_dump_failed_or_oversized')
     with dump.open('rb') as file: digest=hashlib.file_digest(file,'sha256').hexdigest()
@@ -108,15 +110,36 @@ def backup(cloud,ssh,temporary):
     if sum(o['Size'] for o in objects)+dump.stat().st_size+4096>8*1024**3:
         raise CheckError('backup_capacity_limit')
     key=PREFIX+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid4().hex+'.dump'
-    client.upload_file(str(dump),name,key,ExtraArgs={'ContentType':'application/octet-stream','Metadata':{'sha256':digest}})
-    restored=temporary/'downloaded.dump'
-    client.download_file(name,key,str(restored))
-    with restored.open('rb') as file:
-        if hashlib.file_digest(file,'sha256').hexdigest()!=digest: raise CheckError('backup_download_hash_mismatch')
-    verified=verify_restore(restored)
-    manifest={'sha256':digest,'bytes':dump.stat().st_size,'source_vm':SERVER,'created_at':datetime.now(timezone.utc).isoformat(),
-        'restore_verified':True,'schema':verified,'restore_budget_action':'disable until provider spend reconciled'}
-    client.put_object(Bucket=name,Key=key+'.json',Body=json.dumps(manifest).encode(),ContentType='application/json')
+    verified_success=False
+    try:
+        # Single PUT avoids abandoned multipart uploads; the dump cap is below S3's limit.
+        with dump.open('rb') as file:
+            client.put_object(Bucket=name,Key=key,Body=file,ContentLength=dump.stat().st_size,
+                ContentType='application/octet-stream',Metadata={'sha256':digest})
+        restored=temporary/'downloaded.dump'
+        response=client.get_object(Bucket=name,Key=key)
+        body=response['Body']; downloaded=0;download_hash=hashlib.sha256()
+        try:
+            if response['ContentLength']!=dump.stat().st_size:
+                raise CheckError('backup_download_size_mismatch')
+            with restored.open('wb') as file:
+                while chunk:=body.read(1024*1024):
+                    downloaded+=len(chunk)
+                    if downloaded>dump.stat().st_size: raise CheckError('backup_download_oversized')
+                    file.write(chunk);download_hash.update(chunk)
+        finally: body.close()
+        if downloaded!=dump.stat().st_size or download_hash.hexdigest()!=digest:
+            raise CheckError('backup_download_hash_mismatch')
+        verified=verify_restore(restored)
+        manifest={'sha256':digest,'bytes':dump.stat().st_size,'source_vm':SERVER,'created_at':datetime.now(timezone.utc).isoformat(),
+            'restore_verified':True,'schema':verified,'restore_budget_action':'disable until provider spend reconciled'}
+        client.put_object(Bucket=name,Key=key+'.json',Body=json.dumps(manifest).encode(),ContentType='application/json')
+        verified_success=True
+    finally:
+        if not verified_success:
+            try:
+                client.delete_object(Bucket=name,Key=key);client.delete_object(Bucket=name,Key=key+'.json')
+            except Exception: event('backup_failed_object_cleanup_unconfirmed')
     # Prune only this script's pairs, after the new upload/download/restore succeeds.
     previous=sorted([o['Key'] for o in objects if re.fullmatch(re.escape(PREFIX)+r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{32}\.dump',o['Key'])
         and any(m['Key']==o['Key']+'.json' for m in objects)])

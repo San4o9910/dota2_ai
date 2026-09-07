@@ -40,6 +40,15 @@ for row in rows:
  u=row['usage'] or {}; clean={k:v for k,v in u.items() if k.startswith('total_') and (type(v) is int or v is None)}
  for k in ('input_tokens_by_modality','output_tokens_by_modality','cached_tokens_by_modality','tool_use_tokens_by_modality','grounding_tool_count'):
   if isinstance(u.get(k),list): clean[k]=[{a:v for a,v in item.items() if a in ('tokens','count','modality','type') and (type(v) is int or v in ('text','image','audio','video','document','google_search','google_maps','retrieval'))} for item in u[k] if isinstance(item,dict)]
+ def numeric_shape(value,depth=0):
+  if depth>5: return 'depth_limit'
+  if value is None or type(value) in (int,float,bool): return value
+  if isinstance(value,list): return [numeric_shape(v,depth+1) for v in value[:20]]
+  if isinstance(value,dict): return {k:numeric_shape(v,depth+1) for k,v in list(value.items())[:20] if re.fullmatch('[a-zA-Z_]{1,100}',k)}
+  return {'type':type(value).__name__,'length':len(value) if isinstance(value,str) else None}
+ import re
+ for k in ('model_invocation_token_counts','raw_prompt_token'):
+  if k in u: clean[k]=numeric_shape(u[k])
  print(json.dumps({'event':'provider_usage_diagnostic','keys':sorted(u.keys()),'usage':clean,'billing_status':row['billing_status']}))
 """
             diagnostic=run(compose+['exec','-T','api','python','-c',snippet])
