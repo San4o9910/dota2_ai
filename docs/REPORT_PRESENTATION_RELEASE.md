@@ -11,7 +11,7 @@
   Missing use remains unknown; passive items do not require a button press.
 - Personal timing goals, reset, evidence links and timeline navigation remain.
   Icons use a fixed Valve CDN path, strict canonical item identifiers and no
-  referrer. A unavailable image leaves a neutral tile and the item name.
+  referrer. An unavailable image leaves a neutral tile and the item name.
 - A hero context appears before the next-game plan, including the selected
   report's hero, manually recorded position, and observed ability counters.
   A contextual plan takes precedence over the previous generic plan. The
@@ -63,4 +63,29 @@ they do not call model providers or the live application.
 Deployment checks additionally read up to three saved reports per bound owner
 and verify their context matches each report's hero and recorded position,
 alongside the existing unchanged provider-ledger check. The existing Timeweb
-server and allowance are retained. Deployment outcome is recorded after CI.
+server and allowance are retained.
+
+## Confirmed deployment, 2026-09-07 22:04 UTC
+
+- Installed source: `f7444056c22b5036fcde0a763bbb30f9361cfb06`, tree
+  `88d85afafa0fc6087f2efbbfcbf14b92921c2a13`.
+- [Workflow 34165034499](https://github.com/San4o9910/dota2_ai/actions/runs/34165034499),
+  job `101874292367`: success. Existing VM 9037783 was updated.
+- Real PostgreSQL suite: 240 passed, one optional test skipped. Docker runtime
+  and replay runtime checks passed; 21 deployment regression tests passed.
+- Browser checks passed at 390 px and 1440 px, including exact histogram
+  alignment, shared cursors, hero/archived context, item icons/fallbacks,
+  personal goals and accessibility. Screenshots were archived by CI; manual
+  image inspection was unavailable because artifact downloads failed.
+- Live activation verified hero context for three existing saved reports,
+  matching each report's actual hero and manually recorded position. The pool
+  and context checks created no provider calls. Saved reports were not
+  regenerated or rewritten. Replay worker heartbeat and HTTPS passed.
+- Allowance immediately before and after activation was identical: limit
+  10,000,000 microUSD, settled spend 124,938 microUSD and reserved 6,000,000
+  microUSD. No caps or reservations were reset. These are current activation
+  values; earlier release records describe earlier ledger snapshots.
+
+Live portal: <https://narma-72-56-98-68.sslip.io/>. The authoritative branch is
+`San4o9910/dota2_ai` / `codex/replay-map-hardening-8ea829a`. Documentation-only
+follow-ups preserve the installed source and do not trigger deployment.
