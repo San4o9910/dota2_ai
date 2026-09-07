@@ -8,6 +8,7 @@ on:
       - ops/timeweb/**
       - services/video/**
       - services/replay/**
+      - scripts/check-portal-ui.mjs
       - .dockerignore
   workflow_dispatch:
 
@@ -34,6 +35,22 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python3 ops/timeweb/gemini_preflight.py
+      - name: Verify interactive report on mobile and desktop without provider calls
+        env:
+          PLAYWRIGHT_NODE_MODULES: ${{ runner.temp }}/narma-portal-qa/node_modules
+          NARMA_PORTAL_SCREENSHOTS: ${{ runner.temp }}/narma-portal-screenshots
+        run: |
+          npm install --prefix "$RUNNER_TEMP/narma-portal-qa" --no-audit --no-fund playwright@1.62.1 axe-core@4.10.3
+          "$RUNNER_TEMP/narma-portal-qa/node_modules/.bin/playwright" install --with-deps chromium
+          node scripts/check-portal-ui.mjs
+      - name: Preserve synthetic report screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: portal-visual-qa
+          path: ${{ runner.temp }}/narma-portal-screenshots
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Validate source and build Docker image before provisioning
         run: |
           python3 -m compileall -q services/video/narma_video ops/timeweb

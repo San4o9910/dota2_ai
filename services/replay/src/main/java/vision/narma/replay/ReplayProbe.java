@@ -46,6 +46,15 @@ public final class ReplayProbe {
     private final Map<Integer, Entity> playerEntities = new TreeMap<>();
     private final Map<Integer, Entity> heroEntities = new TreeMap<>();
     private final Map<Integer, Object> heroLifeStates = new TreeMap<>();
+    private final Set<Integer> dirtyInventories = new HashSet<>();
+    private final Map<Integer, List<Map<String, Object>>> previousInventories = new HashMap<>();
+    private final Map<Integer, Integer> previousInventoryPlayers = new HashMap<>();
+    private static final String[] ITEM_SLOTS = new String[17];
+    private static final String[] SELECTED_HERO_FIELDS = new String[24];
+    static {
+        for (int i = 0; i < ITEM_SLOTS.length; i++) ITEM_SLOTS[i] = String.format(Locale.ROOT, "m_hItems.%04d", i);
+        for (int i = 0; i < SELECTED_HERO_FIELDS.length; i++) SELECTED_HERO_FIELDS[i] = String.format(Locale.ROOT, "m_vecPlayerTeamData.%04d.m_hSelectedHero", i);
+    }
     private Double gameStart;
     private Double gameEnd;
     private Object gameWinner;
@@ -154,16 +163,42 @@ public final class ReplayProbe {
             playerEntities.put(entity.getHandle(), entity);
             resourceSnapshot(ctx, entity, "player_schema");
         }
-        if (className.startsWith("CDOTA_Unit_Hero_")) heroEntities.put(entity.getHandle(), entity);
+        if (className.startsWith("CDOTA_Unit_Hero_")) {
+            heroEntities.put(entity.getHandle(), entity);
+            dirtyInventories.add(entity.getHandle());
+        }
+        if (className.startsWith("CDOTA_Item")) dirtyInventories.addAll(heroEntities.keySet());
         observation(ctx, entity, "created");
     }
     @OnEntityUpdated
     public void updated(Context ctx, Entity entity, FieldPath[] paths, int count) throws IOException {
+        if (entity.getDtClass().getDtName().contains("PlayerResource")) {
+            for (int i = 0; i < count; i++) {
+                if (entity.getDtClass().getNameForFieldPath(paths[i]).endsWith(".m_hSelectedHero")) {
+                    dirtyInventories.addAll(heroEntities.keySet()); break;
+                }
+            }
+        }
         if (heroEntities.containsKey(entity.getHandle())) {
+            for (int i = 0; i < count; i++) {
+                String name = entity.getDtClass().getNameForFieldPath(paths[i]);
+                if (name.startsWith("m_hItems.") || name.equals("m_iPlayerID") || name.equals("m_nPlayerID")) {
+                    dirtyInventories.add(entity.getHandle()); break;
+                }
+            }
             Object state=property(entity,"m_lifeState");
             if (!Objects.equals(state,heroLifeStates.put(entity.getHandle(),state))) {
                 Map<String,Object> r=clock(ctx); r.putAll(snapshot(ctx,entity)); r.put("type","hero_life");
                 r.put("playerId",first(entity,"m_iPlayerID","m_nPlayerID")); emit(r);
+            }
+        }
+        if (entity.getDtClass().getDtName().startsWith("CDOTA_Item")) {
+            for (int i = 0; i < count; i++) {
+                String name = entity.getDtClass().getNameForFieldPath(paths[i]);
+                if (name.equals("m_flPurchaseTime") || name.equals("m_flAssembledTime")
+                    || name.equals("m_iPlayerOwnerID") || name.startsWith("m_pEntity.m_nameString")) {
+                    dirtyInventories.addAll(heroEntities.keySet()); break;
+                }
             }
         }
         observation(ctx, entity, "state");
@@ -173,6 +208,8 @@ public final class ReplayProbe {
         observation(ctx, entity, "deleted");
         previous.remove(entity.getHandle());
         playerEntities.remove(entity.getHandle()); heroEntities.remove(entity.getHandle()); heroLifeStates.remove(entity.getHandle());
+        dirtyInventories.remove(entity.getHandle()); previousInventories.remove(entity.getHandle());
+        previousInventoryPlayers.remove(entity.getHandle());
         if (rules == entity) rules = null;
     }
     @OnEntityLeft
@@ -186,6 +223,16 @@ public final class ReplayProbe {
     public void tick(Context ctx, boolean synthetic) throws IOException {
         ticks++; if (!synthetic) realTicks++; finalTick = ctx.getTick();
         if (System.nanoTime() - started > 295_000_000_000L) throw new IOException("WALL_TIME_LIMIT");
+        if (!synthetic && !dirtyInventories.isEmpty()) {
+            // Resolve after the whole tick: hero handles and new item entities may
+            // arrive in either order. Changes are observations, never purchases.
+            List<Integer> dirty = new ArrayList<>(dirtyInventories);
+            dirtyInventories.clear();
+            for (int handle : dirty) {
+                Entity hero = heroEntities.get(handle);
+                if (hero != null) inventorySnapshot(ctx, hero);
+            }
+        }
         if (!synthetic && ctx.getTick() - lastSnapshotTick >= 300) {
             lastSnapshotTick=ctx.getTick();
             for (Entity resource : playerEntities.values()) resourceSnapshot(ctx, resource, "player_snapshot");
@@ -205,6 +252,57 @@ public final class ReplayProbe {
     public void serverTick(CNETMsg_Tick message) { serverTick = message.getTick(); }
     @OnStringTableCreated
     public void table(int index, StringTable table) { nameTables.put(table.getName(), table); }
+    private void inventorySnapshot(Context ctx, Entity hero) throws IOException {
+        Object playerId = first(hero, "m_iPlayerID", "m_nPlayerID");
+        Object replica = property(hero, "m_hReplicatingOtherHeroModel");
+        if (!(playerId instanceof Number player) || player.intValue() < 0 || player.intValue() >= 24
+            || Boolean.TRUE.equals(property(hero, "m_bIsIllusion"))) return;
+        if (replica instanceof Number handle && handle.intValue() != 0xFFFFFF && handle.intValue() != -1) return;
+        Integer selectedPlayerIndex = null;
+        for (Entity resource : playerEntities.values()) {
+            if (!resource.getDtClass().getDtName().contains("PlayerResource")) continue;
+            for (int index = 0; index < SELECTED_HERO_FIELDS.length; index++) {
+                Object selected = property(resource, SELECTED_HERO_FIELDS[index]);
+                if (selected instanceof Number handle && handle.intValue() == hero.getHandle()) {
+                    selectedPlayerIndex = index; break;
+                }
+            }
+        }
+        var entities = ctx.getProcessor(Entities.class);
+        StringTable names = nameTables.get("EntityNames");
+        List<Map<String, Object>> items = new ArrayList<>();
+        boolean unresolved = false;
+        for (int slot = 0; slot < ITEM_SLOTS.length; slot++) {
+            Object raw = property(hero, ITEM_SLOTS[slot]);
+            if (!(raw instanceof Number handle) || handle.intValue() == 0xFFFFFF || handle.intValue() == -1) continue;
+            Entity item = entities.getByHandle(handle.intValue());
+            Object index = first(item, "m_pEntity.m_nameStringTableIndex", "m_pEntity.m_nameStringableIndex");
+            String name = null;
+            if (index instanceof Number number && names != null && names.hasIndex(number.intValue())) {
+                String candidate = names.getNameByIndex(number.intValue());
+                if (candidate != null && candidate.matches("item_[a-z0-9_]{1,100}")) name = candidate;
+            }
+            unresolved |= name == null;
+            items.add(map("slot", slot, "entityHandle", Integer.toUnsignedLong(handle.intValue()), "itemName", name,
+                "purchaseTimeRaw", property(item, "m_flPurchaseTime"),
+                "assembledTimeRaw", property(item, "m_flAssembledTime"),
+                "purchaserPlayerIdRaw", property(item, "m_iPlayerOwnerID")));
+        }
+        // A missing entity/name is incomplete observation, never item loss.
+        if (unresolved) dirtyInventories.add(hero.getHandle());
+        boolean sameItems = items.equals(previousInventories.put(hero.getHandle(), items));
+        boolean samePlayer = Objects.equals(selectedPlayerIndex, previousInventoryPlayers.put(hero.getHandle(), selectedPlayerIndex));
+        if (sameItems && samePlayer) return;
+        Map<String, Object> record = clock(ctx);
+        record.putAll(map("type", "hero_inventory", "playerId", playerId,
+            "selectedPlayerIndex", selectedPlayerIndex,
+            "heroHandle", Integer.toUnsignedLong(hero.getHandle()), "heroClass", hero.getDtClass().getDtName(),
+            "team", property(hero, "m_iTeamNum"), "illusion", property(hero, "m_bIsIllusion"),
+            "replicatingHeroHandleRaw", replica,
+            "items", items, "resolved", !unresolved));
+        counts.merge("hero_inventory", 1L, Long::sum);
+        emit(record);
+    }
     private void resourceSnapshot(Context ctx, Entity entity, String type) throws IOException {
         Map<String,Object> properties = new LinkedHashMap<>();
         var iterator = entity.getState().fieldPathIterator();

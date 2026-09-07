@@ -12,6 +12,8 @@ import math
 import re
 from pathlib import Path
 
+from .replay_insights import build_insights, KEY_ITEMS
+
 STEAM_BASE = 76561197960265728
 MAX_EVENTS_BYTES = 50 * 1024**2
 MAX_LINE_BYTES = 1024**2
@@ -156,6 +158,7 @@ def build_report(events_path, summary_path, job):
     selected_class = "CDOTA_DataRadiant" if team == 2 else "CDOTA_DataDire"
     metrics, samples, pending_combat, hero_lives, handle_set = {}, {}, [], [], set()
     gold_sources = []
+    passive_samples, pending_inventories = [], []
     resource_index = team_slot = None
     final_resource = final_team = False
     total_events = 0
@@ -226,6 +229,9 @@ def build_report(events_path, summary_path, job):
                         fail("TEAM_IDENTITY_MISMATCH")
                     prefix = f"m_vecDataTeam.{slot:04d}."
                     values = copy_metrics(p, prefix, TEAM_METRICS)
+                    passive = p.get(prefix + "m_iIncomeGold")
+                    if time is not None and number(passive) and passive >= 0:
+                        passive_samples.append({"time": time, "gold": passive})
                     if time is not None and time >= 0:
                         metrics.update(values)
                         final_team = bool(values)
@@ -236,6 +242,9 @@ def build_report(events_path, summary_path, job):
                                 sample["earned_gold" if key == "total_earned_gold" else key] = values[key]
                         gold_sources = [{"source": field, "label": label, "gold": p[prefix + field]}
                             for field, label in GOLD_SOURCES.items() if number(p.get(prefix + field)) and p[prefix + field] >= 0]
+            continue
+        if kind == "hero_inventory" and time is not None:
+            pending_inventories.append((time, event))
             continue
         if kind == "hero_life" and event.get("entityName") == hero and event.get("team") == team:
             if time is not None:
@@ -254,6 +263,8 @@ def build_report(events_path, summary_path, job):
 
     evidence, inventory, deaths, buybacks = [], [], [], []
     ability_usage, item_usage = {}, {}
+    gold_events, item_casts = [], []
+    first_item_casts = set()
 
     def emit(event, time, typ, title, details, data=None):
         row = {"id": f"event-{event['eventId']}", "type": typ, "time": seconds(time),
@@ -274,9 +285,23 @@ def build_report(events_path, summary_path, job):
                 entry = usage.setdefault(inflictor, {"name": inflictor, "casts": 0, "first_time": time, "last_time": time})
                 entry["casts"] += 1
                 entry["last_time"] = time
+                if typ == "DOTA_COMBATLOG_ITEM":
+                    item_casts.append({"time": time, "item": inflictor, "event_id": f"event-{event['eventId']}"})
+                    if inflictor.removeprefix("item_") in KEY_ITEMS and inflictor not in first_item_casts and time >= 0:
+                        emit(event, time, "item_used", display_unit(inflictor),
+                             "Первое записанное применение этого предмета выбранным героем.", {"item": inflictor})
+                        first_item_casts.add(inflictor)
+        if typ == "DOTA_COMBATLOG_GOLD" and own_target:
+            amount = event.get("value")
+            reason = event.get("goldReason")
+            if type(amount) is int and -(2**31) <= amount < 2**32:
+                # Some decoders expose protobuf uint32 rather than signed deltas.
+                amount = amount - 2**32 if amount >= 2**31 else amount
+                gold_events.append({"time": time, "gold": amount, "reason": reason if type(reason) is int and 0 <= reason <= 10000 else None})
         if typ == "DOTA_COMBATLOG_PURCHASE" and own_target:
             item = event.get("valueName")
             if isinstance(item, str) and re.fullmatch(r"item_[a-z0-9_]{1,100}", item):
+                first_item_casts.discard(item)
                 row = emit(event, time, "purchase", display_unit(item), "Предмет зафиксирован в журнале приобретений.", {"item": item})
                 inventory.append({"time": time, "item": item, "event_id": row["id"]})
         elif typ == "DOTA_COMBATLOG_BUYBACK" and event.get("value") == resource_index:
@@ -302,6 +327,31 @@ def build_report(events_path, summary_path, job):
                      "Башня уничтожена" if is_tower else "Вард уничтожен", "Добивающий удар принадлежит выбранному герою.", {"target": target})
         elif typ == "DOTA_COMBATLOG_ITEM" and own_attacker and event.get("inflictor") in ("item_ward_observer", "item_ward_sentry", "item_ward_dispenser"):
             emit(event, time, "ward_item_used", "Использован предмет с вардами", "Это событие применения предмета; координаты и тип поставленного варда им не подтверждаются.", {"item": event["inflictor"]})
+
+    sightings = []
+    observed_items = {row["item"] for row in inventory}
+    for time, event in pending_inventories:
+        if (event.get("heroHandle") not in handle_set or event.get("team") != team
+                or event.get("illusion") is True or time > duration
+                or (event.get("selectedPlayerIndex") is not None and event.get("selectedPlayerIndex") != resource_index)):
+            continue
+        source_items = event.get("items")
+        if not isinstance(source_items, list) or len(source_items) > 17:
+            continue
+        items = [{"slot": item["slot"], "itemName": item["itemName"]}
+            for item in source_items if isinstance(item, dict) and type(item.get("slot")) is int
+            and 0 <= item["slot"] <= 16 and isinstance(item.get("itemName"), str)
+            and re.fullmatch(r"item_[a-z0-9_]{1,100}", item["itemName"])]
+        sight = {"time": time, "event_id": f"event-{event['eventId']}", "items": items}
+        sightings.append(sight)
+        newly_seen = [item["itemName"] for item in items if item["itemName"] not in observed_items
+                      and item["itemName"].removeprefix("item_") in KEY_ITEMS and time >= 0]
+        if newly_seen:
+            emit(event, time, "item_observed", "Предметы в инвентаре",
+                 "Предметы впервые записаны в инвентаре героя; магазинное приобретение не подтверждено.", {"items": newly_seen})
+            observed_items.update(newly_seen)
+    sightings.sort(key=lambda row: row["time"])
+    item_casts.sort(key=lambda row: row["time"])
 
     # Life state is tied to the selected entity handle, not an unreliable hero
     # playerId or network/PVS departure. Only paired death -> alive spans count.
@@ -377,7 +427,7 @@ def build_report(events_path, summary_path, job):
             "evidence_ids": []})
     limits = [
         "Выводы основаны на событиях и статистике реплея; причины решений, MMR и видимость не угадываются.",
-        "Журнал приобретений не подтверждает доставку предмета герою, его слот или момент использования.",
+        "Журнал приобретений не подтверждает доставку. Появление в слотах и применение показаны отдельно, когда эти события записаны.",
         "Значения DEATH и PURCHASE не считаются полученным золотом или ценой предмета.",
         "Время вне игры учитывает только подтверждённые пары переходов состояния героя; незавершённые интервалы исключены.",
         "Счётчики источников золота приводятся как записаны игрой; их сумма может содержать пересечения.",
@@ -395,6 +445,10 @@ def build_report(events_path, summary_path, job):
             "final_tick": final_tick, "playback_ticks": summary["playbackTicks"], "events_read": total_events,
             "economy_samples": len(economy), "stats_observed_until": seconds(observed_until),
             "unclosed_death_intervals": len(began), "limits": limits}}
+    report["insights"] = build_insights(economy=economy, metrics=metrics, evidence=evidence,
+        inventory=inventory, gold_events=gold_events, passive_samples=passive_samples,
+        sightings=sightings, casts=item_casts, spans=spans, duration=duration)
+    report["coverage"]["insights_version"] = report["insights"]["schema_version"]
     if len(json.dumps(report, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) > MAX_REPORT_BYTES:
         fail("REPORT_SIZE_LIMIT")
     return report

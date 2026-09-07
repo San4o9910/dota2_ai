@@ -25,6 +25,12 @@ RESULT = {
         'advice': 'Проверь в реплее, какую задачу команда могла выполнить после возвращения.',
         'evidence_ids': ['death.1', 'buyback.1'],
     }],
+    'next_game': [{
+        'title': 'Цель возвращения в игру',
+        'action': 'Перед выкупом назови цель и проверь, кто из союзников может поддержать возвращение.',
+        'measure': 'После матча проверь по эпизоду, удалось ли выполнить выбранную цель.',
+        'evidence_ids': ['buyback.1'],
+    }],
 }
 
 
@@ -57,6 +63,33 @@ def test_model_cannot_invent_evidence_or_numeric_stats(change, code):
 def test_numeric_match_summary_is_also_rejected():
     with pytest.raises(ValueError, match='NUMERIC_CLAIM'):
         coach.validate_coaching({**RESULT, 'summary': 'Потеряно ２０ минут.'}, {'death.1', 'buyback.1'})
+
+
+@pytest.mark.parametrize('change,code', [
+    ({'evidence_ids': ['unknown']}, 'EVIDENCE_MISMATCH'),
+    ({'measure': 'Набери 100 добиваний.'}, 'NUMERIC_CLAIM'),
+    ({'action': 'Открой https://example.invalid'}, 'RESPONSE_INVALID'),
+    ({'measure': ''}, 'RESPONSE_INVALID'),
+])
+def test_next_game_tasks_require_safe_measurable_evidence(change, code):
+    value = deepcopy(RESULT)
+    value['next_game'][0].update(change)
+    with pytest.raises(ValueError, match=code):
+        coach.validate_coaching(value, {'death.1', 'buyback.1'})
+
+
+def test_next_game_plan_is_required_and_coach_uses_only_selected_analytics():
+    with pytest.raises(ValueError, match='RESPONSE_INVALID'):
+        coach.validate_coaching({**RESULT, 'next_game': []}, {'death.1', 'buyback.1'})
+    encoded, _ = coach.prepare_evidence({**FACTS, 'insights': {
+        'items': [{'item': 'item_blink', 'realization': {'casts': 1}}],
+        'training_plan': [{'action': 'never send this'}],
+        'private_key': 'never send this',
+    }})
+    payload = json.loads(encoded)
+    assert payload['insights']['items'][0]['item'] == 'item_blink'
+    assert 'private_key' not in encoded and 'training_plan' not in encoded
+    assert 'nickname' not in payload['player'] and 'account_id' not in payload['player']
 
 
 def response(value=RESULT, **changes):

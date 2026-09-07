@@ -112,18 +112,120 @@ async function refresh() {
   }
 }
 function svgNode(tag, attributes) { const element=document.createElementNS('http://www.w3.org/2000/svg',tag); for(const [key,value] of Object.entries(attributes)) element.setAttribute(key,String(value)); return element; }
-function drawGraph(id, samples, key, duration) {
-  const svg=$(id); svg.replaceChildren();
-  const valid=samples.filter(sample=>Number.isFinite(sample[key])); const max=Math.max(1,...valid.map(sample=>sample[key]));
-  const x=time=>20+Math.max(0,Math.min(duration,time))/Math.max(1,duration)*480;
-  const y=value=>138-Math.max(0,value)/max*118;
-  svg.append(svgNode('line',{x1:20,y1:138,x2:500,y2:138,class:'chart-axis'}));
-  const top=svgNode('text',{x:20,y:14,class:'chart-axis-label'}); top.textContent=num(max); svg.append(top);
-  const zero=svgNode('text',{x:20,y:155,class:'chart-axis-label'}); zero.textContent='0:00'; svg.append(zero);
-  const end=svgNode('text',{x:500,y:155,'text-anchor':'end',class:'chart-axis-label'}); end.textContent=stamp(duration); svg.append(end);
-  if(valid.length) svg.append(svgNode('polyline',{points:valid.map(sample=>`${x(sample.time).toFixed(2)},${y(sample[key]).toFixed(2)}`).join(' '),class:'chart-line',fill:'none','vector-effect':'non-scaling-stroke'}));
-  const cursor=svgNode('line',{x1:20,x2:20,y1:20,y2:138,class:'chart-cursor'}); svg.append(cursor);
-  state.graphs.push({cursor,x});
+const sourceColors=['#dcc071','#9fc5a8','#91b8d8','#c1a2d5','#d49b8a','#b7bdad','#d5bba3'];
+function finite(value) { return typeof value==='number' && Number.isFinite(value); }
+function itemName(value) { return String(value??'Предмет').replace(/^item_/,'').split('_').map(word=>word.charAt(0).toUpperCase()+word.slice(1)).join(' '); }
+function insight() { return state.detail?.report?.insights??{}; }
+function jumpTime(time) { seekTime(time); $('economy-heading').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'}); }
+function timeButton(time, label, className='evidence-link') { const button=node('button',`${stamp(time)}${label?` · ${label}`:''}`,className); button.type='button'; button.addEventListener('click',()=>jumpTime(time)); return button; }
+function graphFrame(id,duration,maximum) {
+  const svg=$(id); svg.replaceChildren(); const max=Math.max(1,maximum);
+  const x=time=>20+Math.max(0,Math.min(duration,time))/Math.max(1,duration)*480, y=value=>138-Math.max(0,value)/max*118;
+  for(const fraction of [0,.5,1]) { const line=svgNode('line',{x1:20,x2:500,y1:y(max*fraction),y2:y(max*fraction),class:'chart-grid'}); svg.append(line); }
+  for(const [time,label,anchor] of [[0,'0:00','start'],[duration/2,stamp(duration/2),'middle'],[duration,stamp(duration),'end']]) { const text=svgNode('text',{x:x(time),y:157,'text-anchor':anchor,class:'chart-axis-label'}); text.textContent=label; svg.append(text); }
+  const top=svgNode('text',{x:20,y:14,class:'chart-axis-label'}); top.textContent=num(maximum); svg.append(top);
+  const cursor=svgNode('line',{x1:20,x2:20,y1:20,y2:138,class:'chart-cursor'}); svg.append(cursor); state.graphs.push({cursor,x}); return {svg,x,y,cursor};
+}
+function drawBars(id,bins,key,duration) {
+  const valid=bins.filter(bin=>finite(bin.start)&&finite(bin.end)&&bin.end>bin.start&&finite(bin[key]));
+  const {svg,x,y,cursor}=graphFrame(id,duration,Math.max(0,...valid.map(bin=>bin[key])));
+  for(const bin of valid) { const bar=svgNode('rect',{x:x(bin.start)+.5,y:y(bin[key]),width:Math.max(.7,x(bin.end)-x(bin.start)-1),height:Math.max(0,138-y(bin[key])),rx:1,class:'chart-bar'}); const title=svgNode('title',{}); title.textContent=`${stamp(bin.start)}–${stamp(bin.end)}: ${num(bin[key])}`; bar.append(title); svg.insertBefore(bar,cursor); }
+  if(!valid.length) { const empty=svgNode('text',{x:260,y:80,'text-anchor':'middle',class:'chart-empty'}); empty.textContent='Нет поминутных данных'; svg.append(empty); }
+}
+function drawCombat(duration) {
+  const target=$('combat-strip'); target.replaceChildren(); const svg=svgNode('svg',{viewBox:'0 0 520 44',role:'img','aria-label':'Моменты убийств, смертей и получения предметов. Точные времена доступны в хронологии.'}), x=t=>20+Math.max(0,Math.min(duration,t))/duration*480;
+  svg.append(svgNode('line',{x1:20,x2:500,y1:22,y2:22,class:'chart-axis'}));
+  for(const interval of insight().death_intervals??[]) if(finite(interval.start)&&finite(interval.end)) svg.append(svgNode('rect',{x:x(interval.start),y:9,width:Math.max(1,x(interval.end)-x(interval.start)),height:26,class:'death-period'}));
+  for(const event of state.detail.report.evidence??[]) {
+    if(!['kill','death'].includes(event.type)||!finite(event.time)) continue;
+    const marker=event.type==='kill'?svgNode('circle',{cx:x(event.time),cy:22,r:3,class:'combat-kill'}):svgNode('path',{d:`M ${x(event.time)} 14 l 5 8 l -5 8 l -5 -8 Z`,class:'combat-death'});
+    const title=svgNode('title',{}); title.textContent=`${stamp(event.time)} · ${eventLabels[event.type]}`; marker.append(title); svg.append(marker);
+  }
+  for(const item of insight().items??[]) if(finite(item.time)) svg.append(svgNode('rect',{x:x(item.time)-2,y:35,width:4,height:7,class:'combat-purchase'}));
+  const cursor=svgNode('line',{x1:20,x2:20,y1:0,y2:44,class:'chart-cursor'}); svg.append(cursor); state.graphs.push({cursor,x}); target.append(svg);
+  svg.addEventListener('click',event=>{const box=svg.getBoundingClientRect(); seekTime(((event.clientX-box.left)/box.width*520-20)/480*duration);});
+}
+function renderSources() {
+  const gold=insight().gold??{}, target=$('gold-sources'); target.replaceChildren();
+  const sources=(gold.sources??[]).filter(source=>finite(source.gold)&&source.gold>0), total=sources.reduce((sum,source)=>sum+source.gold,0), max=Math.max(1,...sources.map(source=>source.gold));
+  $('income-total').textContent=finite(gold.recorded_income)?`${num(gold.recorded_income)} золота`:'';
+  for(const [index,source] of sources.entries()) {
+    const row=node('div',undefined,'source-row'), heading=node('div',undefined,'source-heading'); heading.append(node('span',source.label??source.key),node('strong',`${num(source.gold)} · ${Math.round(source.gold/Math.max(1,total)*100)}%`));
+    const track=node('div',undefined,'source-track'), bar=node('span'); bar.style.width=`${source.gold/max*100}%`; bar.style.background=sourceColors[index%sourceColors.length]; track.setAttribute('aria-hidden','true'); track.append(bar); row.append(heading,track); target.append(row);
+  }
+  if(!sources.length) target.append(node('p','В этом отчёте нет разбивки золота по источникам. Изменение ценности предметов показано выше.','muted'));
+  $('income-coverage').textContent=`Доли от подтверждённых поступлений. ${gold.coverage_note??'Источники дохода показываются только по событиям реплея.'}`;
+  if(finite(gold.recorded_loss)&&gold.recorded_loss>0) target.append(node('p',`Потери золота: ${num(gold.recorded_loss)}. Они учитываются отдельно от заработка.`,'help'));
+  for(const flow of gold.other_flows??[]) if(finite(flow.gold)&&flow.gold!==0) target.append(node('p',`${flow.label??flow.key}: ${num(flow.gold)} · отдельно от заработка`,'help'));
+}
+function updateMoment() {
+  const report=state.detail?.report; if(!report) return;
+  const data=insight(), select=bins=>(bins??[]).find(bin=>state.time>=bin.start&&(state.time<bin.end||(state.time===report.metrics?.duration_seconds&&state.time===bin.end))), bin=select(data.gold?.bins), pace=select(data.pace);
+  $('income-value').textContent=bin?num(bin.income):'—'; $('farm-value').textContent=pace?num(pace.last_hits):'—';
+  $('income-window').textContent=bin?`${stamp(bin.start)}–${stamp(bin.end)} · Потери: ${num(bin.loss)} золота`:'Выбери интервал на общей шкале.';
+  const target=$('moment-summary'); target.replaceChildren(); target.append(node('p',`На отметке ${stamp(state.time)}`,'eyebrow'));
+  if(pace) { target.append(node('h4',`${num(pace.last_hits)} добиваний · ${num(pace.kills)} убийств · ${num(pace.assists)} помощи`)); target.append(node('p',`${stamp(pace.start)}–${stamp(pace.end)} · ${num(pace.deaths)} смертей · ${num(pace.xp)} опыта`,'help')); }
+  const sources=new Map((data.gold?.sources??[]).map(source=>[source.key,source.label]));
+  if(bin) { const parts=Object.entries(bin.by_source??{}).filter(([,amount])=>finite(amount)&&amount>0).map(([key,amount])=>`${sources.get(key)??key}: ${num(amount)}`); target.append(node('p',parts.length?parts.join(' · '):'Дохода в журнале за эту минуту нет.','help')); }
+  if(!pace&&!bin) target.append(node('p','Для этой минуты подробных счётчиков нет. Снимок общей статистики указан под шкалой времени.','help'));
+  for(const card of $('item-cards').children) card.classList.toggle('item-selected',finite(Number(card.dataset.time))&&Math.abs(Number(card.dataset.time)-state.time)<1);
+}
+function itemGoalKey(item) { const player=state.detail?.report?.player??{}; return `narma.item-goal.v1:${player.account_id??'unknown'}:${player.hero??'unknown'}:${item.item}`; }
+function readGoal(item) { try { const value=localStorage.getItem(itemGoalKey(item)); return value&&/^\d{1,3}:[0-5]\d$/.test(value)?value:''; } catch { return ''; } }
+function goalSeconds(text) { if(!/^\d{1,3}:[0-5]\d$/.test(text)) return null; const [minutes,seconds]=text.split(':').map(Number); return minutes*60+seconds; }
+function renderItems() {
+  const report=state.detail.report, data=insight(), provided=Array.isArray(data.items), items=provided?data.items:(report.inventory??[]).filter(entry=>finite(entry.time)).map((entry,index)=>({id:`legacy-${index}`,item:entry.item,label:itemName(entry.item),time:entry.time,event_id:entry.event_id,acquisition:'purchase',timing:{label:'Без эталона',basis:'Нет сопоставимого ориентира по герою, роли и рейтингу.'},realization:{note:'В этом отчёте нет данных о доставке и применении предмета.'}}));
+  const rail=$('item-rail'), cards=$('item-cards'); rail.replaceChildren(); cards.replaceChildren(); $('item-count').textContent=`${items.length} предметов`;
+  if(!items.length) { cards.append(node('p','В этом отчёте нет подтверждённых покупок ключевых предметов.','muted')); return; }
+  for(const [index,item] of items.entries()) {
+    const label=item.label??itemName(item.item), card=node('article',undefined,'item-card'); card.dataset.time=String(item.time);
+    rail.append(timeButton(item.time,label,'item-chip'));
+    const heading=node('div',undefined,'item-heading'), identity=node('div',undefined,'item-identity'), icon=node('span',String(index+1).padStart(2,'0'),'item-number'); icon.setAttribute('aria-hidden','true'); identity.append(icon,node('h4',label)); heading.append(identity,timeButton(item.time,item.acquisition==='inventory'?'В инвентаре':'Покупка'));
+    card.append(heading);
+    const timing=node('div',undefined,'item-timing'), badge=node('span',item.timing?.label??'Без эталона','timing-badge'), basis=node('p',item.timing?.basis??'Нет сопоставимого ориентира по герою, роли и рейтингу.','help'); timing.append(badge,basis); card.append(timing);
+    const steps=node('dl',undefined,'item-steps');
+    for(const [title,value] of [['Первый снимок у героя',item.first_hero_inventory_time],['В активном слоте',item.first_active_inventory_time],['Первое применение',item.realization?.first_use_time]]) { const row=node('div'), amount=node('dd'); if(finite(value)) {const button=timeButton(value,'','item-step-time');button.setAttribute('aria-label',`${title}: ${stamp(value)}`);amount.append(button);} else amount.textContent='—'; row.append(node('dt',title),amount); steps.append(row); }
+    card.append(steps);
+    const realization=item.realization??{}, summary=node('div',undefined,'item-realization');
+    const statusLabels={used_soon:'Применён в первые 2 минуты',used_later:'Первое применение позже 2 минут',no_recorded_use:'Применение не записано',passive_item:'Пассивный эффект',no_window:'Недостаточно времени после покупки'};
+    if(statusLabels[realization.status]) summary.append(node('p',statusLabels[realization.status],'realization-status'));
+    summary.append(node('p',finite(realization.observed_seconds)?`После ${item.acquisition==='inventory'?'появления в инвентаре':'покупки'} · ${stamp(realization.observed_seconds)}`:'События после приобретения','eyebrow'));
+    if(finite(realization.casts)) summary.append(node('p',`${num(realization.casts)} применений · ${num(realization.kills)} убийств · ${num(realization.assists)} помощи · ${num(realization.deaths)} смертей`,'outcome-counts'));
+    if(realization.note) {const details=node('details',undefined,'item-observation');details.append(node('summary','Что подтверждено в эпизоде'),node('p',realization.note,'help'));summary.append(details);}
+    if(finite(realization.delay_seconds)) summary.append(node('p',`От ${item.acquisition==='inventory'?'наблюдения в инвентаре':'покупки'} до применения: ${stamp(realization.delay_seconds)}.`,'help'));
+    if(finite(realization.delay_from_active_seconds)) summary.append(node('p',`От активного слота до применения: ${stamp(realization.delay_from_active_seconds)}.`,'help'));
+    if(finite(realization.objectives)&&realization.objectives>0) summary.append(node('p',`Событий у объектов: ${num(realization.objectives)}.`,'help'));
+    const evidenceLinks=node('div',undefined,'evidence-links');
+    for(const id of (realization.evidence_ids??[]).slice(0,3)) { const event=state.evidence.get(id); if(!event) continue; const button=node('button',`${stamp(event.time)} · ${eventLabels[event.type]??'Событие'}`,'evidence-link'); button.addEventListener('click',()=>focusEvidence(id)); evidenceLinks.append(button); }
+    if(evidenceLinks.childElementCount) summary.append(evidenceLinks); card.append(summary);
+    const funding=item.funding;
+    if(funding) { const box=node('details',undefined,'item-funding'); box.append(node('summary',`Доход перед приобретением · ${stamp(funding.start)}–${stamp(funding.end)}`));
+      const labels=new Map((data.gold?.sources??[]).map(source=>[source.key,source.label])); const parts=Object.entries(funding.by_source??{}).filter(([,amount])=>finite(amount)&&amount>0).map(([key,amount])=>`${labels.get(key)??key}: ${num(amount)}`);
+      box.append(node('p',parts.length?parts.join(' · '):'Нет разбивки по источникам за это окно.','help')); if(funding.note) box.append(node('p',funding.note,'help')); card.append(box);
+    }
+    const goal=node('details',undefined,'item-goal'); goal.append(node('summary','Сравнить со своей целью'));
+    const inputId=`item-goal-${index}`, input=node('input'); input.id=inputId; input.inputMode='text'; input.placeholder='20:00'; input.maxLength=6; input.value=readGoal(item); input.setAttribute('aria-describedby',`${inputId}-help`);
+    const inputLabel=node('label','Личная цель, мин:сек'); inputLabel.htmlFor=inputId; const help=node('p','Нормальный: в пределах ±1 минуты от твоей цели. Это не норма по рейтингу. Цель хранится только в этом браузере.','help'); help.id=`${inputId}-help`;
+    const controls=node('div',undefined,'goal-controls'), save=node('button','Применить','quiet'), clear=node('button','Убрать цель','quiet'), feedback=node('p','','help'); feedback.setAttribute('role','status');
+    const applyGoal=value=>{ const seconds=goalSeconds(value); if(seconds===null) { badge.textContent=item.timing?.label??'Без эталона'; badge.className='timing-badge'; basis.textContent=item.timing?.basis??'Нет сопоставимого ориентира по герою, роли и рейтингу.'; return; } const delta=item.time-seconds; badge.textContent=delta < -60?'Ранний · личная цель':delta > 60?'Поздний · личная цель':'Нормальный · личная цель'; badge.className=`timing-badge ${delta < -60?'timing-early':delta>60?'timing-late':'timing-normal'}`; basis.textContent=`Цель ${stamp(seconds)} ± 1 минута · ${delta===0?'точно в цель':`${stamp(Math.abs(delta))} ${delta<0?'раньше':'позже'}`}. Это сравнение с твоей целью, не с другими игроками.`; };
+    save.type='button'; clear.type='button'; save.addEventListener('click',()=>{const value=input.value.trim(); if(goalSeconds(value)===null) {feedback.textContent='Укажи время в формате 20:00.'; return;} applyGoal(value); try{localStorage.setItem(itemGoalKey(item),value);feedback.textContent='Цель сохранена в этом браузере.';}catch{feedback.textContent='Цель применена. Сохранить в браузере не удалось.';}});
+    clear.addEventListener('click',()=>{input.value='';applyGoal('');try{localStorage.removeItem(itemGoalKey(item));feedback.textContent='Цель убрана.';}catch{feedback.textContent='Цель убрана на этой странице. Хранилище браузера недоступно.';}});
+    applyGoal(input.value); controls.append(input,save,clear); goal.append(inputLabel,controls,help,feedback); card.append(goal); cards.append(card);
+  }
+}
+function renderTraining() {
+  const target=$('next-game-plan'), coach=state.detail.report.coaching, plans=coach?.status==='ready'&&coach.next_game?.length?coach.next_game:insight().training_plan??[]; target.replaceChildren();
+  for(const [index,plan] of plans.slice(0,3).entries()) { const card=node('article',undefined,'training-card'); card.append(node('p',`0${index+1}`,'training-number'),node('h4',plan.title??'Приоритет на матч'),node('p',plan.action??'','training-action'));
+    if(plan.measure) {const measure=node('div',undefined,'training-measure');measure.append(node('span','Как проверить'),node('p',plan.measure));card.append(measure);}
+    const links=node('div',undefined,'evidence-links'); for(const id of (plan.evidence_ids??[]).slice(0,2)) {const evidence=state.evidence.get(id);if(!evidence)continue;const button=node('button',`${stamp(evidence.time)} · ${eventLabels[evidence.type]??'Эпизод'}`,'evidence-link');button.addEventListener('click',()=>focusEvidence(id));links.append(button);} if(links.childElementCount)card.append(links);target.append(card);
+  }
+  if(!target.childElementCount) target.append(node('p','Для этого отчёта отдельный план ещё не сформирован. Ниже доступны комментарии к подтверждённым эпизодам.','muted'));
+}
+
+function drawGraph(id,samples,key,duration) {
+  const valid=samples.filter(sample=>finite(sample[key])), maximum=Math.max(0,...valid.map(sample=>sample[key])), {svg,x,y,cursor}=graphFrame(id,duration,maximum);
+  if(valid.length) { const points=valid.map(sample=>`${x(sample.time).toFixed(2)},${y(sample[key]).toFixed(2)}`).join(' '); svg.insertBefore(svgNode('polygon',{points:`${x(valid[0].time)},138 ${points} ${x(valid.at(-1).time)},138`,class:'chart-area'}),cursor); svg.insertBefore(svgNode('polyline',{points,class:'chart-line',fill:'none','vector-effect':'non-scaling-stroke'}),cursor); }
+  else {const empty=svgNode('text',{x:260,y:80,'text-anchor':'middle',class:'chart-empty'});empty.textContent='Нет данных';svg.append(empty);}
 }
 function seekTime(seconds, evidenceId=null) {
   const report=state.detail?.report; if(!report) return;
@@ -135,6 +237,7 @@ function seekTime(seconds, evidenceId=null) {
   $('timeline-snapshot').textContent=snapshot?`${stamp(snapshot.time)} · Уровень ${num(snapshot.level)} · ${num(snapshot.kills)} / ${num(snapshot.deaths)} / ${num(snapshot.assists)} · Добивания ${num(snapshot.last_hits)} / ${num(snapshot.denies)}`:'До первого снимка статистики. Выбери более поздний момент.';
   for(const graph of state.graphs) { graph.cursor.setAttribute('x1',String(graph.x(state.time))); graph.cursor.setAttribute('x2',String(graph.x(state.time))); }
   for(const row of $('events').children) row.classList.toggle('selected-event',row.dataset.evidenceId===evidenceId);
+  updateMoment();
 }
 function focusEvidence(id) {
   const evidence=state.evidence.get(id); if(!evidence) return;
@@ -177,6 +280,7 @@ function renderDetail() {
   for(const [label,value] of [['Убийства / смерти / помощи',`${num(m.kills)} / ${num(m.deaths)} / ${num(m.assists)}`],['Добивания / денаи',`${num(m.last_hits)} / ${num(m.denies)}`],['Ценность предметов и золота',num(m.net_worth)],['Всего заработано золота',num(m.total_earned_gold)],['Полученный опыт',num(m.xp)],['Время вне игры',stamp(m.confirmed_dead_seconds)]]) { const metric=node('div',undefined,'metric'); metric.append(node('dt',label),node('dd',value)); metrics.append(metric); }
   const duration=Math.max(1,m.duration_seconds??0), samples=(report.economy??[]).filter(sample=>Number.isFinite(sample.time)&&sample.time>=0&&sample.time<=duration);
   $('timeline').max=String(Math.ceil(duration)); state.graphs=[]; drawGraph('gold-chart',samples,'net_worth',duration); drawGraph('xp-chart',samples,'xp',duration);
+  drawBars('income-chart',insight().gold?.bins??[],'income',duration); drawBars('farm-chart',insight().pace??[],'last_hits',duration); drawCombat(duration); renderSources(); renderItems(); renderTraining();
   renderPoints($('findings'),report.findings); renderEvents();
   const coach=report.coaching; $('coaching-section').hidden=false;
   if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points); }
@@ -192,7 +296,7 @@ async function openReplay(id, scroll=false) {
 }
 $('timeline').addEventListener('input',()=>seekTime(Number($('timeline').value)));
 $('event-filter').addEventListener('change',renderEvents);
-for(const id of ['gold-chart','xp-chart']) $(id).addEventListener('click',event=>{ const duration=state.detail?.report?.metrics?.duration_seconds; if(!duration) return; const box=$(id).getBoundingClientRect(), relative=(event.clientX-box.left)/box.width*520; seekTime((relative-20)/480*duration); });
+for(const id of ['gold-chart','xp-chart','income-chart','farm-chart']) $(id).addEventListener('click',event=>{ const duration=state.detail?.report?.metrics?.duration_seconds; if(!duration) return; const box=$(id).getBoundingClientRect(), relative=(event.clientX-box.left)/box.width*520; seekTime((relative-20)/480*duration); });
 $('refresh').addEventListener('click',()=>void refresh().then(()=>state.selected?openReplay(state.selected):undefined).catch(error=>notice(error.message)));
 setInterval(()=>{ if(!state.user||document.hidden||state.busy) return; void refresh().then(()=>{ if(state.selected&&['queued','processing'].includes(state.detail?.replay.state)) return openReplay(state.selected); }).catch(error=>notice(error.message)); },10000);
 void session().catch(error=>{ $('loading').textContent='Не удалось открыть кабинет.'; notice(error.message); });
