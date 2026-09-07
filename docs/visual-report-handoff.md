@@ -18,7 +18,7 @@ Validation passed: 101 Python service tests with PostgreSQL (one skip), mobile/d
 
 - Site: https://narma-72-56-98-68.sslip.io
 - Existing server: 9037783; project: 2655641; IP: 72.56.98.68; approved preset: 6813. Update this existing server only.
-- Confirmed installed release: `2601a5fca0e42abb970047ae4970b540c4ee14c6`.
+- Current installed release: `f323f75f9f009c7cf550975fbca3fec13ec78b3a` (hero-pool follow-up; see `HERO_POOL_OPERATIONS.md`). Original successful visual-report release: `2601a5fca0e42abb970047ae4970b540c4ee14c6`.
 - Successful deployment workflow: `34120203071`, job `101736277246`.
 - Successful saved-report refresh: `34120869804`, job `101738337376`.
 - Saved replay job: `354d95b9-2bb7-4700-923d-796566a7cc01`; ready at attempt 3; selected Steam account: 435842051.
