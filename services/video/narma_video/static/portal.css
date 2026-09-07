@@ -12,3 +12,6 @@ h3{font-size:17px;font-weight:600;line-height:1.4;letter-spacing:-.2px;margin:0 
 .item-observation summary,.item-funding summary{font-size:11px;color:var(--muted);cursor:pointer;min-height:36px;padding:8px 0}.item-observation .help{font-size:11px;line-height:1.7}.realization-status{font-size:12px;font-weight:600;color:#d9e2cd}.item-funding .help{line-height:1.7}
 @media(max-width:680px){.economy-grid .chart-axis-label{font-size:32px}.economy-grid .chart-empty{font-size:32px}}
 .item-step-time{min-height:32px;padding:3px 6px;font-size:12px;font-weight:500;color:var(--accent);font-variant-numeric:tabular-nums;border-color:transparent}.item-steps{gap:3px}
+
+.chart-readable-max,.chart-readable-times{display:none}
+@media(max-width:680px){.economy-grid .chart-axis-label{display:none}.chart-readable-max{display:block;margin:5px 0 2px;padding:0 4%;font-size:11px;line-height:1.4;font-variant-numeric:tabular-nums;color:var(--muted)}.chart-readable-times{display:flex;justify-content:space-between;gap:4px;padding:0 4%;margin-top:3px;font-size:11px;line-height:1.4;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--muted)}.chart-readable-times span{min-width:0}.economy-grid .chart-label{min-height:65px}}

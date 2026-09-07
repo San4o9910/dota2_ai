@@ -29,15 +29,24 @@ compose=(docker compose --project-name narma-video --env-file /opt/narma/secrets
 mark_stage stop_worker
 "${compose[@]}" --profile analysis stop worker
 "${compose[@]}" --profile analysis stop replay-worker
-mark_stage build
-build_log="$release/build.log"
-install -m 600 /dev/null "$build_log"
-if ! BUILDKIT_PROGRESS=plain "${compose[@]}" --profile analysis build >"$build_log" 2>&1; then
-  python3 "$release/ops/timeweb/diagnose_build.py" "$build_log"
+up_options=()
+if [[ "${2:-}" == "--prebuilt" ]]; then
+  mark_stage prebuilt_images
+  python3 "$release/ops/timeweb/prebuilt_images.py" validate "$1"
+  up_options=(--no-build --pull never)
+elif [[ -n "${2:-}" ]]; then
   false
+else
+  mark_stage build
+  build_log="$release/build.log"
+  install -m 600 /dev/null "$build_log"
+  if ! BUILDKIT_PROGRESS=plain "${compose[@]}" --profile analysis build >"$build_log" 2>&1; then
+    python3 "$release/ops/timeweb/diagnose_build.py" "$build_log"
+    false
+  fi
 fi
 mark_stage database_api
-"${compose[@]}" up -d db migrate api
+"${compose[@]}" up -d "${up_options[@]}" db migrate api
 mark_stage readiness
 for attempt in {1..40}; do
   if "${compose[@]}" exec -T api python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=15).close()"; then

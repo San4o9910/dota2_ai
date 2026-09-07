@@ -15,7 +15,7 @@ const failures = {
   REPLAY_PARSE_TIMEOUT:'Разбор реплея занял слишком много времени. Повтори попытку позже.',
   REPLAY_UPLOAD_EXPIRED:'Загрузка не была завершена вовремя. Выбери файл и загрузи его заново.'
 };
-const eventLabels = {death:'Смерть',kill:'Убийство',assist:'Помощь',purchase:'Покупка',buyback:'Выкуп',respawn:'Возвращение',reincarnation:'Реинкарнация',tower:'Башня',ward_destroyed:'Сломанный вард',ward_item_used:'Применение предмета с вардами'};
+const eventLabels = {death:'Смерть',kill:'Убийство',assist:'Помощь',purchase:'Покупка',item_used:'Применение предмета',item_observed:'Предмет в инвентаре',buyback:'Выкуп',respawn:'Возвращение',reincarnation:'Реинкарнация',tower:'Башня',ward_destroyed:'Сломанный вард',ward_item_used:'Применение предмета с вардами'};
 function notice(message='') { $('notice').textContent=message; $('notice').hidden=!message; }
 function node(tag, text, className) { const element=document.createElement(tag); if(text!==undefined) element.textContent=String(text); if(className) element.className=className; return element; }
 function num(value) { return typeof value==='number' && Number.isFinite(value) ? Math.round(value).toLocaleString('ru-RU') : '—'; }
@@ -120,6 +120,15 @@ function jumpTime(time) { seekTime(time); $('economy-heading').scrollIntoView({b
 function timeButton(time, label, className='evidence-link') { const button=node('button',`${stamp(time)}${label?` · ${label}`:''}`,className); button.type='button'; button.addEventListener('click',()=>jumpTime(time)); return button; }
 function graphFrame(id,duration,maximum) {
   const svg=$(id); svg.replaceChildren(); const max=Math.max(1,maximum);
+  // Small adjacent charts need CSS-sized labels: SVG text otherwise shrinks
+  // with the 520-unit viewBox to less than nine pixels on a phone.
+  if(id==='gold-chart'||id==='xp-chart') {
+    for(const previous of svg.parentElement.querySelectorAll('.chart-readable-max,.chart-readable-times')) previous.remove();
+    const maximumLabel=node('p',`Макс. ${num(maximum)}`,'chart-readable-max');
+    const times=node('div',undefined,'chart-readable-times');
+    for(const time of [0,duration/2,duration]) times.append(node('span',stamp(time)));
+    svg.before(maximumLabel); svg.after(times);
+  }
   const x=time=>20+Math.max(0,Math.min(duration,time))/Math.max(1,duration)*480, y=value=>138-Math.max(0,value)/max*118;
   for(const fraction of [0,.5,1]) { const line=svgNode('line',{x1:20,x2:500,y1:y(max*fraction),y2:y(max*fraction),class:'chart-grid'}); svg.append(line); }
   for(const [time,label,anchor] of [[0,'0:00','start'],[duration/2,stamp(duration/2),'middle'],[duration,stamp(duration),'end']]) { const text=svgNode('text',{x:x(time),y:157,'text-anchor':anchor,class:'chart-axis-label'}); text.textContent=label; svg.append(text); }

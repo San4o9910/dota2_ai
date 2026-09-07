@@ -20,6 +20,7 @@ import urllib.request
 from uuid import UUID
 
 from preflight import CheckError, NoRedirect, ORIGIN
+from prebuilt_images import ImageError, prepare_bundle
 
 NAME = "narma-vision-pilot-01"
 MARKER = "NARMA managed pilot San4o9910/dota2_ai 2026-09-06"
@@ -72,7 +73,9 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
         stderr=subprocess.PIPE, timeout=timeout)
     if result.returncode:
         for line in result.stdout.splitlines():
-            if line.startswith(b'{"event": "https_failure"'):
+            if line.startswith(b'{"event": "prebuilt_images_failed"'):
+                emit_image_failure(line)
+            elif line.startswith(b'{"event": "https_failure"'):
                 item=json.loads(line)
                 if re.fullmatch('https_[a-z_]{1,80}',item.get('code','')):
                     event('https_failure',code=item['code'])
@@ -93,7 +96,7 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
                 item=json.loads(line)
                 event('provider_usage_diagnostic',keys=item.get('keys'),usage=item.get('usage'),billing_status=item.get('billing_status'))
     if bootstrap:
-        stages = {"lock", "cloud_init", "packages", "docker_firewall", "stop_worker",
+        stages = {"lock", "cloud_init", "packages", "docker_firewall", "stop_worker", "prebuilt_images",
                   "build", "database_api", "readiness", "ready"}
         for line in (result.stdout + b"\n" + result.stderr).splitlines():
             vision_state = re.fullmatch(rb"NARMA_GEMINI_CHECK:(passed|previously_passed|previous_attempt_unresolved|failed)", line)
@@ -138,6 +141,29 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
         safe_phase = phase if phase in phases else "command"
         raise CheckError("command_failed_" + safe_phase + "_exit_" + str(result.returncode))
     return result.stdout
+
+
+def emit_image_failure(line):
+    try:
+        item = json.loads(line)
+        if item.get("event") == "prebuilt_images_failed" and re.fullmatch("prebuilt_[a-z_]{1,80}", item.get("code", "")):
+            event("prebuilt_images_failed", code=item["code"])
+    except (ValueError, TypeError):
+        pass
+
+
+def transfer_image_archive(argv, archive, timeout=900):
+    """Stream the archive over authenticated SSH without buffering image bytes."""
+    try:
+        with Path(archive).open("rb") as source, tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            result = subprocess.run(argv, stdin=source, stdout=output, stderr=errors, timeout=timeout)
+            output.seek(0)
+            for line in output.read(65536).splitlines():
+                emit_image_failure(line)
+            if result.returncode:
+                raise CheckError("prebuilt_archive_transfer_failed")
+    except (OSError, subprocess.TimeoutExpired):
+        raise CheckError("prebuilt_archive_transfer_failed") from None
 
 
 def address(server):
@@ -280,6 +306,12 @@ def main():
     ssh_id = None
     with tempfile.TemporaryDirectory(prefix="narma-pilot-") as tmp:
         temporary = Path(tmp)
+        try:
+            image_archive, image_manifest, image_metadata = prepare_bundle(sha, temporary / "images")
+        except ImageError as error:
+            raise CheckError(str(error)) from None
+        event("prebuilt_images_prepared", release=sha, platform="linux/amd64",
+            archive_bytes=image_metadata["archive_bytes"], source_tree=image_metadata["source_tree"])
         private = temporary/"key"
         command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(private)])
         public = private.with_suffix(".pub").read_text().strip()
@@ -352,6 +384,9 @@ runcmd:
             command(ssh+["mkdir -p " + release], timeout=30, phase="release_directory")
             archive = temporary/"source.tar.gz"
             with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(image_manifest, arcname="images-manifest.json", recursive=False)
+                if Path(".dockerignore").is_file():
+                    bundle.add(".dockerignore", arcname=".dockerignore", recursive=False)
                 for directory in (Path("services/video"), Path("services/replay"), Path("ops/timeweb")):
                     for path in directory.rglob("*"):
                         if not path.is_file() or path.is_symlink():
@@ -369,9 +404,17 @@ runcmd:
             event("installing_private_services", server_id=server_id, release=sha)
             command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
             try:
-                command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha], timeout=1200, bootstrap=True, phase="bootstrap")
+                transfer_image_archive(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py receive " + sha], image_archive)
+                command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py install " + sha], timeout=650)
+                event("prebuilt_images_installed", release=sha, immutable_ids_verified=True)
+                command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha + " --prebuilt"], timeout=1200, bootstrap=True, phase="bootstrap")
                 ensure_https(ssh,release,hostname,host)
             except Exception:
+                try:
+                    command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py rollback " + sha], timeout=150)
+                    event("previous_images_and_api_restored")
+                except Exception:
+                    event("previous_images_and_api_restore_unconfirmed")
                 try:
                     command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+' --rollback-only'],timeout=150)
                     event('previous_worker_restored_after_bootstrap_failure')
