@@ -159,7 +159,7 @@ try {
     assert.equal(await page.locator('#next-game-plan .training-card').count(),1);
     assert.equal(await page.locator('#item-cards .item-card:visible').count(),1);
     assert.equal(await page.locator('#item-rail .item-chip').count(),2);
-    assert.equal(await page.locator('#item-rail .item-chip[aria-pressed=true]').textContent(),'11:40 · Radiance');
+    assert.equal(await page.getByRole('button',{name:'11:40 · Radiance',exact:true,pressed:true}).count(),1);
     await page.getByRole('heading',{name:'Разбор за Necrophos',exact:true}).waitFor();
     assert.match(await page.locator('#hero-context').textContent(),/Позиция 2 · указана тобой/);
     assert.match(await page.locator('#hero-context').textContent(),/Death Pulse42 применений−0:05 — 76:40/);
