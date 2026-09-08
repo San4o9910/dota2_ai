@@ -246,6 +246,7 @@ app.mount('/assets',StaticFiles(directory=STATIC_ROOT),name='portal-assets')
 
 @app.get('/')
 @app.get('/heroes')
+@app.get('/builds')
 @app.get('/learn')
 @app.get('/practice')
 @app.get('/updates')

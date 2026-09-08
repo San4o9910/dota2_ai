@@ -46,6 +46,7 @@ switchTab(pathTab(),{historyMode:'none'});
 function buttons() {
   $('replay-submit').disabled=state.busy || !$('replay-file').files[0] || (!state.profile && !$('nickname').value.trim());
   $('replay-file').disabled=state.busy; $('nickname').disabled=state.busy;
+  for(const id of ['replay-position','replay-mmr','replay-training-level']) $(id).disabled=state.busy;
 }
 function profileView() {
   const profile=state.profile;
@@ -163,13 +164,18 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)stopChatgpt
 
 $('replay-file').addEventListener('change',()=>{ state.uploadId=null; buttons(); });
 $('nickname').addEventListener('input',()=>{ state.uploadId=null; buttons(); });
+for(const id of ['replay-position','replay-mmr','replay-training-level']) $(id).addEventListener('input',()=>{ state.uploadId=null; buttons(); });
 $('replay-form').addEventListener('submit',async event=>{
   event.preventDefault(); const file=$('replay-file').files[0]; if(!file||state.busy) return;
   if(!/\.dem$/i.test(file.name)||file.size>512*1024**2||file.size<20) return notice('Выбери полный файл .dem размером до 512 МБ.');
+  const position=$('replay-position').value?Number($('replay-position').value):null;
+  const mmr=$('replay-mmr').value.trim()===''?null:Number($('replay-mmr').value);
+  const training_level=$('replay-training-level').value||null;
+  if(mmr!==null&&(!Number.isInteger(mmr)||mmr<0||mmr>20000)) return notice('Укажи целый MMR от 0 до 20 000 или оставь поле пустым.');
   state.busy=true; buttons(); notice(); $('replay-progress').hidden=false; $('upload-status').textContent='Начинаем загрузку реплея…';
   try {
     state.uploadId??=crypto.randomUUID(); const id=state.uploadId;
-    const init=await api('/api/replays','POST',{id,filename:file.name,size_bytes:file.size,...(!state.profile?{nickname:$('nickname').value.trim()}:{})});
+    const init=await api('/api/replays','POST',{id,filename:file.name,size_bytes:file.size,position,mmr,training_level,...(!state.profile?{nickname:$('nickname').value.trim()}:{})});
     if(init.replay.state==='uploading') {
       const status=await api('/api/replays/'+id), completed=new Set(status.parts);
       for(let offset=0;offset<file.size;offset+=init.part_bytes) {
@@ -461,6 +467,13 @@ function renderDetail() {
   $('result-status').textContent=job.state==='failed'?(failures[job.failure_code]??'Не удалось завершить разбор этого реплея. Повтори загрузку полного файла .dem.'):job.state==='queued'?'Реплей загружен. Ожидаем начало разбора.':job.state==='processing'?`Читаем события матча и готовим разбор · ${num(job.progress)}%`:job.state==='uploading'?'Реплей ещё загружается.':report?`Полный матч · ${stamp(report.metrics?.duration_seconds)} · Разбор закреплённого игрока`:'Результат ещё не получен.';
   $('report-body').hidden=!report;
   renderHeroHeader(report);
+  const trainingContext=report?.coaching?.context??(!state.showArchived&&!detail.report_is_previous?job.training_context:null);
+  const contextParts=[];
+  if(trainingContext?.position>=1&&trainingContext.position<=5) contextParts.push(`Позиция ${trainingContext.position}`);
+  if(Number.isInteger(trainingContext?.mmr)&&trainingContext.mmr>=0) contextParts.push(`MMR ${num(trainingContext.mmr)} · указан тобой`);
+  const depthLabels={foundations:'Основы',application:'Применение',advanced:'Сложные решения'};
+  if(depthLabels[trainingContext?.training_level]) contextParts.push(depthLabels[trainingContext.training_level]);
+  $('report-training-context').hidden=!report||!contextParts.length; $('report-training-context').textContent=contextParts.join(' · ');
   const archive=$('previous-report-toggle'); archive.hidden=!detail.archived_report?.report||detail.report_is_previous===true; archive.textContent=state.showArchived?'Вернуться к текущему разбору':'Предыдущий тренерский разбор'; archive.setAttribute('aria-pressed',String(state.showArchived));
   $('previous-report-note').hidden=!(state.showArchived||detail.report_is_previous||report?.coaching?.origin==='previous_report');
   $('previous-report-note').textContent=state.showArchived||detail.report_is_previous?'Показан сохранённый предыдущий разбор целиком, с его исходными событиями и таймкодами.':report?.coaching?.origin==='previous_report'?'Сохранён предыдущий тренерский комментарий: обновить его в этом запуске не удалось.':'';

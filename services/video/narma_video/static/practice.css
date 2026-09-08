@@ -8,8 +8,8 @@
 .practice button { cursor: pointer; }
 .practice button:disabled { cursor: default; }
 .practice button:focus-visible, .practice select:focus-visible, .practice summary:focus-visible { outline: 3px solid var(--practice-teal); outline-offset: 4px; }
-.practice h2:focus, .practice h3:focus { outline: none; }
-.practice h2, .practice h3 { scroll-margin-top: 100px; }
+.practice h2:focus, .practice h3:focus, .practice h4:focus { outline: none; }
+.practice h2, .practice h3, .practice h4 { scroll-margin-top: 100px; }
 .practice-setup { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(240px, 1fr); gap: 24px; align-items: start; }
 .practice-card { background: var(--practice-surface); border: 1px solid var(--practice-line); border-radius: 14px; padding: clamp(20px, 3vw, 32px); min-width: 0; }
 .practice-intro { display: grid; gap: 22px; }
@@ -20,7 +20,8 @@
 .practice-steps li > span:last-child { color: var(--practice-muted); font-size: .82rem; }
 .practice-steps strong { font-size: .92rem; }
 .practice-step-number { color: var(--practice-gold); font: 700 .76rem ui-monospace, monospace; }
-.practice-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.practice-filters { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 16px; }
+.practice-level-note { padding: 16px 18px; border-left: 2px solid var(--practice-gold); background: #22231f; border-radius: 0 7px 7px 0; color: #d9d4c8; font-size: .9rem; }
 .practice-filter { display: grid; gap: 8px; min-width: 0; }
 .practice-filter-label { color: var(--practice-muted); font-size: .8rem; font-weight: 600; }
 .practice-filter select { width: 100%; min-width: 0; border-radius: 7px; min-height: 46px; padding: 9px 12px; background: #121518; border: 1px solid var(--practice-line); color: var(--text, #edf0f2); color-scheme: dark; }
@@ -72,7 +73,14 @@
 .practice-reasoning { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; margin: 0; }
 .practice-reasoning dt { margin-bottom: 8px; color: var(--practice-teal); font-size: .76rem; font-weight: 700; letter-spacing: .04em; }
 .practice-reasoning dd { margin: 0; font-size: .92rem; color: #d2dbd7; }
-.practice-alternatives { display: grid; gap: 18px; padding-top: 24px; border-top: 1px solid #35423e; }
+.practice-choice-review { display: grid; gap: 14px; }
+.practice-selected-review { display: grid; gap: 6px; font-size: .88rem; }
+.practice-selected-review strong { font-weight: 600; color: var(--practice-teal); }
+.practice-selected-review p { color: var(--practice-muted); }
+.practice-alternatives { border-top: 1px solid #35423e; }
+.practice-alternatives summary { cursor: pointer; padding: 13px 0; min-height: 46px; color: var(--practice-muted); font-size: .86rem; font-weight: 600; }
+.practice-alternatives summary::marker { color: var(--practice-gold); }
+.practice-alternatives-content { display: grid; gap: 18px; padding: 8px 0 4px; }
 .practice-alternative { display: grid; gap: 6px; font-size: .86rem; }
 .practice-alternative p { color: var(--practice-muted); }
 .practice-alternative strong { font-weight: 600; }
@@ -80,6 +88,9 @@
 .practice-transfer { display: grid; gap: 8px; padding: 18px; background: #1d2925; border-radius: 8px; }
 .practice-transfer > p:last-child { font-size: .9rem; }
 .practice-feedback > .practice-button { justify-self: start; }
+.practice-variation { display: grid; gap: 18px; padding: 22px; border: 1px solid #66583d; border-radius: 10px; background: #20211c; }
+.practice-variation > .practice-button { justify-self: start; }
+.practice-variation-question { font-weight: 650; }
 .practice-result { display: grid; gap: 22px; }
 .practice-score { font-size: clamp(2.5rem, 7vw, 4rem); font-weight: 650; letter-spacing: -.045em; line-height: 1.1; color: var(--practice-gold); }
 .practice-recap { padding: 22px; display: grid; gap: 10px; border: 1px solid #3b514c; background: #172420; border-radius: 10px; }
@@ -116,6 +127,8 @@
   .practice-conditions { font-size: .91rem; }
   .practice-result-row summary { gap: 9px; }
   .practice-recap { padding: 17px; }
+  .practice-variation { padding: 17px 13px; }
+  .practice-variation > .practice-button { width: 100%; }
   .practice-actions > .practice-button { width: 100%; }
   .practice-feedback > .practice-button { width: 100%; }
 }

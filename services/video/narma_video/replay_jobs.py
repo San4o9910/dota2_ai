@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request
@@ -42,6 +43,9 @@ class CreateReplay(BaseModel):
     size_bytes: int = Field(ge=20, le=MAX_REPLAY_BYTES)
     nickname: str | None = Field(default=None, min_length=1, max_length=128)
     match_id: str | None = Field(default=None, pattern=r"^[1-9][0-9]{7,11}$")
+    position: int | None = Field(default=None, ge=1, le=5, strict=True)
+    mmr: int | None = Field(default=None, ge=0, le=20000, strict=True)
+    training_level: Literal["foundations", "application", "advanced"] | None = None
 
 
 def replay_directory(job_id) -> Path:
@@ -61,7 +65,13 @@ def public(row):
     return {**{key: row[key] for key in (
         "id", "filename", "size_bytes", "nickname", "match_id", "state",
         "progress", "failure_code", "created_at", "updated_at")},
-        "source_retained": row["storage_deleted_at"] is None}
+        "source_retained": row["storage_deleted_at"] is None,
+        "training_context": {
+            "position": row.get("requested_position"), "mmr": row.get("requested_mmr"),
+            "mmr_source": "self_reported" if row.get("requested_mmr") is not None else "unknown",
+            "training_level": row.get("training_level"),
+            "training_level_source": "player" if row.get("training_level") is not None else "unknown",
+        }}
 
 
 def list_replays(owner_id):
@@ -88,7 +98,10 @@ def create_replay(body: CreateReplay, owner_id):
             if (previous["owner_id"] != owner_id or previous["filename"] != body.filename
                     or previous["size_bytes"] != body.size_bytes
                     or previous["requested_nickname"] != nickname
-                    or previous["expected_match_id"] != body.match_id or previous["state"] == "deleted"):
+                    or previous["expected_match_id"] != body.match_id
+                    or previous.get("requested_position") != body.position
+                    or previous.get("requested_mmr") != body.mmr
+                    or previous.get("training_level") != body.training_level or previous["state"] == "deleted"):
                 reject(409, "REPLAY_REQUEST_REUSED", "Этот запрос уже относится к другой загрузке. Выберите файл заново.")
             return {"replay": public(previous), "part_bytes": PART_BYTES}
         own = connection.execute("""SELECT count(*) FILTER (WHERE created_at>now()-interval '1 day') AS daily,
@@ -111,10 +124,12 @@ def create_replay(body: CreateReplay, owner_id):
             reject(409, "REPLAY_REQUEST_REUSED", "Повторите загрузку с новым заданием.")
         directory.mkdir(mode=0o700, exist_ok=True)
         row = connection.execute("""INSERT INTO replay_jobs
-            (id,owner_id,filename,size_bytes,requested_nickname,nickname,expected_match_id,account_id)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (id,owner_id,filename,size_bytes,requested_nickname,nickname,expected_match_id,account_id,
+             requested_position,requested_mmr,training_level)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
             (body.id, owner_id, body.filename, body.size_bytes, nickname, nickname,
-             body.match_id, profile["account_id"] if profile else None)).fetchone()
+             body.match_id, profile["account_id"] if profile else None,
+             body.position, body.mmr, body.training_level)).fetchone()
     return {"replay": public(row), "part_bytes": PART_BYTES}
 
 
@@ -388,8 +403,17 @@ def finish_replay(job_id, lease_token, report):
     if not isinstance(report, dict) or len(json.dumps(report, ensure_ascii=False, allow_nan=False).encode()) > MAX_RESULT_BYTES:
         raise ValueError("REPLAY_RESULT_INVALID")
     with database() as connection:
+        # Ready capture writes both role projections. Serialize it with their
+        # manual writers before locking the replay, avoiding pool/notes lock
+        # inversion. Owner identity is immutable; the original fenced query
+        # below rechecks state, token and expiry after any wait on this lock.
+        owner = connection.execute("""SELECT owner_id FROM replay_jobs WHERE id=%s AND state='processing'
+            AND lease_token=%s AND lease_expires_at>now()""", (job_id, lease_token)).fetchone()
+        if owner is None:
+            return False
+        connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner["owner_id"],))
         row = connection.execute("""SELECT * FROM replay_jobs WHERE id=%s AND state='processing'
-            AND lease_token=%s AND lease_expires_at>now() FOR UPDATE""", (job_id, lease_token)).fetchone()
+            AND lease_token=%s AND lease_expires_at>clock_timestamp() FOR UPDATE""", (job_id, lease_token)).fetchone()
         if row is None:
             return False
         player = report.get("player")

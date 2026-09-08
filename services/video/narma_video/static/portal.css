@@ -50,3 +50,75 @@ h3{font-size:17px;font-weight:600;line-height:1.4;letter-spacing:-.2px;margin:0 
 /* Shared public/private hierarchy: readable density with clear personal actions. */
 .top{padding-top:18px;padding-bottom:18px}.brand-symbol{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);border-radius:4px}.public-hub-link{margin-left:auto;color:var(--accent);font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap}.public-hub-link:hover{text-decoration:underline}.public-hub-link span{margin-left:8px}.top .pilot{margin-left:0}.content{padding-top:32px}.surface{padding:24px}.page-heading h1{font-weight:650}.sidebar nav button[aria-current=page]{box-shadow:inset 2px 0 var(--accent)}.coaching-connect{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 16px;border:1px solid #596952;border-radius:7px;font-size:13px;font-weight:600;text-decoration:none}.pool-hero-portrait{flex-basis:82px;width:82px;max-width:82px;border-radius:5px}.pool-hero-portrait .report-portrait-fallback{font-size:19px}.learning-filters-panel{margin-bottom:20px}.learning-filters-panel .pool-filters{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.personal-learning-links{display:flex;gap:24px;flex-wrap:wrap;margin-top:20px}.personal-learning-links a{font-size:13px;color:var(--accent);min-height:44px;display:inline-flex;align-items:center}.next-game-section .training-grid:empty{display:none}.next-game-section .training-grid:not(:empty){margin-top:20px}#coaching-section{background:#1c2726;border:1px solid #3d5750;border-left:3px solid #7dd9c4;border-radius:6px;padding:22px;margin-top:20px}#coaching-section h3{color:#b7e9dc}#coaching-section .report-point{padding:18px 0}#coaching-section .report-point:last-child{padding-bottom:0}
 @media(max-width:800px){.public-hub-link{font-size:11px}.top .pilot{display:none}.top{gap:16px}}@media(max-width:680px){.top{padding:16px}.public-hub-link{max-width:95px;white-space:normal;text-align:right;line-height:1.5;font-size:10px}.public-hub-link span{margin-left:3px}.surface{padding:20px 17px}.sidebar nav button{flex:none;font-size:11px;padding:10px}.content{padding-top:24px}.learning-filters-panel .pool-filters{grid-template-columns:1fr}.learning-filters-panel .pool-filters button{width:100%}.pool-hero-portrait{flex-basis:70px;width:70px;max-width:70px}#coaching-section{padding:18px 15px}.personal-learning-links{gap:15px}.personal-learning-links a{font-size:12px}}
+
+/* Keep the game atmosphere outside the opaque match-analysis surfaces. */
+body { isolation: isolate; background: #101416; }
+body::before {
+  content: "";
+  position: fixed;
+  inset: -8%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 6% 10%, #28423b2e 0, transparent 52%),
+    linear-gradient(120deg, transparent 34%, #6272650b 52%, transparent 72%),
+    radial-gradient(ellipse at 96% 80%, #51422f1f 0, transparent 55%);
+  opacity: .6;
+  animation: portal-mist 45s ease-in-out infinite alternate;
+}
+@keyframes portal-mist {
+  from { transform: translate3d(-1%, -.5%, 0); opacity: .45; }
+  to { transform: translate3d(1%, .7%, 0); opacity: .7; }
+}
+.file-area { border-color: #607168; }
+.file-area:hover { background: #24302f; border-color: #bfa971; }
+.file-area:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+.file-area input::file-selector-button {
+  font: inherit;
+  font-weight: 600;
+  min-height: 36px;
+  padding: 7px 12px;
+  margin-right: 10px;
+  border: 1px solid #66736a;
+  border-radius: 5px;
+  background: #2c3a35;
+  color: #edf0f2;
+  cursor: pointer;
+}
+.replay-context {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+  padding: 16px 0 20px;
+  margin: 0;
+  border: 0;
+}
+.replay-context legend {
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.replay-context label {
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.replay-context :is(select, input) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin-top: 7px;
+  min-height: 44px;
+  font-size: 12px;
+  padding: 9px 8px;
+}
+@media (max-width: 680px) {
+  .replay-context { grid-template-columns: 1fr; gap: 12px; padding-top: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before { animation: none; transform: none; opacity: .55; }
+}

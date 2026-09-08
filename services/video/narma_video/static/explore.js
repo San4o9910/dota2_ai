@@ -1,9 +1,9 @@
 const page = document.querySelector('#page-content');
-const paths = { '/': 'home', '/heroes': 'heroes', '/learn': 'learn', '/practice': 'practice', '/updates': 'updates' };
+const paths = { '/': 'home', '/heroes': 'heroes', '/builds': 'builds', '/learn': 'learn', '/practice': 'practice', '/updates': 'updates' };
 const route = paths[location.pathname.replace(/\/$/, '') || '/'] || 'home';
 const attributes = { strength: 'Сила', agility: 'Ловкость', intelligence: 'Интеллект', universal: 'Универсальный' };
 const categories = { patch: 'Обновление', event: 'Событие', news: 'Новости' };
-const titles = { home: 'Играй осознаннее', heroes: 'Герои Dota 2', learn: 'Обучение', practice: 'Тренажёр решений', updates: 'В мире Dota' };
+const titles = { home: 'Играй осознаннее', heroes: 'Герои Dota 2', builds: 'Сборки и игровые задачи', learn: 'Обучение', practice: 'Тренажёр решений', updates: 'В мире Dota' };
 const allowedLinks = new Set(['www.dota2.com', 'dota2.com', 'store.steampowered.com', 'steamcommunity.com', 'www.steamcommunity.com', 'bsjdota.com', 'prosettings.net', 'www.reddit.com', 'reddit.com', 'www.cybersport.ru', 'cybersport.ru']);
 const imageHosts = new Set(['cdn.cloudflare.steamstatic.com', 'cdn.akamai.steamstatic.com', 'shared.akamai.steamstatic.com', 'clan.akamai.steamstatic.com', 'clan.cloudflare.steamstatic.com', 'shared.cloudflare.steamstatic.com', 'www.dota2.com', 'cdn.steamstatic.com', 'cdn.fastly.steamstatic.com', 'clan.fastly.steamstatic.com']);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -87,7 +87,7 @@ async function heroes() {
         selected = hero;
         if (!hero) { inspector.hidden = true; return; }
         inspector.hidden = false;
-        inspector.innerHTML = `${heroImage(hero, 'eager')}<div class="inspector-body"><h2>${esc(hero.display_name)}</h2><dl class="inspector-facts"><div><dt>Основной атрибут</dt><dd><i class="attribute-dot ${esc(hero.attribute)}" aria-hidden="true"></i>${esc(attributes[hero.attribute] || 'Не указан')}</dd></div><div><dt>Сложность по Dota 2</dt><dd><span class="difficulty" aria-hidden="true">${'◆'.repeat(Math.min(3, Math.max(1, Number(hero.complexity) || 1)))}</span>${esc(hero.complexity)} из 3</dd></div></dl>${external(hero.official_url, 'Способности и герой ↗', 'button primary')}<a class="button subtle" href="/learn">Разобраться в игровых задачах →</a><p>Способности и изменения героя смотри у Valve. Личные результаты на герое появятся в твоём пуле после разбора матчей.</p></div>`;
+        inspector.innerHTML = `${heroImage(hero, 'eager')}<div class="inspector-body"><h2>${esc(hero.display_name)}</h2><dl class="inspector-facts"><div><dt>Основной атрибут</dt><dd><i class="attribute-dot ${esc(hero.attribute)}" aria-hidden="true"></i>${esc(attributes[hero.attribute] || 'Не указан')}</dd></div><div><dt>Сложность по Dota 2</dt><dd><span class="difficulty" aria-hidden="true">${'◆'.repeat(Math.min(3, Math.max(1, Number(hero.complexity) || 1)))}</span>${esc(hero.complexity)} из 3</dd></div></dl>${external(hero.official_url, 'Способности и герой ↗', 'button primary')}<a class="button subtle" href="${esc(local('/builds', { hero: hero.slug }))}">Сборки и игровые задачи →</a><p>Способности и изменения героя смотри у Valve. Личные результаты на герое появятся в твоём пуле после разбора матчей.</p></div>`;
         document.querySelectorAll('[data-hero]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.hero) === hero.id)));
         imageFallbacks(inspector); sync();
       };
@@ -178,6 +178,11 @@ async function practice() {
   catch { errorPanel(root, practice, 'Не удалось открыть тренажёр. Попробуй ещё раз.'); }
 }
 
-try { await ({ home, heroes, learn, updates, practice }[route])(); }
+async function builds() {
+  const { mountBuilds } = await import('/assets/builds.js');
+  await mountBuilds(page);
+}
+
+try { await ({ home, heroes, builds, learn, updates, practice }[route])(); }
 catch { errorPanel(page, () => location.reload()); }
 finally { page.setAttribute('aria-busy', 'false'); }

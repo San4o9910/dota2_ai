@@ -19,7 +19,7 @@ def public_client(monkeypatch):
 
 
 def test_public_browsing_does_not_require_database_or_login(public_client):
-    for path in ('/', '/heroes', '/learn', '/practice', '/updates'):
+    for path in ('/', '/heroes', '/builds', '/learn', '/practice', '/updates'):
         response = public_client.get(path)
         assert response.status_code == 200
         assert '/assets/explore.js' in response.text

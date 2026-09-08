@@ -1,11 +1,24 @@
 /* Original, fictional teaching situations. No replay or model inference is used. */
 const TOPICS = Object.freeze({ all: 'Все темы', map: 'Карта', lane: 'Линия', items: 'Предметы', fights: 'Драка' });
 const POSITIONS = Object.freeze({ all: 'Все позиции', 1: '1 · Керри', 2: '2 · Мид', 3: '3 · Офлейн', 4: '4 · Поддержка', 5: '5 · Полная поддержка' });
+const DIFFICULTIES = Object.freeze({ foundations: 'Основы', application: 'Применение', advanced: 'Сложные решения' });
+const LEVEL_DESCRIPTIONS = Object.freeze({
+  foundations: 'Одна задача и явные условия: добивание, доступность предмета, позиция и безопасный маршрут. Начни здесь, если ещё трудно назвать причину решения.',
+  application: 'Сравни две полезные задачи: подготовку волны, время команды, расход телепорта и продолжение контроля. Объясни, чем платишь за выбранный вариант.',
+  advanced: 'Учти цену информации, распределение давления, выкуп и закрывающееся окно. После ответа появится новое условие: проверь, нужно ли менять план.',
+});
 const STORAGE_KEY = 'narma.practice.v1.history';
 const VERSION = 'narma.practice.v1';
 const mounts = new WeakMap();
 const bounded = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 const ident = value => typeof value === 'string' && /^[a-z0-9-]{1,64}$/.test(value);
+const difficultyOf = value => Object.hasOwn(DIFFICULTIES, value) ? value : 'foundations';
+
+function validateChoices(value) {
+  if (!Array.isArray(value.choices) || value.choices.length !== 3 || new Set(value.choices.map(choice => choice?.id)).size !== 3) throw new Error('Invalid choices');
+  for (const choice of value.choices) if (!choice || !ident(choice.id) || !bounded(choice.text, 400) || !bounded(choice.explanation, 900)) throw new Error('Invalid choice');
+  if (!value.choices.some(choice => choice.id === value.correctChoiceId)) throw new Error('Invalid answer');
+}
 
 export function validatePracticeCatalog(value) {
   if (!value || value.version !== VERSION || !Array.isArray(value.scenarios) || !value.scenarios.length || value.scenarios.length > 100) throw new Error('Invalid practice catalog');
@@ -13,12 +26,16 @@ export function validatePracticeCatalog(value) {
   for (const scenario of value.scenarios) {
     if (!scenario || !ident(scenario.id) || ids.has(scenario.id) || !Object.hasOwn(TOPICS, scenario.topic) || scenario.topic === 'all') throw new Error('Invalid practice scenario');
     ids.add(scenario.id);
+    if (!Object.hasOwn(DIFFICULTIES, scenario.difficulty)) throw new Error('Invalid difficulty');
     if (!Array.isArray(scenario.positions) || !scenario.positions.length || scenario.positions.length > 5 || scenario.positions.some(p => !Number.isInteger(p) || p < 1 || p > 5) || new Set(scenario.positions).size !== scenario.positions.length) throw new Error('Invalid positions');
     for (const key of ['title', 'question', 'signal', 'action', 'why', 'exception', 'reviewQuestion']) if (!bounded(scenario[key], key === 'title' ? 120 : 700)) throw new Error('Invalid practice text');
     if (!Array.isArray(scenario.context) || scenario.context.length < 2 || scenario.context.length > 6 || scenario.context.some(line => !bounded(line, 700))) throw new Error('Invalid context');
-    if (!Array.isArray(scenario.choices) || scenario.choices.length !== 3 || new Set(scenario.choices.map(choice => choice?.id)).size !== 3) throw new Error('Invalid choices');
-    for (const choice of scenario.choices) if (!choice || !ident(choice.id) || !bounded(choice.text, 400) || !bounded(choice.explanation, 900)) throw new Error('Invalid choice');
-    if (!scenario.choices.some(choice => choice.id === scenario.correctChoiceId)) throw new Error('Invalid answer');
+    validateChoices(scenario);
+    if (scenario.variation !== undefined) {
+      const variation = scenario.variation;
+      if (!variation || !bounded(variation.question, 700) || !Array.isArray(variation.context) || variation.context.length < 1 || variation.context.length > 4 || variation.context.some(line => !bounded(line, 700))) throw new Error('Invalid variation');
+      validateChoices(variation);
+    }
     for (const key of ['hero', 'item']) if (scenario[key] && (!/^[a-z0-9_]{1,80}$/.test(scenario[key].id) || !bounded(scenario[key].name, 100))) throw new Error('Invalid artwork');
   }
   return value.scenarios;
@@ -27,7 +44,8 @@ export function validatePracticeCatalog(value) {
 export function filterPracticeScenarios(scenarios, filters = {}) {
   const topic = Object.hasOwn(TOPICS, filters.topic) ? filters.topic : 'all';
   const position = Object.hasOwn(POSITIONS, filters.position) ? String(filters.position) : 'all';
-  return scenarios.filter(scenario => (topic === 'all' || scenario.topic === topic) && (position === 'all' || scenario.positions.includes(Number(position))));
+  const difficulty = difficultyOf(filters.difficulty);
+  return scenarios.filter(scenario => difficultyOf(scenario.difficulty) === difficulty && (topic === 'all' || scenario.topic === topic) && (position === 'all' || scenario.positions.includes(Number(position))));
 }
 
 export function createPracticeSession(scenarios, filters = {}, random = Math.random) {
@@ -38,7 +56,7 @@ export function createPracticeSession(scenarios, filters = {}, random = Math.ran
     const j = Math.floor(Math.max(0, Math.min(0.999999999, Number.isFinite(draw) ? draw : 0)) * (i + 1));
     [questions[i], questions[j]] = [questions[j], questions[i]];
   }
-  return { questions: questions.slice(0, 5), index: 0, answers: [], status: 'answering' };
+  return { questions: questions.slice(0, 5), index: 0, answers: [], variations: {}, status: 'answering' };
 }
 
 export function answerPracticeQuestion(session, choiceId) {
@@ -55,9 +73,24 @@ export function advancePracticeSession(session) {
     : { ...session, index: session.index + 1, status: 'answering' };
 }
 
+export function revealPracticeVariation(session) {
+  if (!session || session.status !== 'review') return session;
+  const scenario = session.questions[session.index];
+  if (!scenario.variation || session.variations?.[scenario.id]) return session;
+  return { ...session, variations: { ...session.variations, [scenario.id]: { status: 'answering' } } };
+}
+
+export function answerPracticeVariation(session, choiceId) {
+  if (!session || session.status !== 'review') return session;
+  const scenario = session.questions[session.index];
+  const variation = scenario.variation;
+  if (!variation || session.variations?.[scenario.id]?.status !== 'answering' || !variation.choices.some(choice => choice.id === choiceId)) return session;
+  return { ...session, variations: { ...session.variations, [scenario.id]: { status: 'review', choiceId, correct: choiceId === variation.correctChoiceId } } };
+}
+
 export function validatePracticeHistory(value) {
   if (!value || value.version !== VERSION || !Array.isArray(value.sessions) || value.sessions.length > 20) return [];
-  return value.sessions.filter(entry => entry && bounded(entry.id, 100) && typeof entry.completedAt === 'string' && entry.completedAt.length <= 40 && Number.isFinite(Date.parse(entry.completedAt)) && Number.isInteger(entry.total) && entry.total >= 1 && entry.total <= 5 && Number.isInteger(entry.correct) && entry.correct >= 0 && entry.correct <= entry.total && Object.hasOwn(TOPICS, entry.topic) && Object.hasOwn(POSITIONS, entry.position)).slice(-20);
+  return value.sessions.filter(entry => entry && bounded(entry.id, 100) && typeof entry.completedAt === 'string' && entry.completedAt.length <= 40 && Number.isFinite(Date.parse(entry.completedAt)) && Number.isInteger(entry.total) && entry.total >= 1 && entry.total <= 5 && Number.isInteger(entry.correct) && entry.correct >= 0 && entry.correct <= entry.total && Object.hasOwn(TOPICS, entry.topic) && Object.hasOwn(POSITIONS, entry.position) && (entry.difficulty === undefined || Object.hasOwn(DIFFICULTIES, entry.difficulty))).slice(-20).map(entry => ({ ...entry, difficulty: difficultyOf(entry.difficulty) }));
 }
 
 function element(tag, className, text) {
@@ -91,6 +124,28 @@ function focusHeading(node) {
   node.focus();
 }
 
+function choiceFeedback(choices, choiceId, stage) {
+  const review = element('div', 'practice-choice-review');
+  const selected = choices.find(choice => choice.id === choiceId);
+  const selectedReview = element('div', 'practice-selected-review');
+  const explanation = element('p', '', selected.explanation);
+  explanation.dataset.practiceSelectedExplanation = stage;
+  selectedReview.append(element('strong', '', 'О твоём выборе'), explanation);
+  const alternatives = element('details', 'practice-alternatives');
+  alternatives.dataset.practiceAlternatives = stage;
+  alternatives.append(element('summary', '', 'Разбор других вариантов'));
+  const contents = element('div', 'practice-alternatives-content');
+  choices.forEach((choice, index) => {
+    if (choice.id === choiceId) return;
+    const row = element('div', 'practice-alternative');
+    row.append(element('strong', '', `${String.fromCharCode(65 + index)} · ${choice.text}`), element('p', '', choice.explanation));
+    contents.append(row);
+  });
+  alternatives.append(contents);
+  review.append(selectedReview, alternatives);
+  return review;
+}
+
 export function mountPractice(container) {
   if (!(container instanceof HTMLElement)) throw new TypeError('Practice needs a container');
   mounts.get(container)?.();
@@ -104,6 +159,7 @@ export function mountPractice(container) {
   let filters = {
     topic: Object.hasOwn(TOPICS, query.get('topic')) ? query.get('topic') : 'all',
     position: Object.hasOwn(POSITIONS, query.get('position')) ? query.get('position') : 'all',
+    difficulty: difficultyOf(query.get('difficulty')),
   };
   let history = [];
   let storageAvailable = true;
@@ -122,15 +178,15 @@ export function mountPractice(container) {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: VERSION, sessions: history })); }
     catch { storageAvailable = false; }
   }
-  function begin() {
-    session = createPracticeSession(catalog, filters);
+  function begin(source = catalog) {
+    session = createPracticeSession(Array.isArray(source) ? source : catalog, filters);
     if (!session) return;
     sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     recorded = false;
     renderQuestion(true);
   }
   function resetFilters() {
-    filters = { topic: 'all', position: 'all' };
+    filters = { ...filters, topic: 'all', position: 'all' };
     renderSetup();
     container.querySelector('[data-practice-start]')?.focus();
   }
@@ -161,6 +217,8 @@ export function mountPractice(container) {
     start.disabled = count === 0;
     start.textContent = count ? `Начать серию · ${Math.min(5, count)} ${Math.min(5, count) === 1 ? 'вопрос' : Math.min(5, count) < 5 ? 'вопроса' : 'вопросов'}` : 'Нет подходящих ситуаций';
     container.querySelector('[data-practice-reset-filters]').hidden = filters.topic === 'all' && filters.position === 'all';
+    const levelNote = container.querySelector('[data-practice-level-note]');
+    if (levelNote) levelNote.textContent = LEVEL_DESCRIPTIONS[filters.difficulty];
   }
   function historyPanel() {
     const box = element('aside', 'practice-history');
@@ -173,7 +231,7 @@ export function mountPractice(container) {
     box.append(element('h3', '', latest ? 'Твоя последняя серия' : 'Начни с пяти решений'));
     if (latest) {
       box.append(element('p', 'practice-history-score', `${latest.correct} из ${latest.total}`));
-      box.append(element('p', '', `Выбраны действия, соответствующие условиям задания. ${new Date(latest.completedAt).toLocaleDateString('ru-RU')} · ${TOPICS[latest.topic]} · ${POSITIONS[latest.position]}`));
+      box.append(element('p', '', `Выбраны действия, соответствующие условиям задания. ${new Date(latest.completedAt).toLocaleDateString('ru-RU')} · ${DIFFICULTIES[latest.difficulty]} · ${TOPICS[latest.topic]} · ${POSITIONS[latest.position]}`));
       box.append(element('p', 'practice-fine', `Сохранено серий: ${history.length}. Здесь хранятся последние 20 завершённых серий, только в этом браузере.`));
       box.append(button('Очистить историю на устройстве', () => {
         history = [];
@@ -205,8 +263,12 @@ export function mountPractice(container) {
     }
     card.append(steps);
     const filterRow = element('div', 'practice-filters');
-    filterRow.append(selectFilter('Тема', 'topic', TOPICS), selectFilter('Твоя позиция', 'position', POSITIONS));
+    filterRow.append(selectFilter('Уровень заданий', 'difficulty', DIFFICULTIES), selectFilter('Тема', 'topic', TOPICS), selectFilter('Твоя позиция', 'position', POSITIONS));
     card.append(filterRow);
+    const levelNote = element('p', 'practice-level-note');
+    levelNote.dataset.practiceLevelNote = '';
+    levelNote.setAttribute('role', 'status');
+    card.append(levelNote, element('p', 'practice-fine', 'Уровень выбираешь ты. Все три доступны сразу: результат викторины не определяет твой MMR и не закрывает следующий уровень.'));
     const available = element('p', 'practice-availability');
     available.dataset.practiceAvailability = '';
     available.setAttribute('role', 'status');
@@ -244,7 +306,7 @@ export function mountPractice(container) {
     const identity = element('div', 'practice-identity');
     if (scenario.hero) identity.append(artwork(scenario.hero, 'hero'));
     const labels = element('div');
-    labels.append(caption(`${TOPICS[scenario.topic]} · Учебная ситуация`));
+    labels.append(caption(`${DIFFICULTIES[scenario.difficulty]} · ${TOPICS[scenario.topic]}`));
     if (scenario.hero) labels.append(element('p', 'practice-hero-name', scenario.hero.name));
     identity.append(labels);
     if (scenario.item) {
@@ -299,18 +361,12 @@ export function mountPractice(container) {
         const row = element('div'); row.append(element('dt', '', term), element('dd', '', text)); reasoning.append(row);
       }
       feedback.append(reasoning);
-      const alternatives = element('div', 'practice-alternatives');
-      alternatives.append(element('h4', '', 'Разбор трёх вариантов'));
-      scenario.choices.forEach((choice, index) => {
-        const row = element('div', 'practice-alternative');
-        row.append(element('strong', '', `${String.fromCharCode(65 + index)} · ${choice.text}`), element('p', '', choice.explanation));
-        alternatives.append(row);
-      });
-      feedback.append(alternatives);
+      feedback.append(choiceFeedback(scenario.choices, answer.choiceId, 'main'));
       feedback.append(element('p', 'practice-exception', `Когда решение изменится: ${scenario.exception}`));
       const transfer = element('div', 'practice-transfer');
       transfer.append(caption('Перенеси в свою игру'), element('p', '', scenario.reviewQuestion));
       feedback.append(transfer);
+      if (scenario.variation) feedback.append(variationPanel(scenario));
       const next = button(current.index + 1 === current.questions.length ? 'Посмотреть итог' : 'Следующая ситуация', () => {
         session = advancePracticeSession(session);
         if (session.status === 'complete') renderResult(); else renderQuestion(true);
@@ -322,6 +378,64 @@ export function mountPractice(container) {
     container.replaceChildren(shell);
     if (moveFocus) focusHeading(heading);
   }
+  function variationPanel(scenario) {
+    const variation = scenario.variation;
+    const state = session.variations?.[scenario.id];
+    const section = element('section', 'practice-variation');
+    section.dataset.practiceVariation = scenario.id;
+    section.append(caption('Проверь гибкость решения'));
+    const title = element('h4', '', 'Ситуация изменилась');
+    title.dataset.practiceVariationTitle = '';
+    section.append(title, element('p', 'practice-fine', 'Дополнительное решение. Оно не меняет счёт основной серии: задача — заметить, когда прежний план перестаёт подходить.'));
+    if (!state) {
+      const reveal = button('Открыть новое условие', () => {
+        session = revealPracticeVariation(session);
+        renderQuestion();
+        focusHeading(container.querySelector('[data-practice-variation-title]'));
+      });
+      reveal.dataset.practiceVariationReveal = '';
+      section.append(reveal);
+      return section;
+    }
+    const conditions = element('ul', 'practice-conditions');
+    variation.context.forEach(line => conditions.append(element('li', '', line)));
+    const question = element('p', 'practice-variation-question', variation.question);
+    question.id = 'practice-variation-question';
+    section.append(conditions, question);
+    const choices = element('div', 'practice-choices');
+    choices.setAttribute('role', 'group');
+    choices.setAttribute('aria-labelledby', question.id);
+    variation.choices.forEach((choice, index) => {
+      const choiceButton = button('', () => {
+        session = answerPracticeVariation(session, choice.id);
+        renderQuestion();
+        focusHeading(container.querySelector('[data-practice-variation-feedback]'));
+      }, 'practice-choice');
+      choiceButton.dataset.variationChoice = choice.id;
+      choiceButton.disabled = state.status === 'review';
+      choiceButton.append(element('span', 'practice-choice-letter', String.fromCharCode(65 + index)), element('span', 'practice-choice-text', choice.text));
+      if (state.status === 'review') {
+        if (choice.id === variation.correctChoiceId) {
+          choiceButton.classList.add('practice-choice--correct');
+          choiceButton.append(element('span', 'practice-choice-tag', 'Подходит по новым условиям'));
+        }
+        if (choice.id === state.choiceId) {
+          choiceButton.classList.add('practice-choice--selected');
+          choiceButton.append(element('span', 'practice-choice-tag', 'Твой выбор'));
+        }
+      }
+      choices.append(choiceButton);
+    });
+    section.append(choices);
+    if (state.status === 'review') {
+      const outcome = element('h4', '', state.correct ? 'Новые условия учтены' : 'План нужно пересмотреть');
+      outcome.dataset.practiceVariationFeedback = '';
+      outcome.setAttribute('role', 'status');
+      section.append(outcome);
+      section.append(choiceFeedback(variation.choices, state.choiceId, 'variation'));
+    }
+    return section;
+  }
   function renderResult() {
     const score = session.answers.filter(answer => answer.correct).length;
     if (!recorded) {
@@ -332,6 +446,7 @@ export function mountPractice(container) {
     const result = element('section', 'practice-card practice-result');
     result.dataset.practiceResult = '';
     result.append(caption('Серия завершена'));
+    result.append(element('p', 'practice-fine', `${DIFFICULTIES[filters.difficulty]} · ${TOPICS[filters.topic]} · ${POSITIONS[filters.position]}`));
     const heading = element('h2', '', 'Теперь важнее объяснение');
     result.append(heading, element('p', 'practice-score', `${score} из ${session.questions.length}`));
     result.append(element('p', 'practice-lead', 'Ответов соответствуют условиям учебных ситуаций. Это результат этой серии, а не оценка твоего рейтинга или понимания всей игры.'));
@@ -355,6 +470,13 @@ export function mountPractice(container) {
     const retry = button('Новая серия', begin, 'practice-button practice-button--primary');
     retry.dataset.practiceRetry = '';
     actions.append(retry, button('Выбрать другую тему', renderSetup, 'practice-text-button'));
+    const missedIds = new Set(session.answers.filter(answer => !answer.correct).map(answer => answer.scenarioId));
+    const missed = session.questions.filter(scenario => missedIds.has(scenario.id));
+    if (missed.length) {
+      const repeat = button(`Вернуться к ошибкам · ${missed.length}`, () => begin(missed));
+      repeat.dataset.practiceRepeatMissed = '';
+      actions.append(repeat);
+    }
     result.append(actions);
     container.replaceChildren(result);
     focusHeading(heading);

@@ -93,6 +93,10 @@ try {
     }
     const errors=[], requests=[];
     const integrationRequests=[];
+    const replayCreates=[];
+    let releaseReplayCreate,observeFirstReplayCreate;
+    const firstReplayCreateGate=new Promise(resolve=>{releaseReplayCreate=resolve;});
+    const firstReplayCreateStarted=new Promise(resolve=>{observeFirstReplayCreate=resolve;});
     let chatgpt={provider:'openai-codex',scope:'personal',configured:true,can_connect:true,status:'disconnected',auth_generation:null,connected_at:null,pending:null,last_error_code:null},chatgptPollConnect=false,chatgptRejectSession=false,chatgptDeleteFailed=false,chatgptProviderRejected=false;
     const pendingChatgpt=()=>({...chatgpt,status:'pending',auth_generation:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',pending:{user_code:'ABCD-12345',verification_url:'https://auth.openai.com/codex/device',expires_at:new Date(Date.now()+600000).toISOString(),poll_interval_seconds:5,poll_after_seconds:5}});
     page.on('pageerror',error=>errors.push(error.message));
@@ -139,7 +143,10 @@ try {
       }
       else if(endpoint==='/api/replays'&&method==='POST') {
         const command=request.postDataJSON(); assert.equal(command.filename,'synthetic.dem'); assert.equal(command.nickname,'SyntheticPlayer'); assert.equal('account_id' in command,false);
-        job={...command,state:'uploading',progress:0,match_id:null,created_at:new Date().toISOString()}; status=201; body={replay:job,part_bytes:5*1024**2};
+        replayCreates.push(command);
+        if(replayCreates.length===1){observeFirstReplayCreate();await firstReplayCreateGate;}
+        if(replayCreates.length<=2){status=503;body={detail:'Проверка восстановления загрузки.'};}
+        else{job={...command,state:'uploading',progress:0,match_id:null,created_at:new Date().toISOString()};status=201;body={replay:job,part_bytes:5*1024**2};}
       }
       else if(endpoint==='/api/replays') body={replays:job?[job]:[],worker_ready:true,max_bytes:512*1024**2};
       else if(job&&endpoint===`/api/replays/${job.id}/parts/1`&&method==='PUT') { uploaded=true; learningEmpty=false; assert.equal(request.postDataBuffer().subarray(0,8).toString('binary'),'PBDEMS2\x00'); body={uploaded:true,part_number:1}; }
@@ -150,6 +157,10 @@ try {
       await route.fulfill({status,json:body,headers:responseHeaders});
     });
     await page.goto(origin+'/replays');
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.body,'::before').animationName),'portal-mist');
+    await page.emulateMedia({reducedMotion:'reduce'});
+    assert.deepEqual(await page.evaluate(()=>({animation:getComputedStyle(document.body,'::before').animationName,transform:getComputedStyle(document.body,'::before').transform,events:getComputedStyle(document.body,'::before').pointerEvents})),{animation:'none',transform:'none',events:'none'},'Personal replay pages respect reduced motion without blocking controls.');
+    await page.emulateMedia({reducedMotion:'no-preference'});
     await page.getByLabel('Email',{exact:true}).fill('fixture@example.test');
     await page.getByLabel('Пароль',{exact:true}).fill('Synthetic passphrase 2026');
     await page.getByRole('button',{name:'Войти',exact:true}).click();
@@ -189,12 +200,35 @@ try {
     assert.equal(await page.locator('#replay-file').getAttribute('accept'),'.dem');
     assert.equal(await page.locator('body').innerText().then(text=>/OpenDota|Open Dota|MP4|3\s?600 кадров/.test(text)),false);
     await page.getByLabel('Твой ник в этом матче',{exact:true}).fill('SyntheticPlayer');
+    await page.locator('#replay-position').selectOption('5');
+    await page.locator('#replay-mmr').fill('1250');
+    await page.locator('#replay-training-level').selectOption('foundations');
     await page.locator('#replay-file').setInputFiles({name:'synthetic.dem',mimeType:'application/octet-stream',buffer:Buffer.concat([Buffer.from('PBDEMS2\x00','binary'),Buffer.alloc(32)])});
     assert.equal(await page.getByRole('button',{name:'Загрузить и разобрать'}).isEnabled(),true);
     await page.getByRole('button',{name:'Загрузить и разобрать'}).click();
+    await firstReplayCreateStarted;
+    for(const selector of ['#replay-submit','#replay-file','#nickname','#replay-position','#replay-mmr','#replay-training-level'])assert.equal(await page.locator(selector).isDisabled(),true,'An active upload freezes its selected context.');
+    assert.deepEqual({position:replayCreates[0].position,mmr:replayCreates[0].mmr,training_level:replayCreates[0].training_level},{position:5,mmr:1250,training_level:'foundations'},'The replay create request carries explicit role, MMR and training depth.');
+    releaseReplayCreate();
+    await page.waitForFunction(()=>document.querySelector('#upload-status').textContent==='Проверка восстановления загрузки.'&&!document.querySelector('#replay-submit').disabled);
+    assert.equal(await page.locator('#replay-position').inputValue(),'5');
+    assert.equal(await page.locator('#replay-mmr').inputValue(),'1250');
+    assert.equal(await page.locator('#replay-training-level').inputValue(),'foundations');
+    const retryResponse=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/replays'&&response.request().method()==='POST');
+    await page.getByRole('button',{name:'Загрузить и разобрать'}).click();
+    await retryResponse;
+    await page.waitForFunction(()=>!document.querySelector('#replay-submit').disabled);
+    assert.deepEqual(replayCreates[1],replayCreates[0],'Retrying an unchanged upload preserves its idempotency ID and training context.');
+    await page.locator('#replay-position').selectOption('2');
+    await page.locator('#replay-mmr').fill('6500');
+    await page.locator('#replay-training-level').selectOption('advanced');
+    await page.getByRole('button',{name:'Загрузить и разобрать'}).click();
     await page.getByRole('heading',{name:'Матч 8984479726',exact:true}).waitFor();
+    assert.equal(replayCreates.length,3);
+    assert.notEqual(replayCreates[2].id,replayCreates[0].id,'Changing context after a failed upload creates a distinct request.');
+    assert.deepEqual({position:replayCreates[2].position,mmr:replayCreates[2].mmr,training_level:replayCreates[2].training_level},{position:2,mmr:6500,training_level:'advanced'});
     await page.getByText('17 / 16 / 20',{exact:true}).waitFor();
-    if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-hero-header.png`)});
+    if(screenshotDir) {await page.locator('#report-hero').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(screenshotDir,`portal-${width}-hero-header.png`)});}
     assert.equal(await page.locator('#nickname-field').isHidden(),true);
     assert.equal(await page.locator('#timeline-value').textContent(),'78:41');
     await page.locator('#economy-heading').scrollIntoViewIfNeeded();
@@ -585,5 +619,5 @@ try {
     assert.deepEqual(externalRequests,[],'Synthetic UI fixtures must never contact external providers.');
     assert.deepEqual(errors,[]); await page.close();
   }
-  console.log('Visual report income sources, item timings/delivery/realization, personal goals/reset and next-game plan; Portal .dem upload→report, selected-player binding, shared gold/XP timeline, customer coaching/filtered evidence links, safe text, account navigation, mobile layout and WCAG passed (mocked API; no paid calls).');
+  console.log('Visual report income sources, item timings/delivery/realization, personal goals/reset and next-game plan; Portal .dem upload→report with role/MMR/training depth, frozen context and idempotent retry; selected-player binding, shared timeline, safe coaching links, account navigation, reduced motion, mobile layout and WCAG passed (mocked API; no paid calls).');
 } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }

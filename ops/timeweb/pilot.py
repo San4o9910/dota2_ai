@@ -267,7 +267,8 @@ def ensure_https(ssh,release,hostname,host):
     portal_origin='https://'+hostname
     for path,signature in (('/',b'NARMA VISION'),('/replays',b'/assets/portal.js'),
                            ('/my-learning',b'pool-learning'),('/assets/portal.js',b'/api/session'),
-                           ('/assets/portal.css',b'--surface'),('/practice',b'/assets/explore.js')):
+                           ('/assets/portal.css',b'--surface'),('/practice',b'/assets/explore.js'),
+                           ('/builds',b'/assets/builds.css')):
         with opener.open(portal_origin+path,timeout=20) as response:
             content=response.read(256*1024)
             if signature not in content or b'opendota' in content.lower():
@@ -295,12 +296,18 @@ def ensure_https(ssh,release,hostname,host):
     heroes=public_data['heroes'].get('heroes',[])
     news=public_data['updates'].get('news',[])
     lessons=public_data['learning'].get('exercises',[])
+    with opener.open(portal_origin+'/assets/build-guides.json',timeout=20) as response:
+        guides=json.loads(response.read(1024*1024)).get('guides',[])
+    with opener.open(portal_origin+'/assets/practice-scenarios.json',timeout=20) as response:
+        scenarios=json.loads(response.read(1024*1024)).get('scenarios',[])
     if (len(heroes)<100 or not news or not lessons
+            or len(guides)<10 or len(scenarios)<25
             or not public_data['heroes'].get('checked_at')
             or not public_data['updates'].get('checked_at')):
         raise CheckError('public_experience_content_invalid')
     event('public_experience_ready',anonymous_access=True,hero_count=len(heroes),
-          news_count=len(news),lesson_count=len(lessons),provider_calls_created=0)
+          news_count=len(news),lesson_count=len(lessons),guide_count=len(guides),
+          practice_scenario_count=len(scenarios),provider_calls_created=0)
 
 
 def selected_project(cloud):

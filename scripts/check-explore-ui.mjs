@@ -13,9 +13,9 @@ function dependency(name) {
 }
 const {chromium}=dependency('playwright'),axe=dependency('axe-core');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
-const publicRoutes=['/','/heroes','/learn','/practice','/updates'];
+const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
 const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
-for(const filename of ['explore.js','practice.js','explore.css','practice.css','practice-scenarios.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
+for(const filename of ['explore.js','practice.js','builds.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
 const server=createServer(async(request,response)=>{
   const file=files.get(new URL(request.url,'http://localhost').pathname);
   if(!file){response.writeHead(404).end();return;}
@@ -27,6 +27,9 @@ const origin=`http://127.0.0.1:${server.address().port}`;
 const screenshotDir=process.env.NARMA_EXPLORE_SCREENSHOTS;
 if(screenshotDir)await mkdir(screenshotDir,{recursive:true});
 const scenarios=JSON.parse(await readFile(path.join(root,'practice-scenarios.json'),'utf8')).scenarios;
+const buildCatalog=JSON.parse(await readFile(path.join(root,'build-guides.json'),'utf8'));
+assert.equal(buildCatalog.schema_version,'narma.build-guides.v1');
+assert.ok(buildCatalog.guides.length>=2,'Build selection uses the actual authored library.');
 assert.ok(scenarios.length>=5,'The actual authored trainer must contain enough distinct questions.');
 assert.equal(scenarios.find(row=>row.id==='lane-last-hit')?.correctChoiceId,'b','The known last-hit scenario must reward timing damage after the allied projectile.');
 const malicious='<img src=x onerror=alert(1)>',stamp='2026-01-02T12:00:00Z';
@@ -61,7 +64,7 @@ try {
     await page.route('**/*',async route=>{
       const url=new URL(route.request().url());
       if(url.origin===origin){await route.fallback();return;}
-      if(/^https:\/\/cdn\.cloudflare\.steamstatic\.com\/apps\/dota2\/images\/dota_react\/(?:heroes|items)\/[a-z0-9_]+\.png$/.test(url.href)||url.href===newsImage){await route.fulfill({contentType:'image/png',body:pixel});return;}
+      if(/^https:\/\/cdn\.cloudflare\.steamstatic\.com\/apps\/dota2\/(?:images\/dota_react\/(?:heroes|items)|videos\/dota_react\/heroes\/renders)\/[a-z0-9_]+\.png$/.test(url.href)||url.href===newsImage){await route.fulfill({contentType:'image/png',body:pixel});return;}
       unexpected.push(url.href);await route.abort();
     });
     await page.route('**/api/**',async route=>{
@@ -73,6 +76,11 @@ try {
       else if(url.pathname==='/api/explore/learning')body=catalog(Number(url.searchParams.get('position'))||null);
       else{unexpected.push(url.pathname);status=404;body={};}
       await route.fulfill({status,json:body});
+    });
+    await page.route('**/assets/build-guides.json',async route=>{
+      const fixture=structuredClone(buildCatalog);
+      for(const guide of fixture.guides)guide.source_refs.push({title:'Небезопасный источник',url:'javascript:alert(1)'},{title:'Поддельный домен',url:'https://www.dota2.com.evil.example.test/hero/axe'});
+      await route.fulfill({json:fixture});
     });
     async function open(route){await page.goto(origin+route);await page.locator('#page-content[aria-busy="false"]').waitFor();assert.equal(await page.locator('h1').count(),1);assert.equal(await page.locator('input[type=password]').count(),0,'Public content must be usable before Narma login.');}
     async function accessibility(label){
@@ -89,6 +97,12 @@ try {
     assert.match(await page.locator('#home-news .source-note.is-stale').textContent(),/сохранённ.*верси/i);
     assert.equal(await page.locator('a[href="/replays"]').count()>0,true,'The public home leads to existing replay analysis.');
     for(const route of publicRoutes)assert.equal(await page.locator(`.main-nav a[href="${route}"]`).count(),1);
+    const normalMotion=await page.evaluate(()=>({animation:getComputedStyle(document.body,'::before').animationName,events:getComputedStyle(document.body,'::before').pointerEvents}));
+    assert.equal(normalMotion.animation,'battlefield-mist','The Dota-themed background has gentle motion.');
+    assert.equal(normalMotion.events,'none','Decorative mist cannot intercept user actions.');
+    await page.emulateMedia({reducedMotion:'reduce'});
+    assert.deepEqual(await page.evaluate(()=>['::before','::after'].map(pseudo=>({animation:getComputedStyle(document.body,pseudo).animationName,transform:getComputedStyle(document.body,pseudo).transform}))),[{animation:'none',transform:'none'},{animation:'none',transform:'none'}],'Reduced-motion users receive a static background.');
+    await page.emulateMedia({reducedMotion:'no-preference'});
     await accessibility('home');
     const heroNav=page.locator('.main-nav a[href="/heroes"]');await heroNav.focus();await heroNav.press('Enter');
     await page.waitForURL(url=>url.pathname==='/heroes');await page.locator('#hero-grid [data-hero]').first().waitFor();
@@ -110,6 +124,42 @@ try {
     await accessibility('heroes');
     await page.reload();await page.locator('#hero-grid [data-hero]').first().waitFor();
     assert.equal(await page.locator('#hero-inspector h2').textContent(),'Necrophos','A direct URL preserves the selected hero.');
+
+    await open('/builds');
+    await page.locator('#build-list [data-guide]').first().waitFor();
+    assert.equal(await page.locator('#build-list [data-guide]').count(),buildCatalog.guides.length);
+    assert.equal(await page.locator('#build-detail .build-guide').count(),1,'Only one selected build is expanded at a time.');
+    const initialGuide=buildCatalog.guides[0];
+    await page.locator('#build-search').fill(initialGuide.hero_name);
+    await page.locator('#build-position').selectOption(String(initialGuide.position));
+    const matchingGuides=buildCatalog.guides.filter(guide=>guide.position===initialGuide.position&&`${guide.hero_name} ${guide.title} ${guide.hero_slug}`.toLocaleLowerCase('ru-RU').includes(initialGuide.hero_name.toLocaleLowerCase('ru-RU')));
+    assert.equal(await page.locator('#build-list [data-guide]').count(),matchingGuides.length,'Builds filter by both hero and position.');
+    await page.locator(`#build-list [data-guide="${initialGuide.id}"]`).focus();await page.locator(`#build-list [data-guide="${initialGuide.id}"]`).press('Enter');
+    const selectedGuide=page.locator('#build-detail .build-guide');
+    assert.equal(await selectedGuide.getAttribute('data-guide-id'),initialGuide.id);
+    assert.equal(await selectedGuide.locator('h2').textContent(),initialGuide.hero_name);
+    const expectedItems=[...initialGuide.starting_items,...initialGuide.core_items,...initialGuide.situational_items];
+    assert.ok(expectedItems.length>0);
+    assert.deepEqual(await selectedGuide.locator('.build-item h4').allTextContents(),expectedItems.map(item=>item.name));
+    assert.deepEqual(await selectedGuide.locator('.build-item img').evaluateAll(images=>images.map(image=>image.getAttribute('src'))),expectedItems.map(item=>`https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${item.id}.png`),'Item cards use their actual Dota inventory icon identifiers.');
+    assert.equal((await selectedGuide.textContent()).includes(initialGuide.next_game_check),true,'A build ends with an action the player can check in their next match.');
+    await selectedGuide.locator('.build-sources summary').click();
+    const sourceLinks=await selectedGuide.locator('.build-sources a').evaluateAll(links=>links.map(link=>({href:link.href,rel:link.rel,target:link.target})));
+    assert.equal(sourceLinks.length,initialGuide.source_refs.length,'Unsafe injected references are not rendered as clickable sources.');
+    for(const link of sourceLinks){assert.ok(initialGuide.source_refs.some(source=>source.url===link.href));assert.equal(link.target,'_blank');assert.equal(link.rel,'noopener noreferrer');}
+    assert.equal(await selectedGuide.locator('script,iframe,[onerror],a[href^="javascript:"]').count(),0);
+    await accessibility('builds');
+    await page.reload();await page.locator('#build-detail .build-guide').waitFor();
+    assert.equal(await page.locator('#build-detail .build-guide').getAttribute('data-guide-id'),initialGuide.id,'A direct build URL preserves the selected guide.');
+    assert.equal(await page.locator('#build-position').inputValue(),String(initialGuide.position));
+    await page.locator('#build-search').fill('not-a-real-dota-build');
+    assert.equal(await page.locator('#build-list [data-guide]').count(),0);
+    assert.equal(await page.locator('#build-detail .build-guide').count(),0,'An empty filter does not retain a misleading previous build.');
+    await page.locator('#build-search').fill('');await page.locator('#build-position').selectOption('');
+    const otherGuide=buildCatalog.guides.find(guide=>guide.id!==initialGuide.id);
+    await page.locator(`#build-list [data-guide="${otherGuide.id}"]`).click();
+    assert.equal(await page.locator('#build-detail .build-guide').count(),1);
+    assert.equal(await page.locator('#build-detail .build-guide').getAttribute('data-guide-id'),otherGuide.id,'Choosing another build replaces the details instead of stacking all guides.');
 
     await open('/learn');
     assert.equal(await page.locator('[data-stage]').count(),6);
@@ -169,10 +219,24 @@ try {
 
     await open('/practice?position=5');
     const practice=page.locator('#practice-root');
+    async function checkPracticeExplanations(kind,choices,choiceId){
+      const chosen=choices.find(choice=>choice.id===choiceId);
+      const selectedExplanation=practice.locator(`[data-practice-selected-explanation="${kind}"]`);
+      const alternatives=practice.locator(`[data-practice-alternatives="${kind}"]`);
+      assert.equal(await selectedExplanation.textContent(),chosen.explanation,'The explanation of the selected action stays visible.');
+      assert.equal(await selectedExplanation.isVisible(),true);
+      assert.equal(await alternatives.getAttribute('open'),null,'Other explanations start collapsed to keep the decision review compact.');
+      for(const choice of choices.filter(choice=>choice.id!==choiceId))assert.equal(await alternatives.getByText(choice.explanation,{exact:true}).isVisible(),false);
+      const summary=alternatives.locator('summary');await summary.focus();await summary.press('Enter');
+      for(const choice of choices)assert.equal(await practice.getByText(choice.explanation,{exact:true}).isVisible(),true,'Every alternative remains available with its own explanation.');
+      await summary.focus();await summary.press('Enter');
+      assert.equal(await alternatives.getAttribute('open'),null,'Screenshots and continued practice use the compact default review.');
+    }
     await practice.locator('[data-practice-start]').waitFor();
     assert.equal(await practice.locator('[data-practice-filter="position"]').inputValue(),'5','The trainer receives the role selected in learning.');
     await practice.locator('[data-practice-filter="topic"]').selectOption('lane');
-    const shortCount=scenarios.filter(scenario=>scenario.topic==='lane'&&scenario.positions.includes(5)).length;
+    assert.equal(await practice.locator('[data-practice-filter="difficulty"]').inputValue(),'foundations');
+    const shortCount=scenarios.filter(scenario=>scenario.difficulty==='foundations'&&scenario.topic==='lane'&&scenario.positions.includes(5)).length;
     assert.ok(shortCount>0&&shortCount<5);
     assert.match(await practice.locator('[data-practice-availability]').textContent(),new RegExp(`В серии будет ${shortCount}`),'A short selection advertises its actual length.');
     await practice.locator('[data-practice-reset-filters]').click();
@@ -182,12 +246,13 @@ try {
       const card=practice.locator('[data-scenario-id]');await card.waitFor();
       const id=await card.getAttribute('data-scenario-id'),scenario=scenarios.find(row=>row.id===id);
       assert.ok(scenario,'The trainer uses a real authored scenario.');assert.equal(seen.has(id),false,'A practice round cannot repeat a question.');seen.add(id);
+      assert.equal(scenario.difficulty,'foundations','An introductory series does not mix in advanced questions.');
       assert.match(await card.textContent(),new RegExp(scenario.question.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
       const selected=index===0?scenario.choices.find(choice=>choice.id!==scenario.correctChoiceId):scenario.choices.find(choice=>choice.id===scenario.correctChoiceId);
       const answer=practice.locator(`[data-choice-id="${selected.id}"]`);await answer.focus();await answer.press('Enter');
       await practice.locator('[data-practice-next]').waitFor();
       assert.equal(await practice.locator('[data-choice-id]:enabled').count(),0,'Answered choices are locked to prevent double scoring.');
-      for(const choice of scenario.choices)assert.equal(await practice.getByText(choice.explanation,{exact:true}).isVisible(),true,'Each choice receives its own explanation.');
+      await checkPracticeExplanations('main',scenario.choices,selected.id);
       assert.equal(await practice.locator('.practice-exception').textContent(),'Когда решение изменится: '+scenario.exception,'The answer includes the condition that would change the decision.');
       if(index===0)await accessibility('practice-answer');
       await practice.locator('[data-practice-next]').click();
@@ -200,9 +265,61 @@ try {
     await practice.locator('[data-scenario-id]').waitFor();
     assert.equal(await practice.locator('[data-choice-id]:enabled').count(),3,'Retry starts a fresh, unanswered question.');
     assert.equal(await practice.locator('[data-practice-retry]').count(),0);
+    for(const difficulty of ['application','advanced']){
+      await open('/practice?difficulty='+difficulty);
+      await practice.locator('[data-practice-start]').waitFor();
+      assert.equal(await practice.locator('[data-practice-filter="difficulty"]').inputValue(),difficulty,'A direct training link preserves its selected depth.');
+      await practice.locator('[data-practice-start]').click();
+      const levelSeen=new Set();let missedId;
+      for(let index=0;index<5;index++){
+        const card=practice.locator('[data-scenario-id]');await card.waitFor();
+        const id=await card.getAttribute('data-scenario-id'),scenario=scenarios.find(row=>row.id===id);
+        assert.equal(scenario?.difficulty,difficulty,'Every question belongs to the chosen level.');
+        assert.equal(levelSeen.has(id),false,'The selected level produces five distinct scenarios.');levelSeen.add(id);
+        const chosen=index===0?scenario.choices.find(choice=>choice.id!==scenario.correctChoiceId):scenario.choices.find(choice=>choice.id===scenario.correctChoiceId);
+        if(index===0)missedId=id;
+        await practice.locator(`[data-choice-id="${chosen.id}"]`).click();
+        await practice.locator('[data-practice-next]').waitFor();
+        assert.equal(await practice.locator('[data-choice-id]:enabled').count(),0);
+        await checkPracticeExplanations('main',scenario.choices,chosen.id);
+        if(difficulty==='advanced'){
+          assert.ok(scenario.variation,'Advanced decisions include a changed condition to evaluate.');
+          await practice.locator('[data-practice-variation-reveal]').focus();await practice.locator('[data-practice-variation-reveal]').press('Enter');
+          assert.equal(await practice.locator('.practice-variation-question').textContent(),scenario.variation.question);
+          const variationChoice=scenario.variation.choices.find(choice=>choice.id!==scenario.variation.correctChoiceId);
+          await practice.locator(`[data-variation-choice="${variationChoice.id}"]`).focus();await practice.locator(`[data-variation-choice="${variationChoice.id}"]`).press('Enter');
+          await practice.locator('[data-practice-variation-feedback]').waitFor();
+          assert.equal(await practice.locator('[data-variation-choice]:enabled').count(),0,'The extra decision also locks after the first answer.');
+          assert.equal(await practice.locator('[data-choice-id]:enabled').count(),0,'Changing conditions cannot reopen the original answer.');
+          assert.equal(await practice.locator('[data-choice-id].practice-choice--selected').getAttribute('data-choice-id'),chosen.id,'The extra decision preserves the original selection.');
+          await checkPracticeExplanations('variation',scenario.variation.choices,variationChoice.id);
+          if(index===0)await accessibility('practice-advanced-variation');
+        }
+        await practice.locator('[data-practice-next]').click();
+      }
+      await practice.locator('[data-practice-retry]').waitFor();
+      assert.equal(levelSeen.size,5);
+      assert.equal(await practice.locator('.practice-score').textContent(),'4 из 5','Extra decisions do not change the original five-question score.');
+      const stored=await page.evaluate(()=>JSON.parse(localStorage.getItem('narma.practice.v1.history')));
+      assert.equal(stored.version,'narma.practice.v1');
+      assert.deepEqual({difficulty:stored.sessions.at(-1).difficulty,correct:stored.sessions.at(-1).correct,total:stored.sessions.at(-1).total},{difficulty,correct:4,total:5},'Completion history records the selected difficulty and primary score.');
+      assert.deepEqual(stored.sessions.map(entry=>entry.difficulty),difficulty==='advanced'?['foundations','application','advanced']:['foundations','application'],'Changing level preserves earlier completed practice.');
+      if(difficulty==='advanced'){
+        await practice.locator('[data-practice-repeat-missed]').click();
+        await practice.locator('[data-scenario-id]').waitFor();
+        assert.equal(await practice.locator('[data-scenario-id]').getAttribute('data-scenario-id'),missedId,'Focused retry contains the missed decision only.');
+        assert.equal(await practice.locator('[data-practice-progress]').textContent(),'Вопрос 1 из 1');
+        const scenario=scenarios.find(row=>row.id===missedId);
+        await practice.locator(`[data-choice-id="${scenario.correctChoiceId}"]`).click();
+        await practice.locator('[data-practice-next]').click();
+        await practice.locator('[data-practice-retry]').waitFor();
+        assert.equal(await practice.locator('.practice-score').textContent(),'1 из 1');
+        assert.equal(await practice.locator('[data-practice-repeat-missed]').count(),0,'Correct focused retry does not invent remaining mistakes.');
+      }
+    }
     assert.ok(apiRequests.every(request=>request.path.startsWith('/api/explore/')&&request.method==='GET'),'Public visitors never invoke auth, replay, Hermes, or model APIs.');
     assert.deepEqual(unexpected,[],'The synthetic public UI run never contacts live sources or providers.');
     assert.deepEqual(errors,[]);await page.close();
   }
-  console.log('Public home/heroes/learning/updates/trainer routes, keyboard navigation, safe/stale content, isolated feed failure, authored five-question round/results/retry, mobile/desktop layout and WCAG passed (mocked public feeds; no paid calls).');
+  console.log('Public home/heroes/builds/learning/updates/trainer routes; selected item guides and safe sources; three practice levels with locked follow-up answers, history and focused retry; reduced motion, keyboard navigation, safe/stale feeds, mobile/desktop layout and WCAG passed (mocked public feeds; no paid calls).');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

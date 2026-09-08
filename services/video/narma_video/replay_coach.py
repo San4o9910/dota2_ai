@@ -23,7 +23,7 @@ from .replay_hero_context import build_hero_context
 from .curriculum import VERSION as CURRICULUM_VERSION, get_exercise
 from .learning import resolve_active_exercise
 
-METHOD_VERSION = 'narma-coach.v3'
+METHOD_VERSION = 'narma-coach.v4'
 
 class CoachingPoint(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
@@ -85,6 +85,17 @@ insights.items, если они предоставлены. Покупка, по
 learning_context содержит выбранное учебное упражнение, а не дополнительные факты матча.
 Если оно передано, сохрани этот фокус и объясни его применимость к имеющимся эпизодам.
 Если подходящей ситуации не видно, прямо укажи это; не создавай её ради упражнения.
+training_context — отдельные настройки обучения, а не факты реплея. mmr указан самим
+игроком и не подтверждает ранг соперников, условия матча или освоение конкретного навыка.
+Не назначай нормы фарма и таймингов по этому числу и не выводи уровень навыка из MMR.
+training_level выбран игроком независимо от MMR. Для foundations объясни незнакомое
+понятие простыми словами и дай одно наблюдаемое действие с одним сигналом для проверки.
+Для application разбери выбор между вариантами, условие выбора и исключение; упражняй
+одно решение. Для advanced разберись с ценой альтернативы, неполной информацией и
+окном для действия: что следовало проверить перед выбором и при каком изменении условий
+план нужно было отменить. Это вопросы к записанному эпизоду, не выдуманные факты карты.
+При неизвестном уровне пиши простыми словами и не приписывай игроку опыт. Во всех
+уровнях оставляй один практический фокус, не увеличивай число заданий ради сложности.
 Успешный исход не доказывает освоение навыка. Не оценивай поддержку нормами фарма керри.
 Не обещай рост рейтинга или срок освоения. Не приписывай ученику намерение или понимание.
 Добавь next_game: ровно одно главное упражнение на следующую серию игр, с
@@ -113,7 +124,17 @@ _SAFE_FAILURES = frozenset({
 })
 
 
-def prepare_evidence(report, *, position=None, exercise_id=None):
+def training_context(mmr=None, training_level=None):
+    """Bound player-declared preferences; never infer mastery from rating."""
+    if (mmr is not None and (type(mmr) is not int or not 0 <= mmr <= 20000)
+            or training_level not in (None, 'foundations', 'application', 'advanced')):
+        raise ValueError('REPLAY_COACH_INPUT_INVALID')
+    return {'mmr': mmr, 'mmr_source': 'self_reported' if mmr is not None else 'unknown',
+            'training_level': training_level,
+            'training_level_source': 'player' if training_level is not None else 'unknown'}
+
+
+def prepare_evidence(report, *, position=None, exercise_id=None, mmr=None, training_level=None):
     """Project the factual report onto the only fields the coach is allowed to use."""
     if not isinstance(report, dict):
         raise ValueError('REPLAY_COACH_INPUT_INVALID')
@@ -133,6 +154,10 @@ def prepare_evidence(report, *, position=None, exercise_id=None):
     # undeclared top-level context to the provider.
     payload = {key: report[key] for key in ('metrics', 'evidence')}
     payload['player'] = {key: report['player'][key] for key in ('hero', 'team') if key in report['player']}
+    preferences = training_context(mmr, training_level)
+    if mmr is not None or training_level is not None:
+        payload['training_context'] = {
+            'classification': 'self_reported_training_context_not_match_evidence', **preferences}
     for key in ('ability_usage', 'item_usage'):
         payload[key] = usage_facts(report.get(key))
     context = build_hero_context(report, position=position)
@@ -277,7 +302,8 @@ def carry_forward_coaching(previous, current, source_report_id=None):
         return False
     old_context = old_coaching.get('context') or {}
     new_context = (current.get('coaching') or {}).get('context') or {}
-    if any(old_context.get(key) != new_context.get(key) for key in ('position', 'exercise_id')):
+    if any(old_context.get(key) != new_context.get(key)
+           for key in ('position', 'exercise_id', 'mmr', 'training_level')):
         return False
     try:
         _, old_ids = prepare_evidence(previous)
@@ -330,7 +356,8 @@ def resolve_learning_context(job, report):
     """
     player = report.get('player') or {}
     context = {'method_version': METHOD_VERSION, 'curriculum_version': CURRICULUM_VERSION, 'hero': player.get('hero'),
-               'position': None, 'position_source': 'unknown', 'exercise_id': None}
+               'position': None, 'position_source': 'unknown', 'exercise_id': None,
+               **training_context()}
     required = ('owner_id', 'account_id', 'match_id', 'source_sha256', 'lease_token')
     if not all(job.get(key) is not None for key in required):
         return context
@@ -340,7 +367,9 @@ def resolve_learning_context(job, report):
         raise ValueError('REPLAY_COACH_INPUT_INVALID')
     with database() as connection:
         connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
-        row = connection.execute('''SELECT m.position FROM replay_jobs r
+        row = connection.execute('''SELECT CASE WHEN m.match_id IS NOT NULL THEN m.position
+                ELSE r.requested_position END AS position,r.requested_mmr,r.training_level
+            FROM replay_jobs r
             JOIN portal_dota_profiles p ON p.owner_id=r.owner_id AND p.account_id=r.account_id
             LEFT JOIN hero_pool_matches m ON m.owner_id=r.owner_id
                 AND m.account_id=r.account_id AND m.match_id=r.match_id
@@ -351,6 +380,7 @@ def resolve_learning_context(job, report):
              job['source_sha256'], job['lease_token'])).fetchone()
         if row is None:
             raise ValueError('REPLAY_COACH_LEASE_LOST')
+        context.update(training_context(row.get('requested_mmr'), row.get('training_level')))
         position = row['position']
         if type(position) is not int or not 1 <= position <= 5:
             return context
@@ -450,7 +480,9 @@ def reserve_subscription_replay(job, factual_report, context, instructions, enco
         # it before the replay/provider locks so the reserved context is coherent.
         connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (job['owner_id'],))
         connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))', (job['owner_id'],))
-        active = connection.execute('''SELECT r.id,m.position FROM replay_jobs r
+        active = connection.execute('''SELECT r.id,CASE WHEN m.match_id IS NOT NULL THEN m.position
+                ELSE r.requested_position END AS position,r.requested_mmr,r.training_level
+            FROM replay_jobs r
             JOIN portal_dota_profiles p ON p.owner_id=r.owner_id AND p.account_id=r.account_id
             LEFT JOIN hero_pool_matches m ON m.owner_id=r.owner_id
                 AND m.account_id=r.account_id AND m.match_id=r.match_id
@@ -466,7 +498,9 @@ def reserve_subscription_replay(job, factual_report, context, instructions, enco
             position = None
         exercise_id = (resolve_active_exercise(connection, job['owner_id'], job['account_id'],
                         player.get('hero'), position) if position is not None else None)
-        if position != context['position'] or exercise_id != context['exercise_id']:
+        preferences = training_context(active.get('requested_mmr'), active.get('training_level'))
+        if (position != context['position'] or exercise_id != context['exercise_id']
+                or any(preferences[key] != context.get(key) for key in ('mmr', 'training_level'))):
             raise ValueError('REPLAY_COACH_INPUT_INVALID')
         current = chatgpt_auth.current_connection(connection, job['owner_id'])
         if not current or not current.get('connected'):
@@ -511,7 +545,8 @@ def enrich_report(job, factual_report, coach=None):
     try:
         context = resolve_learning_context(job, factual_report)
         encoded, ids = prepare_evidence(factual_report, position=context['position'],
-                                        exercise_id=context['exercise_id'])
+                                        exercise_id=context['exercise_id'], mmr=context['mmr'],
+                                        training_level=context['training_level'])
         selected = os.environ.get('REPLAY_COACH_PROVIDER', 'gemini')
         provenance = {}
         if owned_coach and selected == 'chatgpt_subscription':
