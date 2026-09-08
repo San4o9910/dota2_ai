@@ -296,7 +296,7 @@ def _goals(connection, owner_id, account_id, history):
     return result
 
 
-def get_pool(owner_id, window="all", hero=None, position=None, favorites_only=False):
+def get_pool(owner_id, window="all", hero=None, position=None, favorites_only=False, *, include_coaching=True):
     if window not in ("30", "90", "all") or (hero is not None and not re.fullmatch(HERO, hero)) or position not in (None, "unknown", "1", "2", "3", "4", "5"):
         reject(400, "POOL_FILTER", "Проверьте фильтры пула героев.")
     with database() as connection:
@@ -315,6 +315,11 @@ def get_pool(owner_id, window="all", hero=None, position=None, favorites_only=Fa
     heroes = [{"hero": key[0], "label": display_unit(key[0]), "position": key[1],
                "favorite": key in favorite_keys, **summary(rows)} for key, rows in groups.items()]
     heroes.sort(key=lambda r: (-r["matches"], r["hero"], r["position"] or 0))
+    coaching = None
+    if include_coaching and profile:
+        from .hermes_tasks import latest_valid_review
+        from .hermes_coaching import coaching_for
+        coaching = coaching_for(latest_valid_review(owner_id), selected)
     return {"schema_version": SCHEMA, "profile": profile,
         "filters": {"window": window, "hero": hero, "position": position, "favorites_only": favorites_only},
         "summary": summary(selected), "heroes": heroes,
@@ -323,7 +328,7 @@ def get_pool(owner_id, window="all", hero=None, position=None, favorites_only=Fa
         "practice": {"tracked": sum(bool(r["focus"]) for r in selected),
             **{key: sum(bool(r["focus"]) and r["reflection"] == key for r in selected) for key in ("done", "partial", "not_done")},
             "unreviewed": sum(bool(r["focus"]) and r["reflection"] is None for r in selected)},
-        "trends": trends_for(selected), "patterns": patterns_for(selected),
+        "trends": trends_for(selected), "patterns": patterns_for(selected), "coaching": coaching,
         "goals": [g for g in goals if (not hero or g["hero"] == hero)
                   and (position is None or str(g["position"]) == position)
                   and (not favorites_only or (g["hero"], g["position"]) in favorite_keys)],

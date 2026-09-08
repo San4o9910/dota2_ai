@@ -22,8 +22,9 @@ MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_METADATA_BYTES = 16 * 1024**2
 CONFIG_PATH = re.compile(r"(?:blobs/sha256/)?([0-9a-f]{64})(?:\.json)?")
 SOURCES = {
-    "narma-video-check": ("narma-video-api", "narma-video-migrate", "narma-video-worker"),
+    "narma-video-check": ("narma-video-api", "narma-video-migrate", "narma-video-worker", "narma-video-hermes-broker"),
     "narma-replay-check": ("narma-video-replay-worker",),
+    "narma-hermes-check": ("narma-video-hermes-runner",),
 }
 TAGS = tuple(tag for aliases in SOURCES.values() for tag in aliases)
 
@@ -200,7 +201,7 @@ def save_archive(path, *, export_timeout=600):
 
 
 def prepare_bundle(release, directory):
-    """Called only after the same workflow has tested both local image tags."""
+    """Called only after the same workflow has tested all three local images."""
     if not SHA.fullmatch(release):
         raise ImageError("prebuilt_release_invalid")
     if run(["git", "rev-parse", "HEAD"]).decode().strip() != release:

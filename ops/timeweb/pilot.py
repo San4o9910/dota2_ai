@@ -98,8 +98,12 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
                 item=json.loads(line)
                 if item.get('event')=='replay_activation_failure' and re.fullmatch('replay_[a-z_]{1,100}',item.get('code','')):
                     event('replay_activation_failure',code=item['code'])
-                elif item.get('event')=='replay_activation_rollback' and all(x in ('worker','replay-worker') for x in item.get('restored_services',[])):
+                elif item.get('event')=='replay_activation_rollback' and all(x in ('worker','replay-worker','hermes-broker','hermes-runner') for x in item.get('restored_services',[])):
                     event('replay_activation_rollback',restored_services=item['restored_services'])
+            elif line.startswith(b'{"event": "hermes_activation_failure"'):
+                item=json.loads(line)
+                if re.fullmatch('hermes_[a-z_]{1,100}',item.get('code','')):
+                    event('hermes_activation_failure',code=item['code'])
             elif line.startswith(b'{"event": "video_'):
                 item=json.loads(line)
                 if item.get('event') in ('video_pipeline_failure','video_activation_failure') and re.fullmatch('[A-Za-z_]{1,100}',item.get('code','')):
@@ -136,7 +140,7 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
             if line.startswith(b'{"event": "container_'):
                 try:
                     item = json.loads(line)
-                    if item.get("event") == "container_status" and item.get("service") in {"db","migrate","api","worker","replay-worker"}:
+                    if item.get("event") == "container_status" and item.get("service") in {"db","migrate","api","worker","replay-worker","hermes-broker","hermes-runner"}:
                         state = item.get("state")
                         health = item.get("health")
                         event("container_status", service=item["service"],
@@ -456,7 +460,7 @@ runcmd:
                 bundle.add(image_manifest, arcname="images-manifest.json", recursive=False)
                 if Path(".dockerignore").is_file():
                     bundle.add(".dockerignore", arcname=".dockerignore", recursive=False)
-                for directory in (Path("services/video"), Path("services/replay"), Path("ops/timeweb")):
+                for directory in (Path("services/video"), Path("services/replay"), Path("services/hermes"), Path("ops/timeweb")):
                     for path in directory.rglob("*"):
                         if not path.is_file() or path.is_symlink():
                             continue
@@ -508,6 +512,31 @@ runcmd:
             event('replay_pipeline_ready',worker_enabled=True,fresh_worker_heartbeat=True,
                 video_worker_stopped=True,synthetic_paid_calls=0,
                 hero_pool=activated.get('hero_pool'))
+            try:
+                output=command(ssh+['python3 '+release+'/ops/timeweb/activate_hermes.py '+sha],timeout=660)
+                hermes=json.loads(output)
+                if (hermes.get('event')!='hermes_runtime_ready'
+                        or hermes.get('runtime_revision')!='9fd44b4dfc44138b9e5d5689acb56c438364ff7b'
+                        or hermes.get('automatic_tracking') is not True
+                        or hermes.get('network_isolation_verified') is not True
+                        or hermes.get('provider_calls_created') not in (0,1)
+                        or hermes.get('review',{}).get('verified') is not True):
+                    raise CheckError('hermes_runtime_not_ready')
+                event('hermes_runtime_ready',runtime_revision=hermes['runtime_revision'],
+                    automatic_tracking=True,network_isolation_verified=True,
+                    provider_calls_created=hermes['provider_calls_created'],
+                    resources=hermes['resources'],review=hermes['review'],
+                    budget_before=hermes['budget_before'],budget_after=hermes['budget_after'])
+            except Exception:
+                # Preserve the old working portal/worker release. Rollback only
+                # runtime containers/images; paid ledger entries remain durable.
+                try:
+                    command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py rollback " + sha], timeout=150)
+                    command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+' --rollback-only'],timeout=180)
+                    event('previous_services_restored_after_hermes_failure')
+                except Exception:
+                    event('previous_services_restore_unconfirmed')
+                raise
             state=json.loads(command(ssh+["cd " + release + "/services/video && docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env exec -T api python -m narma_video.budget"],timeout=30))
             event('post_activation_allowance',enabled=state.get('enabled'),
                 limit_microusd=state.get('limit_microusd'),spent_microusd=state.get('spent_microusd'),

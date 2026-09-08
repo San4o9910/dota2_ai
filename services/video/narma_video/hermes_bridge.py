@@ -311,13 +311,18 @@ def public_review(row):
 
 
 def bridge_status(owner_id):
+    from .hermes_tasks import get_runtime_status, latest_valid_review
     with database() as connection:
         rows = connection.execute("""SELECT r.*,e.source_jobs FROM hermes_reviews r JOIN hermes_exports e ON e.id=r.export_id
             WHERE r.owner_id=%s ORDER BY r.created_at DESC LIMIT 50""", (owner_id,)).fetchall()
         active = [row for row in rows if _sources_available(connection, owner_id, row["source_jobs"])]
         exports = connection.execute("SELECT id,created_at FROM hermes_exports WHERE owner_id=%s ORDER BY created_at DESC LIMIT 50", (owner_id,)).fetchall()
-    return {"stage": "offline_bridge", "runtime_connected": False, "automatic_tracking": False,
-        "review_count": len(active), "last_review": public_review(active[0]) if active else None,
+    runtime = get_runtime_status(owner_id)
+    latest = latest_valid_review(owner_id)
+    return {"stage": "runtime" if runtime["runtime_connected"] else "offline_bridge", **runtime,
+        "review_count": len(active) + int(latest is not None),
+        "last_review": ({key: latest[key] for key in ("id", "created_at", "source", "runtime_verified", "interpretation_verified", "runtime_revision", "review")}
+                        if latest else public_review(active[0]) if active else None),
         "exports": [{"id": str(row["id"]), "created_at": row["created_at"]} for row in exports]}
 
 

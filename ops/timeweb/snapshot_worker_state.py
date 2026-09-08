@@ -6,7 +6,9 @@ import re
 import subprocess
 import sys
 
-SERVICES = ('worker', 'replay-worker')
+ANALYSIS_SERVICES = ('worker', 'replay-worker')
+HERMES_SERVICES = ('hermes-broker', 'hermes-runner')
+SERVICES = ANALYSIS_SERVICES + HERMES_SERVICES
 SHA = re.compile(r'^[0-9a-f]{40}$')
 CONFIG = re.compile(r'^/opt/narma/releases/[0-9a-f]{40}/services/video/compose.yaml$')
 ENV_FILE = '/opt/narma/secrets/video.env'
@@ -85,7 +87,7 @@ def snapshot(sha):
     os.umask(0o077)
     path = state_path(sha)
     current = [item for service in SERVICES if (item := inspect_service(service))]
-    if sum(item['running'] for item in current) > 1:
+    if sum(item['running'] for item in current if item['service'] in ANALYSIS_SERVICES) > 1:
         raise RuntimeError('replay_activation_multiple_workers_running')
     config = '/opt/narma/releases/' + sha + '/services/video/compose.yaml'
     before = None

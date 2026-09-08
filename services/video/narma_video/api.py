@@ -51,8 +51,8 @@ def ready():
             connection.execute("SELECT 1 FROM replay_jobs LIMIT 1")
             connection.execute("SELECT 1 FROM hero_pool_match_notes LIMIT 1")
             migrated = connection.execute("""SELECT count(*) AS n FROM video_schema_migrations
-                WHERE name IN ('010_hero_pool_progress.sql','008_replay_coaching_history.sql','009_hermes_reviews.sql')""").fetchone()
-            if migrated["n"] != 3:
+                WHERE name IN ('010_hero_pool_progress.sql','008_replay_coaching_history.sql','009_hermes_reviews.sql','011_hermes_runtime.sql')""").fetchone()
+            if migrated["n"] != 4:
                 raise RuntimeError("Progress schema not ready")
         with tempfile.TemporaryFile(dir=media_root()) as handle:
             handle.write(b"ready"); handle.flush()

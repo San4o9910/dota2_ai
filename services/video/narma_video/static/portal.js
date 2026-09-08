@@ -440,7 +440,7 @@ async function poolMutation(button,path,method,body,success) {
 }
 function poolMatchButton(match,label='Открыть разбор') {
   const button=node('button',label,'quiet'); button.type='button';
-  button.addEventListener('click',async()=>{ button.disabled=true; switchTab('review'); try { await openReplay(match.job_id,true); } catch(error) { notice(error.message); } finally { button.disabled=false; } });
+  button.addEventListener('click',async()=>{ button.disabled=true; switchTab('review'); try { await openReplay(match.job_id,true); if(finite(match.time)) seekTime(match.time,match.evidence_id); } catch(error) { notice(error.message); } finally { button.disabled=false; } });
   return button;
 }
 function renderPool() {
@@ -525,6 +525,24 @@ function renderPoolTrend() {
 }
 function renderPoolPatterns() {
   const target=$('pool-patterns'); target.replaceChildren(); const patterns=state.pool.patterns??[];
+  const coaching=state.pool.coaching;
+  for(const pattern of coaching?.patterns??[]) {
+    const card=node('article',undefined,'pool-pattern-card pool-coach-card');
+    const identities=(pattern.heroes??[]).map(hero=>`${hero.label||heroName(hero.hero)} · ${positionName(hero.position)}`);
+    card.append(node('p','Наблюдение тренера','eyebrow'),node('h3',pattern.title),node('p',identities.join(' / '),'help'),node('p',pattern.observation,'muted'));
+    for(const goal of pattern.goals??[]) {
+      const practice=node('div',undefined,'pool-practice');
+      practice.append(node('h4','На следующие игры'),node('p',goal.action),node('p',`Как проверить: ${goal.success_criterion}`,'help'),node('p',`Вернись к проверке после ${num(goal.evaluate_after_matches)} новых матчей.`,'help'));
+      card.append(practice);
+    }
+    const details=node('details',undefined,'pool-coach-evidence');
+    details.append(node('summary',`Эпизоды для проверки · ${new Set((pattern.evidence??[]).map(ref=>ref.match_id)).size} матчей`));
+    const evidence=node('div',undefined,'evidence-links');
+    for(const ref of pattern.evidence??[]) evidence.append(poolMatchButton(ref,`Матч ${ref.match_id} · ${stamp(ref.time)}`));
+    details.append(evidence); card.append(details);
+    card.append(node('p','Это рекомендация для проверки в игре. Новые разборы помогут уточнить её.','help'));
+    target.append(card);
+  }
   for(const pattern of patterns) {
     const card=node('article',undefined,'pool-pattern-card'); card.append(node('p',`${pattern.label||heroName(pattern.hero)} · ${positionName(pattern.position)}`,'eyebrow'),node('h3',pattern.title),node('p',pattern.observation,'muted'));
     if(finite(pattern.occurrences)&&finite(pattern.eligible_matches)) card.append(node('p',`Наблюдается в ${num(pattern.occurrences)} из ${num(pattern.eligible_matches)} подходящих матчей.`,'help'));
@@ -537,7 +555,7 @@ function renderPoolPatterns() {
     }
     target.append(card);
   }
-  if(!patterns.length) target.append(node('p','Пока недостаточно сопоставимых матчей для повторяющегося паттерна. Укажи позиции и добавляй новые разборы.','empty'));
+  if(!patterns.length&&!coaching?.patterns?.length) target.append(node('p','Пока недостаточно сопоставимых матчей для повторяющегося паттерна. Укажи позиции и добавляй новые разборы.','empty'));
 }
 function renderPoolGoals() {
   const target=$('pool-goals'); target.replaceChildren(); const goals=state.pool.goals??[]; if(!goals.length) return;

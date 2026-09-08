@@ -1,6 +1,8 @@
-# Hermes runtime: implementation checkpoint, 2026-09-08
+# Hermes runtime: historical implementation checkpoint, 2026-09-08
 
-**Status:** real Hermes is not installed or invoked by Narma Vision. The existing
+**Historical status before the runtime implementation.** See `HERMES_INTEGRATION.md` for the implemented integration and `HERMES_RUNTIME_RELEASE.md` for activation evidence.
+
+At this checkpoint, real Hermes was not installed or invoked by Narma Vision. The existing
 `hermes_bridge.py` implements bounded evidence export and review import. Neither
 those routes nor computed hero-pool patterns are a running agent. The technical
 connection/export panel has been removed from the customer interface. This

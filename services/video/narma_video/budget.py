@@ -12,6 +12,37 @@ MAX_ALLOWANCE = 10_000_000
 def reserve(connection, job, frames, model, *, replay=False):
     if type(replay) is not bool:
         raise ValueError('VIDEO_BUDGET_CALL_KIND_INVALID')
+    return _reserve(connection, job, frames, model, kind='replay' if replay else 'video')
+
+
+def reserve_hermes(connection, task, model):
+    """One durable provider attempt per task, charged to the existing allowance.
+
+    The broker authorizes the short-lived credential before this call. Repeat the
+    task and owner checks here so a second caller cannot evade the attempt cap.
+    Commit this transaction before starting the provider request.
+    """
+    connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))', (task['owner_id'],))
+    active = connection.execute("""SELECT id FROM hermes_tasks WHERE id=%s AND owner_id=%s
+        AND state='running' AND lease_token=%s AND lease_until>clock_timestamp() FOR UPDATE""",
+        (task['id'], task['owner_id'], task['lease_token'])).fetchone()
+    if not active:
+        raise ValueError('HERMES_LEASE_EXPIRED')
+    calls = connection.execute('SELECT count(*) AS calls FROM video_provider_calls WHERE hermes_task_id=%s',
+                               (task['id'],)).fetchone()
+    if calls['calls']:
+        raise ValueError('HERMES_REQUEST_BUDGET_EXCEEDED')
+    call_id = _reserve(connection, task, [{'frame_id': 0}], model, kind='hermes')
+    # A contended shared budget row can outlive the task deadline. Raising here
+    # rolls back the uncommitted reservation instead of dispatching a stale call.
+    valid = connection.execute('SELECT lease_until>clock_timestamp() AS valid FROM hermes_tasks WHERE id=%s',
+                               (task['id'],)).fetchone()
+    if not valid or not valid['valid']:
+        raise ValueError('HERMES_LEASE_EXPIRED')
+    return call_id
+
+
+def _reserve(connection, job, frames, model, *, kind):
     # Serialize the shared per-owner cap for every caller, including replay jobs.
     connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))',(job['owner_id'],))
     daily=connection.execute("SELECT count(*) AS calls FROM video_provider_calls WHERE owner_id=%s AND created_at>now()-interval '1 day'",(job['owner_id'],)).fetchone()
@@ -26,7 +57,12 @@ def reserve(connection, job, frames, model, *, replay=False):
         raise ValueError('VIDEO_GLOBAL_BUDGET_INVALID')
     if row['spent_microusd'] + row['reserved_microusd'] + RESERVATION > row['limit_microusd']:
         raise ValueError('VIDEO_GLOBAL_BUDGET_EXCEEDED')
-    if replay:
+    if kind == 'hermes':
+        call = connection.execute("""INSERT INTO video_provider_calls
+            (hermes_task_id,call_kind,owner_id,first_frame,last_frame,budget_id,model,price_policy,reserved_microusd,billing_status)
+            VALUES (%s,'hermes',%s,0,0,1,%s,%s,%s,'reserved') RETURNING id""",
+            (job['id'],job['owner_id'],MODEL,POLICY,RESERVATION)).fetchone()
+    elif kind == 'replay':
         # Static SQL branch: callers cannot supply a table or column name.
         call = connection.execute("""INSERT INTO video_provider_calls
             (replay_job_id,call_kind,owner_id,first_frame,last_frame,budget_id,model,price_policy,reserved_microusd,billing_status)

@@ -137,7 +137,7 @@ def verify_preserved(before, after):
 
 def rollback(config, snapshot):
     # Always stop the new worker first: old + new workers must not compete for RAM.
-    run(compose(config) + ['--profile', 'analysis', 'stop', '--timeout', '20', 'replay-worker'])
+    run(compose(config) + ['--profile', 'analysis', '--profile', 'hermes', 'stop', '--timeout', '20', *SERVICES])
     restored = []
     for previous in snapshot['services']:
         if not previous['running']:
@@ -156,7 +156,7 @@ def rollback(config, snapshot):
             with tempfile.TemporaryDirectory(prefix='narma-replay-rollback-') as directory:
                 override = Path(directory) / 'image.json'
                 write_private(override, {'services': {service: {'image': previous['image']}}})
-                run(compose(previous['config']) + ['--file', str(override), '--profile', 'analysis',
+                run(compose(previous['config']) + ['--file', str(override), '--profile', 'analysis', '--profile', 'hermes',
                     'up', '-d', '--no-deps', '--no-build', '--pull', 'never', service], timeout=90)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
@@ -181,7 +181,7 @@ def activate(sha, hostname):
     config = '/opt/narma/releases/' + sha + '/services/video/compose.yaml'
     try:
         # bootstrap stopped both before migrations; enforce again before checking.
-        run(compose(config) + ['--profile', 'analysis', 'stop', '--timeout', '20', *SERVICES])
+        run(compose(config) + ['--profile', 'analysis', '--profile', 'hermes', 'stop', '--timeout', '20', *SERVICES])
         if any(item and item['running'] for item in (inspect_service(service) for service in SERVICES)):
             raise RuntimeError('replay_previous_worker_still_running')
         run(compose(config) + ['exec', '-T', 'api', 'python', '-c', SCHEMA_CHECK])

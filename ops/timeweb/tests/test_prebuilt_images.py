@@ -19,6 +19,7 @@ RELEASE = "a" * 40
 OLD_ID = "sha256:" + "1" * 64
 VIDEO_ID = "sha256:" + "2" * 64
 REPLAY_ID = "sha256:" + "3" * 64
+HERMES_ID = "sha256:" + "6" * 64
 LAYER_A = "sha256:" + "a" * 64
 LAYER_B = "sha256:" + "b" * 64
 CONFIGS = [
@@ -26,6 +27,8 @@ CONFIGS = [
      "rootfs": {"type": "layers", "diff_ids": [LAYER_A, LAYER_B]}},
     {"os": "linux", "architecture": "amd64", "config": {"Cmd": ["replay"]},
      "rootfs": {"type": "layers", "diff_ids": [LAYER_B, LAYER_A]}},
+    {"os": "linux", "architecture": "amd64", "config": {"Cmd": ["hermes"]},
+     "rootfs": {"type": "layers", "diff_ids": [LAYER_A]}},
 ]
 
 
@@ -38,7 +41,7 @@ def manifest(data):
     for config, aliases in zip(CONFIGS, images.SOURCES.values()):
         digest = "sha256:" + hashlib.sha256(json.dumps(config).encode()).hexdigest()
         for tag in aliases:
-            contents[tag] = {**info(REPLAY_ID if tag == "narma-video-replay-worker" else VIDEO_ID),
+            contents[tag] = {**info(REPLAY_ID if tag == "narma-video-replay-worker" else HERMES_ID if tag == "narma-video-hermes-runner" else VIDEO_ID),
                 "config_digest": digest, "rootfs_diff_ids": config["rootfs"]["diff_ids"]}
     return {"schema": 2, "release": RELEASE, "source_tree": "b" * 40,
         "images": contents,
@@ -56,7 +59,7 @@ def image_archive(configs=None, *, layout="classic", swap_tags=False, bad_hash=F
         if bad_hash and index == 0: digest = "f" * 64
         name = ("blobs/sha256/" + digest) if layout == "containerd" else digest + ".json"
         members.append((name, raw))
-        tags = aliases[1 - index] if swap_tags else aliases[index]
+        tags = aliases[1 - index] if swap_tags and index < 2 else aliases[index]
         entries.append({"Config": name, "RepoTags": [("docker.io/library/" if canonical_tags else "") + tag + ":latest" for tag in tags],
             "Layers": ["synthetic-layer.tar"]})
     members.append(("manifest.json", json.dumps(entries).encode()))
@@ -170,7 +173,7 @@ class PrebuiltImagesTest(unittest.TestCase):
         def export(path, **options):
             exported.append(path)
             path.write_bytes(image_archive())
-        with patch.object(images, "image_info", side_effect=[info(VIDEO_ID)] * 4 + [info(REPLAY_ID)]), \
+        with patch.object(images, "image_info", side_effect=[info(VIDEO_ID)] * len(images.TAGS) + [info(REPLAY_ID)]), \
                 patch.object(images, "save_archive", side_effect=export):
             with self.assertRaisesRegex(images.ImageError, "prebuilt_loaded_image_changed"):
                 images.verify_images(manifest(b"source"))
@@ -229,8 +232,8 @@ class PrebuiltImagesTest(unittest.TestCase):
                     patch.object(images, "run", side_effect=run), \
                     patch.object(snapshot, "inspect_service", side_effect=[current, previous]):
                 images.rollback_images(RELEASE)
-            self.assertEqual(commands[:4], [["docker", "image", "tag", OLD_ID, tag] for tag in images.TAGS])
-            self.assertEqual(len(commands), 5)
+            self.assertEqual(commands[:len(images.TAGS)], [["docker", "image", "tag", OLD_ID, tag] for tag in images.TAGS])
+            self.assertEqual(len(commands), len(images.TAGS) + 1)
             self.assertFalse(any("prune" in command or "rm" in command for command in commands))
 
     def test_ssh_transfer_uses_file_stdin_and_does_not_forward_raw_errors(self):

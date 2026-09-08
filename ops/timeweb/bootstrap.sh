@@ -29,6 +29,7 @@ compose=(docker compose --project-name narma-video --env-file /opt/narma/secrets
 mark_stage stop_worker
 "${compose[@]}" --profile analysis stop worker
 "${compose[@]}" --profile analysis stop replay-worker
+"${compose[@]}" --profile hermes stop hermes-broker hermes-runner
 up_options=()
 if [[ "${2:-}" == "--prebuilt" ]]; then
   mark_stage prebuilt_images
@@ -40,7 +41,7 @@ else
   mark_stage build
   build_log="$release/build.log"
   install -m 600 /dev/null "$build_log"
-  if ! BUILDKIT_PROGRESS=plain "${compose[@]}" --profile analysis build >"$build_log" 2>&1; then
+  if ! BUILDKIT_PROGRESS=plain "${compose[@]}" --profile analysis --profile hermes build >"$build_log" 2>&1; then
     python3 "$release/ops/timeweb/diagnose_build.py" "$build_log"
     false
   fi
