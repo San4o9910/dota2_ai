@@ -1,8 +1,8 @@
 """Read-only runtime and accounting diagnostic on the existing Narma server.
 
 Only allowlisted status fields leave the host. No worker is started, task
-requeued, generation called or allowance changed. A single model metadata GET
-uses the running replay worker's existing SDK and credentials without printing them.
+requeued, generation called or allowance changed. Provider metadata access has
+already been checked; subsequent status checks make no provider requests.
 """
 import json
 from pathlib import Path
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'timeweb'))
 from pilot import Cloud, CheckError, command, event, pinned_existing_server, address
 
 DATABASE_PROBE = r'''
-import json,re
+import importlib.util,json,re
 from narma_video.db import database
 with database() as c:
  c.execute('SET TRANSACTION READ ONLY')
@@ -24,7 +24,11 @@ with database() as c:
   created_at::text,started_at::text,finished_at::text,
   octet_length(snapshot::text) AS snapshot_bytes,
   (SELECT count(*) FROM jsonb_object_keys(source_jobs)) AS source_jobs_count,
-  review IS NOT NULL AS has_review
+  review IS NOT NULL AS has_review,
+  CASE WHEN snapshot->>'runtime_contract'~'^narma[.]hermes[.]review[.]v[0-9]{1,3}$'
+   THEN snapshot->>'runtime_contract' ELSE NULL END AS runtime_contract,
+  CASE WHEN jsonb_typeof(review->'patterns')='array' THEN jsonb_array_length(review->'patterns') ELSE NULL END AS review_patterns,
+  CASE WHEN jsonb_typeof(review->'goals')='array' THEN jsonb_array_length(review->'goals') ELSE NULL END AS review_goals
   FROM hermes_tasks ORDER BY created_at DESC LIMIT 10""").fetchall()
  calls=c.execute("""SELECT id,hermes_task_id::text,model,billing_status,
   reserved_microusd,charged_microusd,created_at::text,finished_at::text,
@@ -50,47 +54,24 @@ with database() as c:
    row[field]=value if value is None or re.fullmatch('(?:REPLAY|VIDEO|GEMINI)_[A-Z_]{1,100}',value) else 'unclassified'
   for field in ('failure_category','refresh_failure_category'):
    row[field]=row[field] if row[field] is None or row[field] in categories else 'unclassified'
- worker=c.execute("SELECT runtime_revision,automatic_tracking,last_seen::text FROM hermes_workers WHERE id='scheduler'").fetchone()
- print(json.dumps({'tasks':tasks,'provider_calls':calls,'budget':budget,'unknown_reservations':unknown,
-  'unknown_calls':unknown_calls,'replay_coaching':coaching,'worker':worker},default=str))
+ worker=c.execute("SELECT runtime_revision,automatic_tracking,last_seen::text,last_seen>now()-interval '150 seconds' AS fresh FROM hermes_workers WHERE id='scheduler'").fetchone()
+ owners=c.execute('SELECT owner_id FROM portal_dota_profiles ORDER BY owner_id LIMIT 100').fetchall()
+public={'available':False}
+if importlib.util.find_spec('narma_video.hermes_tasks') is not None:
+ from narma_video.hermes_tasks import latest_valid_review,get_runtime_status
+ public={'available':True,'owners_checked':len(owners),'current_valid_reviews':0,'patterns':0,'goals':0,'connected_owners':0,'automatic_tracking_owners':0}
+ for owner in owners:
+  review=latest_valid_review(owner['owner_id'])
+  status=get_runtime_status(owner['owner_id'])
+  public['connected_owners']+=int(status.get('runtime_connected') is True)
+  public['automatic_tracking_owners']+=int(status.get('automatic_tracking') is True)
+  if review:
+   public['current_valid_reviews']+=1
+   public['patterns']+=len(review['review']['patterns'])
+   public['goals']+=len(review['review']['goals'])
+print(json.dumps({'tasks':tasks,'provider_calls':calls,'budget':budget,'unknown_reservations':unknown,
+ 'unknown_calls':unknown_calls,'replay_coaching':coaching,'worker':worker,'public_runtime':public},default=str))
 '''
-
-MODEL_PROBE = r'''
-import importlib.metadata,json,os
-from google import genai
-from google.genai import errors,types
-result={'operation':'models.get','model':'gemini-3.8-flash','generation_requests':0,
- 'sdk_version':importlib.metadata.version('google-genai')}
-client=None
-try:
- client=genai.Client(api_key=os.environ['GEMINI_API_KEY'],http_options=types.HttpOptions(
-  timeout=20000,retry_options=types.HttpRetryOptions(attempts=1)))
- model=client.models.get(model='gemini-3.8-flash')
- result.update(http_status=200,provider_status='OK',
-  supports_generate_content='generateContent' in (model.supported_actions or []),error_flags=[])
-except Exception as error:
- status=error.code if isinstance(error,errors.APIError) else None
- status=status if type(status) is int and 100<=status<=599 else None
- rpc=error.status if isinstance(error,errors.APIError) else None
- allowed={'CANCELLED','UNKNOWN','INVALID_ARGUMENT','DEADLINE_EXCEEDED','NOT_FOUND','ALREADY_EXISTS',
-  'PERMISSION_DENIED','RESOURCE_EXHAUSTED','FAILED_PRECONDITION','ABORTED','OUT_OF_RANGE',
-  'UNIMPLEMENTED','INTERNAL','UNAVAILABLE','DATA_LOSS','UNAUTHENTICATED'}
- private=str(error).lower()
- flags={
-  'unsupported_location':('location is not supported','location not supported','unsupported location','not available in your country','not available in your region'),
-  'invalid_schema':('invalid schema','unsupported schema','response_schema','responsejsonschema'),
-  'invalid_argument':('invalid argument','invalid_argument'),
-  'permission':('permission denied','permission_denied','api key not valid'),
-  'rate_limit':('rate limit','quota exceeded','resource_exhausted'),
- }
- result.update(http_status=status,provider_status=rpc if rpc in allowed else None,
-  supports_generate_content=None,error_flags=[name for name,needles in flags.items() if any(needle in private for needle in needles)])
-finally:
- if client is not None:
-  client.close()
-print(json.dumps(result))
-'''
-
 
 def host_probe():
     # The complete code runs remotely from stdin/argv. It writes no project files.
@@ -127,6 +108,26 @@ for service in ('hermes-broker','hermes-runner','replay-worker','api'):
     continue
    kind=item.get('event')
    if kind=='hermes_broker_rejected' and re.fullmatch('(?:HERMES|VIDEO)_[A-Z_]{1,100}',str(item.get('code',''))):
+    categories={'timeout','transport','rate_limited','authentication','provider_unavailable','provider_rejected','budget','configuration','lease','validation','unknown'}
+    statuses={'INVALID_ARGUMENT','FAILED_PRECONDITION','OUT_OF_RANGE','UNAUTHENTICATED','PERMISSION_DENIED','NOT_FOUND','ALREADY_EXISTS','RESOURCE_EXHAUSTED','CANCELLED','DATA_LOSS','UNKNOWN','INTERNAL','UNIMPLEMENTED','UNAVAILABLE','DEADLINE_EXCEEDED'}
+    category=item.get('category')
+    status=item.get('provider_http_status')
+    provider_status=item.get('provider_status')
+    result['runtime_events'].append({'service':service,'event':kind,'code':item['code'],
+     'category':category if isinstance(category,str) and category in categories else None,
+     'provider_http_status':status if type(status) is int and 100<=status<=599 else None,
+     'provider_status':provider_status if isinstance(provider_status,str) and provider_status in statuses else None})
+   elif kind=='hermes_provider_response':
+    reasons={'STOP','MAX_TOKENS','SAFETY','RECITATION','OTHER','BLOCKLIST','PROHIBITED_CONTENT','SPII','MALFORMED_FUNCTION_CALL','FINISH_REASON_UNSPECIFIED','IMAGE_SAFETY','IMAGE_PROHIBITED_CONTENT','IMAGE_RECITATION','NO_IMAGE','UNEXPECTED_TOOL_CALL','TOO_MANY_TOOL_CALLS','missing','unrecognized'}
+    keys={'text','thought','thoughtSignature','functionCall','functionResponse','inlineData','fileData','executableCode','codeExecutionResult','videoMetadata'}
+    types={'null','boolean','string','object','array','number','other'}
+    allowed={key+':'+type_ for key in keys for type_ in types}|{'invalid_part','unrecognized_key'}
+    numeric={key:item[key] for key in ('candidate_count','part_count','output_bytes') if type(item.get(key)) is int and 0<=item[key]<=1048576}
+    parts=item.get('part_types')
+    result['runtime_events'].append({'service':service,'event':kind,**numeric,
+     'finish_reason':item.get('finish_reason') if isinstance(item.get('finish_reason'),str) and item['finish_reason'] in reasons else None,
+     'part_types':[part for part in parts[:100] if isinstance(part,str) and part in allowed] if isinstance(parts,list) else []})
+   elif kind=='hermes_runtime_failed' and re.fullmatch('HERMES_[A-Z_]{1,100}',str(item.get('code',''))):
     result['runtime_events'].append({'service':service,'event':kind,'code':item['code']})
    elif kind=='video_provider_accounting':
     numeric={k:item[k] for k in ('call_id','charged_microusd') if k in item and (type(item[k]) is int or item[k] is None)}
@@ -139,9 +140,7 @@ for service in ('hermes-broker','hermes-runner','replay-worker','api'):
 api=containers('api')
 assert len(api)==1
 result['database']=json.loads(run(['docker','exec',api[0],'python','-c',DATABASE_CODE]))
-replay=containers('replay-worker')
-assert len(replay)==1
-result['model_metadata']=json.loads(run(['docker','exec',replay[0],'python','-c',MODEL_CODE]))
+result['provider_requests']=0
 memory={}
 for line in pathlib.Path('/proc/meminfo').read_text().splitlines():
  key,value=line.split(':',1)
@@ -149,7 +148,7 @@ for line in pathlib.Path('/proc/meminfo').read_text().splitlines():
   memory[key]=int(value.strip().split()[0])*1024
 result['memory_bytes']=memory
 print(json.dumps(result))
-'''.replace('DATABASE_CODE', repr(DATABASE_PROBE)).replace('MODEL_CODE',repr(MODEL_PROBE))
+'''.replace('DATABASE_CODE', repr(DATABASE_PROBE))
 
 
 def main():
