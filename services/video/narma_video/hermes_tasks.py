@@ -25,6 +25,9 @@ RUNTIME_REVISION = "9fd44b4dfc44138b9e5d5689acb56c438364ff7b"
 # schema remains in the prompt and strict local validation. This immutable input
 # change never resets an earlier task or its provider accounting.
 RUNTIME_CONTRACT = "narma.hermes.json-object.v1"
+CHATGPT_MODEL = "gpt-5.4"
+CHATGPT_PROVIDER = "chatgpt_subscription"
+CHATGPT_CONTRACT = "narma.hermes.chatgpt-auth.v1"
 LEASE_SECONDS = 240
 RUNNER_TIMEOUT_SECONDS = 200
 TOKEN = re.compile(r"^[A-Za-z0-9_-]{43}$")
@@ -33,7 +36,31 @@ ERROR_CODES = frozenset({"HERMES_RUNTIME_UNAVAILABLE", "HERMES_RUNTIME_REVISION"
     "HERMES_SOURCE_CHANGED", "HERMES_LEASE_EXPIRED", "HERMES_CALL_NOT_SETTLED",
     "HERMES_UPSTREAM_INIT_FAILED", "HERMES_UPSTREAM_CALL_FAILED", "HERMES_OUTPUT_EMPTY",
     "HERMES_OUTPUT_TOO_LARGE", "HERMES_OUTPUT_JSON_INVALID", "HERMES_RUNTIME_INVARIANT",
-    "HERMES_REVISION_MISMATCH", "HERMES_EXECUTION_FAILED", "HERMES_DEADLINE_EXCEEDED"})
+    "HERMES_REVISION_MISMATCH", "HERMES_EXECUTION_FAILED", "HERMES_DEADLINE_EXCEEDED",
+    "HERMES_CONNECTION_CHANGED", "HERMES_MODEL_UNSUPPORTED"})
+
+
+def configured_provider():
+    """A subscription deployment never falls through to paid Gemini calls."""
+    value = os.environ.get("HERMES_PROVIDER", "gemini")
+    return value if value in ("gemini", CHATGPT_PROVIDER) else "disabled"
+
+
+def _connection_current(connection, owner_id, generation=None, *, require_available=True):
+    from .chatgpt_auth import current_connection
+    current = current_connection(connection, owner_id)
+    return bool(current and current["connected"] and (not require_available or current["available"]) and
+                (generation is None or str(current["generation"]) == str(generation)))
+
+
+def task_model(task):
+    provider = task.get("provider", "gemini")
+    model = task.get("model", MODEL)
+    if ((provider == "gemini" and model == MODEL and task.get("connection_generation") is None)
+            or (provider == CHATGPT_PROVIDER and model == CHATGPT_MODEL
+                and task.get("connection_generation") is not None)):
+        return model
+    raise ValueError("HERMES_MODEL_UNSUPPORTED")
 
 
 def enqueue_eligible():
@@ -47,15 +74,37 @@ def enqueue_eligible():
     added = 0
     for owner in owners:
         owner_id = owner["owner_id"]
+        provider = configured_provider()
+        if provider == "disabled":
+            continue
+        generation = None
+        if provider == CHATGPT_PROVIDER:
+            from .chatgpt_auth import current_connection
+            with database() as connection:
+                auth = current_connection(connection, owner_id)
+            if not auth or not auth["available"]:
+                continue
+            generation = str(auth["generation"])
         snapshot, _, sources = build_snapshot(get_pool(owner_id, include_coaching=False))
         # Without evidence from two games there can be no supported repetition.
         if sum(bool(row["evidence"]) for row in snapshot["observations"]) < 2:
             continue
-        snapshot = {**snapshot, "runtime_contract": RUNTIME_CONTRACT}
+        snapshot = {**snapshot, "runtime_contract": RUNTIME_CONTRACT if provider == "gemini" else CHATGPT_CONTRACT}
+        model = MODEL if provider == "gemini" else CHATGPT_MODEL
+        if provider == CHATGPT_PROVIDER:
+            snapshot["provider_context"] = {"provider": provider, "model": model,
+                "connection_generation": generation}
         digest = hashlib.sha256(canonical_bytes(snapshot)).hexdigest()
         with database() as connection:
             connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner_id,))
+            if provider == CHATGPT_PROVIDER and not _connection_current(connection, owner_id, generation):
+                continue
             if not _sources_available(connection, owner_id, sources):
+                continue
+            if provider == CHATGPT_PROVIDER and _subscription_attempted_facts(connection, owner_id,
+                    snapshot["player"]["account_id"], snapshot):
+                # Reconnecting never grants permission to resend an uncertain
+                # request for these same facts under a new credential generation.
                 continue
             if _completed_facts(connection, owner_id, snapshot["player"]["account_id"], snapshot):
                 # A corrected transport does not justify buying another review
@@ -66,19 +115,39 @@ def enqueue_eligible():
                 WHERE owner_id=%s AND account_id=%s AND state='queued' AND snapshot_sha256<>%s""",
                 (owner_id, snapshot["player"]["account_id"], digest))
             row = connection.execute("""INSERT INTO hermes_tasks
-                (id,owner_id,account_id,snapshot_sha256,snapshot,source_jobs)
-                VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (owner_id,account_id,snapshot_sha256)
+                (id,owner_id,account_id,snapshot_sha256,snapshot,source_jobs,provider,model,connection_generation)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (owner_id,account_id,snapshot_sha256)
                 DO NOTHING RETURNING id""", (uuid4(), owner_id, snapshot["player"]["account_id"],
-                    digest, Jsonb(snapshot), Jsonb(sources))).fetchone()
+                    digest, Jsonb(snapshot), Jsonb(sources), provider, model, generation)).fetchone()
             added += bool(row)
     return added
 
 
 def _completed_facts(connection, owner_id, account_id, snapshot):
-    facts = {key: value for key, value in snapshot.items() if key != "runtime_contract"}
+    facts = {key: value for key, value in snapshot.items() if key not in ("runtime_contract", "provider_context")}
     return bool(connection.execute("""SELECT 1 FROM hermes_tasks
         WHERE owner_id=%s AND account_id=%s AND state='succeeded'
-        AND snapshot-'runtime_contract'=%s LIMIT 1""", (owner_id, account_id, Jsonb(facts))).fetchone())
+        AND snapshot-'runtime_contract'-'provider_context'=%s LIMIT 1""", (owner_id, account_id, Jsonb(facts))).fetchone())
+
+
+def _subscription_attempted_facts(connection, owner_id, account_id, snapshot):
+    facts = {key: value for key, value in snapshot.items() if key not in ("runtime_contract", "provider_context")}
+    return bool(connection.execute("""SELECT 1 FROM hermes_tasks t
+        WHERE t.owner_id=%s AND t.account_id=%s AND t.provider='chatgpt_subscription'
+        AND t.snapshot-'runtime_contract'-'provider_context'=%s
+        AND EXISTS(SELECT 1 FROM chatgpt_calls c WHERE c.task_id=t.id AND c.owner_id=t.owner_id
+            AND c.started_at IS NOT NULL) LIMIT 1""", (owner_id, account_id, Jsonb(facts))).fetchone())
+
+
+def _subscription_allowance(connection, owner_id, generation):
+    from .chatgpt_provider import daily_limit
+    blocked = connection.execute("""SELECT 1 FROM chatgpt_calls WHERE owner_id=%s AND connection_generation=%s
+        AND error_code='CHATGPT_QUOTA' AND (pause_until IS NULL OR pause_until>clock_timestamp()) LIMIT 1""",
+        (owner_id, generation)).fetchone()
+    count = connection.execute("""SELECT count(*) AS count FROM chatgpt_calls WHERE owner_id=%s
+        AND created_at >= date_trunc('day',clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'""",
+        (owner_id,)).fetchone()["count"]
+    return not blocked and count < daily_limit()
 
 
 def claim_task():
@@ -91,20 +160,29 @@ def claim_task():
             OR EXISTS(SELECT 1 FROM hermes_tasks WHERE state='running' AND lease_until>clock_timestamp()) AS busy""").fetchone()
         if busy["busy"]:
             return None
-        allowance = budget_status(connection)
-        if not allowance["enabled"] or allowance.get("available_microusd", 0) < RESERVATION:
+        provider = configured_provider()
+        if provider == "disabled":
             return None
+        if provider == "gemini":
+            allowance = budget_status(connection)
+            if not allowance["enabled"] or allowance.get("available_microusd", 0) < RESERVATION:
+                return None
         connection.execute("""UPDATE hermes_tasks SET state='failed',error_code='HERMES_LEASE_EXPIRED',
             finished_at=now(),credential_sha256=NULL WHERE state='running' AND lease_until<=clock_timestamp()""")
         # Skip stale queued snapshots and let another scheduler claim independent
         # rows safely. The one-attempt budget index is a second concurrency fence.
-        for _ in range(250):
-            row = connection.execute("""SELECT t.* FROM hermes_tasks t WHERE t.state='queued'
-                AND t.attempts=0 AND (SELECT count(*) FROM video_provider_calls c
-                    WHERE c.owner_id=t.owner_id AND c.created_at>now()-interval '1 day')<250
-                ORDER BY t.created_at,t.id FOR UPDATE OF t SKIP LOCKED LIMIT 1""").fetchone()
-            if not row:
-                return None
+        rows = connection.execute("""SELECT t.* FROM hermes_tasks t WHERE t.state='queued'
+            AND t.attempts=0 AND t.provider=%s
+            AND (t.provider<>'gemini' OR (SELECT count(*) FROM video_provider_calls c
+                WHERE c.owner_id=t.owner_id AND c.created_at>now()-interval '1 day')<250)
+            ORDER BY t.created_at,t.id FOR UPDATE OF t SKIP LOCKED LIMIT 250""", (provider,)).fetchall()
+        for row in rows:
+            if provider == CHATGPT_PROVIDER and not _connection_current(connection, row["owner_id"],
+                    row["connection_generation"]):
+                continue
+            if provider == CHATGPT_PROVIDER and not _subscription_allowance(connection, row["owner_id"],
+                    row["connection_generation"]):
+                continue
             if not _sources_available(connection, row["owner_id"], row["source_jobs"]):
                 connection.execute("""UPDATE hermes_tasks SET state='stale',
                     error_code='HERMES_SOURCE_CHANGED',finished_at=now() WHERE id=%s""", (row["id"],))
@@ -137,6 +215,12 @@ def authorize_call(connection, token):
         raise ValueError("HERMES_TOKEN_INVALID")
     if row["state"] != "running" or not _lease_valid(connection, row):
         raise ValueError("HERMES_LEASE_EXPIRED")
+    task_model(row)
+    if row.get("provider", "gemini") != configured_provider():
+        raise ValueError("HERMES_CONNECTION_CHANGED")
+    if row.get("provider") == CHATGPT_PROVIDER and not _connection_current(connection,
+            row["owner_id"], row["connection_generation"]):
+        raise ValueError("HERMES_CONNECTION_CHANGED")
     if not _sources_available(connection, row["owner_id"], row["source_jobs"]):
         raise ValueError("HERMES_SOURCE_CHANGED")
     if not _lease_valid(connection, row):
@@ -182,11 +266,22 @@ def complete_task(task_id, lease_token, final_response, revision):
             raise ValueError("HERMES_REVIEW_INVALID") from error
         # Provenance comes from the installed runtime and the settled broker call,
         # never from the model's self-description or an external imported review.
-        calls = connection.execute("""SELECT model,billing_status FROM video_provider_calls
-            WHERE hermes_task_id=%s AND call_kind='hermes'""", (row["id"],)).fetchall()
-        if len(calls) != 1 or calls[0]["billing_status"] != "settled" or calls[0]["model"] != MODEL:
-            raise ValueError("HERMES_CALL_NOT_SETTLED")
-        validated["producer"] = {"name": "NousResearch/hermes-agent", "version": RUNTIME_REVISION, "model": MODEL}
+        model = task_model(row)
+        if row.get("provider") == CHATGPT_PROVIDER:
+            from .chatgpt_provider import verified_call
+            if not _connection_current(connection, row["owner_id"], row["connection_generation"], require_available=False):
+                raise ValueError("HERMES_CONNECTION_CHANGED")
+            if not verified_call(connection, owner_id=row["owner_id"], task_id=row["id"],
+                    expected_generation=str(row["connection_generation"]), model=model, output_text=final_response):
+                raise ValueError("HERMES_CALL_NOT_SETTLED")
+            if validated["producer"] != {"name": "NousResearch/hermes-agent", "version": RUNTIME_REVISION, "model": model}:
+                raise ValueError("HERMES_REVIEW_INVALID")
+        else:
+            calls = connection.execute("""SELECT model,billing_status FROM video_provider_calls
+                WHERE hermes_task_id=%s AND call_kind='hermes'""", (row["id"],)).fetchall()
+            if len(calls) != 1 or calls[0]["billing_status"] != "settled" or calls[0]["model"] != model:
+                raise ValueError("HERMES_CALL_NOT_SETTLED")
+        validated["producer"] = {"name": "NousResearch/hermes-agent", "version": RUNTIME_REVISION, "model": model}
         if row["state"] == "succeeded":
             if row["review"] != validated:
                 raise ValueError("HERMES_REVIEW_INVALID")
@@ -208,30 +303,52 @@ def latest_valid_review(owner_id):
             WHERE t.owner_id=%s AND t.state='succeeded' AND t.runtime_revision=%s
             ORDER BY t.finished_at DESC,t.id DESC LIMIT 30""", (owner_id, RUNTIME_REVISION)).fetchall()
         for row in rows:
-            if _sources_available(connection, owner_id, row["source_jobs"]):
+            if _sources_available(connection, owner_id, row["source_jobs"], lock=False):
                 return {"id": str(row["id"]), "created_at": row["finished_at"], "source": "hermes_runtime",
                     "runtime_verified": True, "interpretation_verified": False,
                     "runtime_revision": row["runtime_revision"], "snapshot_sha256": row["snapshot_sha256"],
-                    "snapshot": row["snapshot"], "source_jobs": row["source_jobs"], "review": row["review"]}
+                    "snapshot": row["snapshot"], "source_jobs": row["source_jobs"], "review": row["review"],
+                    "provider": row.get("provider", "gemini"), "connection_generation": str(row["connection_generation"]) if row.get("connection_generation") else None}
     return None
 
 
 def get_runtime_status(owner_id):
+    provider = configured_provider()
+    auth = None
+    subscription_available = False
     with database() as connection:
         worker = connection.execute("""SELECT *,last_seen>now()-interval '150 seconds' AS fresh
             FROM hermes_workers WHERE id='scheduler'""").fetchone()
-        last = connection.execute("""SELECT t.state,t.finished_at,t.runtime_revision FROM hermes_tasks t
+        last = connection.execute("""SELECT t.state,t.finished_at,t.runtime_revision,t.provider,
+            t.connection_generation,t.attempts,t.error_code FROM hermes_tasks t
             JOIN portal_dota_profiles p ON p.owner_id=t.owner_id AND p.account_id=t.account_id
             WHERE t.owner_id=%s ORDER BY t.created_at DESC,t.id DESC LIMIT 1""", (owner_id,)).fetchone()
-        executed = connection.execute("""SELECT max(finished_at) AS last_success_at FROM hermes_tasks
-            WHERE state='succeeded' AND runtime_revision=%s""", (RUNTIME_REVISION,)).fetchone()
-    connected = bool(worker and worker["fresh"] and worker["runtime_revision"] == RUNTIME_REVISION
-        and executed["last_success_at"])
+        if provider == CHATGPT_PROVIDER:
+            from .chatgpt_auth import current_connection
+            auth = current_connection(connection, owner_id)
+            subscription_available = bool(auth and auth["available"] and
+                _subscription_allowance(connection, owner_id, auth["generation"]))
+    latest = latest_valid_review(owner_id)
+    services_ready = bool(worker and worker["fresh"] and worker["runtime_revision"] == RUNTIME_REVISION)
+    connection_ready = provider == "gemini" or bool(auth and auth["connected"])
+    available = provider == "gemini" or subscription_available
+    verified = bool(latest and latest["provider"] == provider and (provider != CHATGPT_PROVIDER
+        or (auth and latest["connection_generation"] == str(auth["generation"]))))
+    connected = bool(services_ready and connection_ready and verified)
+    current_task = bool(last and last["provider"] == provider and (provider != CHATGPT_PROVIDER
+        or (auth and str(last["connection_generation"]) == str(auth["generation"]))))
+    readiness = ("services_unavailable" if not services_ready else "waiting_auth" if not connection_ready
+        else "paused" if not available else "running" if current_task and last["state"] == "running"
+        else "verified" if verified else "requires_review" if last and last["provider"] == provider and last["state"] == "failed"
+        and last["attempts"] else "ready")
     return {"runtime_connected": connected,
-        "automatic_tracking": bool(connected and worker["automatic_tracking"]),
+        "automatic_tracking": bool(connected and available and worker["automatic_tracking"]),
+        "runtime_verified": verified, "services_ready": services_ready,
+        "connection_ready": connection_ready, "provider": provider, "readiness": readiness,
         "last_seen": worker["last_seen"] if worker else None,
         "runtime_revision": worker["runtime_revision"] if connected else None,
-        "last_success_at": executed["last_success_at"], "state": last["state"] if last else "waiting"}
+        "last_success_at": latest["created_at"] if latest else None,
+        "state": last["state"] if last else "waiting"}
 
 
 def _runner_json(path, body=None, timeout=10):
@@ -287,7 +404,7 @@ def process_once():
         " Analyze each hero and the explicitly recorded position separately; never infer position from hero."
         " Unknown abilities, build, patch, match conditions and dates remain unknown."
         " Different heroes/positions are not interchangeable evidence for hero-specific advice."
-        " Return producer name NousResearch/hermes-agent, version " + RUNTIME_REVISION + " and model " + MODEL + ".")
+        " Return producer name NousResearch/hermes-agent, version " + RUNTIME_REVISION + " and model " + task_model(task) + ".")
     previous = latest_valid_review(task["owner_id"])
     if previous:
         # Prior prose remains labeled as an interpretation, never promoted to
@@ -297,7 +414,7 @@ def process_once():
             "goals": previous["review"]["goals"]}
     try:
         result = _runner_json("/run", {"task_id": str(task_id), "token": task["token"],
-            "packet": packet}, timeout=RUNNER_TIMEOUT_SECONDS)
+            "packet": packet, "model": task_model(task)}, timeout=RUNNER_TIMEOUT_SECONDS)
         if not isinstance(result, dict):
             raise ValueError("HERMES_RUNNER_FAILED")
         review_id = complete_task(task_id, lease_token, result.get("final_response"), result.get("runtime_revision"))

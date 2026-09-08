@@ -51,8 +51,8 @@ def ready():
             connection.execute("SELECT 1 FROM replay_jobs LIMIT 1")
             connection.execute("SELECT 1 FROM hero_pool_match_notes LIMIT 1")
             migrated = connection.execute("""SELECT count(*) AS n FROM video_schema_migrations
-                WHERE name IN ('010_hero_pool_progress.sql','008_replay_coaching_history.sql','009_hermes_reviews.sql','011_hermes_runtime.sql','012_learning_curriculum.sql')""").fetchone()
-            if migrated["n"] != 5:
+                WHERE name IN ('010_hero_pool_progress.sql','008_replay_coaching_history.sql','009_hermes_reviews.sql','011_hermes_runtime.sql','012_learning_curriculum.sql','013_chatgpt_auth.sql','014_chatgpt_calls.sql','015_hermes_chatgpt_provider.sql')""").fetchone()
+            if migrated["n"] != 8:
                 raise RuntimeError("Progress schema not ready")
         with tempfile.TemporaryFile(dir=media_root()) as handle:
             handle.write(b"ready"); handle.flush()
@@ -234,6 +234,8 @@ from .learning import attach_learning
 attach_learning(app)
 from .hermes_bridge import attach_hermes
 attach_hermes(app)
+from .chatgpt_auth import attach_chatgpt
+attach_chatgpt(app)
 
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles

@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set()};
+const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set(),chatgpt:null,chatgptRequest:0,chatgptController:null,chatgptTimer:null,chatgptClock:null};
 if (state.token) history.replaceState(null, '', location.pathname);
 const labels = {uploading:'Загружается', queued:'В очереди', processing:'Разбираем матч', ready:'Разбор готов', failed:'Разбор остановлен'};
 const failures = {
@@ -32,6 +32,8 @@ function switchTab(tab) {
   for(const section of document.querySelectorAll('.tab-section')) section.hidden=section.id!==tab;
   for(const button of document.querySelectorAll('nav [data-tab]')) { if(button.dataset.tab===tab) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); }
   if(tab==='hero-pool'&&state.user) void loadPool();
+  stopChatgptPolling();
+  if(tab==='account'&&state.user) void loadChatgpt();
 }
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>switchTab(button.dataset.tab)));
 switchTab(location.pathname==='/account'?'account':location.pathname==='/hero-pool'?'hero-pool':'review');
@@ -52,6 +54,7 @@ async function session() {
   const data=await api('/api/session'); state.setup=data.setup_required===true; state.user=data.authenticated?data.user:null;
   $('loading').hidden=true; $('workspace').hidden=!state.user; $('auth').hidden=!!state.user; $('logout').hidden=!state.user;
   if(!state.user) {
+    stopChatgptPolling();state.chatgpt=null;$('chatgpt-content').replaceChildren();$('chatgpt-status').textContent='';
     state.pool=null; state.poolRequest++; state.poolDrafts.clear(); state.poolJournalOpen.clear(); state.poolSignature=''; state.poolVisible=20;
     state.profile=null; state.selected=null; state.detail=null; state.showArchived=false; $('result').hidden=true; $('pool-content').hidden=true;
     state.learning=null;state.reportLearning=null;state.learningRequest++;state.reportLearningRequest++;state.learningDrafts.clear();state.learningMatches.clear();state.learningStage=null;state.learningExercise=null;state.reportExercise=null;$('report-learning').replaceChildren();$('pool-learning').replaceChildren();
@@ -62,19 +65,91 @@ async function session() {
     $('auth-submit').textContent=state.setup?'Создать аккаунт':'Войти'; $('auth-submit').disabled=state.setup&&!state.token;
     $('setup-help').hidden=!state.setup||!!state.token; $('password-help').hidden=!state.setup; $('password').autocomplete=state.setup?'new-password':'current-password'; return;
   }
-  $('account-email').textContent=state.user.email; state.profile=(await api('/api/profile')).profile; profileView(); await refresh(); if(!$('hero-pool').hidden) await loadPool();
+  $('account-email').textContent=state.user.email; state.profile=(await api('/api/profile')).profile; profileView(); await refresh(); if(!$('hero-pool').hidden) await loadPool();if(!$('account').hidden)void loadChatgpt();
 }
 $('auth-form').addEventListener('submit',async event=>{
   event.preventDefault(); notice(); const button=$('auth-submit'); button.disabled=true;
   try { await api(state.setup?'/api/auth/setup':'/api/auth/login','POST',{email:$('email').value.trim(),password:$('password').value,...(state.setup?{token:state.token}:{})}); state.token=null; $('password').value=''; await session(); }
   catch(error) { notice(error.message); } finally { button.disabled=state.setup&&!state.token; }
 });
-$('logout').addEventListener('click',async()=>{ try { await api('/api/auth/logout','POST',{}); location.reload(); } catch(error) { notice(error.message); } });
+$('logout').addEventListener('click',async()=>{stopChatgptPolling();try { await api('/api/auth/logout','POST',{}); location.reload(); } catch(error) { notice(error.message);if(!$('account').hidden)void loadChatgpt(); } });
 $('password-form').addEventListener('submit',async event=>{
   event.preventDefault(); const button=event.target.querySelector('button'); button.disabled=true;
   try { await api('/api/auth/password','POST',{current_password:$('current-password').value,new_password:$('new-password').value}); $('current-password').value=''; $('new-password').value=''; state.user=null; await session(); notice('Пароль изменён. Войди с новым паролем.'); }
   catch(error) { notice(error.message); } finally { button.disabled=false; }
 });
+
+// OAuth credentials remain on the server. The browser receives only the short-lived login code.
+function stopChatgptPolling() {
+  state.chatgptRequest++;clearTimeout(state.chatgptTimer);clearInterval(state.chatgptClock);
+  state.chatgptTimer=null;state.chatgptClock=null;state.chatgptController?.abort();state.chatgptController=null;
+  $('chatgpt-integration').setAttribute('aria-busy','false');
+}
+function chatgptVisible() {return !!state.user&&!$('account').hidden&&!document.hidden;}
+function chatgptDevice(data) {
+  const pending=data?.pending;
+  if(data?.status!=='pending'||!pending||pending.verification_url!=='https://auth.openai.com/codex/device'||typeof pending.user_code!=='string'||!/^[A-Za-z0-9 -]{4,32}$/.test(pending.user_code)||typeof data.auth_generation!=='string')return null;
+  const expires=Date.parse(pending.expires_at);if(!Number.isFinite(expires))return null;
+  return {...pending,expires};
+}
+function chatgptAction(label,run,className='secondary') {const button=node('button',label,className);button.type='button';button.addEventListener('click',()=>void run());return button;}
+function renderChatgpt(message='') {
+  const host=$('chatgpt-content'),data=state.chatgpt??{},status=$('chatgpt-status');host.replaceChildren();
+  const device=chatgptDevice(data),expired=data.status==='expired'||(device&&device.expires<=Date.now());
+  const labels={disconnected:'ChatGPT ещё не подключён',pending:'Ожидаем вход на странице OpenAI',connected:'ChatGPT подключён',expired:'Время для входа истекло',reconnect_required:'Нужно войти в ChatGPT заново',unavailable:'Подключение сейчас недоступно'};
+  status.textContent=message||(expired?labels.expired:data.status==='pending'&&!device?labels.unavailable:labels[data.status]??labels.unavailable);
+  const errorHints={CHATGPT_AUTH_EXPIRED:'Время для входа закончилось. Получи новый код.',CHATGPT_AUTH_DECRYPT:'Подключение нужно обновить. Войди в ChatGPT заново.',CHATGPT_AUTH_RATE_LIMIT:'Слишком много попыток входа. Подожди немного и проверь подключение снова.',CHATGPT_AUTH_REJECTED:'Вход не подтверждён. Проверь разрешение на вход по коду в аккаунте ChatGPT и попробуй ещё раз.',CHATGPT_AUTH_RESPONSE:'OpenAI не подтвердил подключение. Попробуй снова позже.',CHATGPT_AUTH_UNAVAILABLE:'Сейчас не удаётся связаться с OpenAI. Попробуй снова позже.'};
+  if(errorHints[data.last_error_code])host.append(node('p',errorHints[data.last_error_code],'help'));
+  if(data.status==='connected') {
+    host.append(node('p','Вход подтверждён. Готовность тренерского разбора проверяется отдельно.','help'));
+    if(data.last_error_code==='CHATGPT_DAILY_LIMIT')host.append(node('p','Дневной лимит тренерских запросов достигнут. Подключение сохранено.','help'));
+    if(data.quota_paused===true||data.last_error_code==='CHATGPT_QUOTA'){
+      const until=Date.parse(data.paused_until),known=Number.isFinite(until)&&until>Date.now();
+      host.append(node('p',known?`Лимит ChatGPT исчерпан. Пауза до ${new Date(until).toLocaleString('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}.`:'Лимит ChatGPT исчерпан. Время восстановления пока неизвестно. После восстановления доступа войди заново.','help'));
+      if(!known&&data.can_connect===true)host.append(chatgptAction('Войти в ChatGPT заново',reconnectChatgpt));
+    }
+    host.append(chatgptAction('Отключить ChatGPT',()=>loadChatgpt('DELETE',{}),'quiet'));
+  } else if(device&&!expired) {
+    const steps=node('ol',undefined,'chatgpt-steps');steps.append(node('li','Скопируй код и открой OpenAI.'),node('li','Войди в свой аккаунт ChatGPT и подтверди подключение.'),node('li','Вернись сюда — статус обновится автоматически.'));host.append(steps);
+    const label=node('label','Код для входа в OpenAI'),code=node('input');code.id='chatgpt-user-code';code.value=device.user_code;code.readOnly=true;code.autocomplete='off';code.spellcheck=false;label.htmlFor=code.id;code.addEventListener('click',()=>code.select());host.append(label,code);
+    const actions=node('div',undefined,'chatgpt-actions'),link=node('a','Открыть OpenAI','secondary chatgpt-openai');link.href=device.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.referrerPolicy='no-referrer';actions.append(link);
+    if(navigator.clipboard?.writeText)actions.append(chatgptAction('Скопировать код',async()=>{try{await navigator.clipboard.writeText(device.user_code);status.textContent='Код скопирован. Открой OpenAI и введи его для входа.';}catch{code.focus();code.select();status.textContent='Выделенный код можно скопировать вручную.';}},'quiet'));
+    host.append(actions,node('p','', 'help chatgpt-expiry'),chatgptAction('Отменить подключение',()=>loadChatgpt('DELETE',{}),'quiet'));
+    const tick=()=>{const remaining=Math.max(0,Math.ceil((device.expires-Date.now())/1000)),element=host.querySelector('.chatgpt-expiry');if(element)element.textContent=`Код действует ещё ${Math.floor(remaining/60)}:${String(remaining%60).padStart(2,'0')}.`;if(!remaining){stopChatgptPolling();state.chatgpt={...data,status:'expired',pending:null};renderChatgpt();}};
+    tick();if(device.expires>Date.now())state.chatgptClock=setInterval(tick,1000);
+  } else {
+    if(data.can_connect===true)host.append(chatgptAction(expired||data.status==='reconnect_required'?'Войти в ChatGPT заново':'Подключить ChatGPT',()=>loadChatgpt('POST',{},'/connect')));
+    else host.append(node('p',data.configured===true?'Подключение пока недоступно для этого аккаунта. Разборы и твоя практика сохранены.':'Настройка подключения на сервере ещё не завершена. Разборы и твоя практика сохранены.','help'));
+    if(data.status==='unavailable'||(data.status==='pending'&&!device))host.append(chatgptAction('Проверить снова',()=>loadChatgpt(),'quiet'));
+  }
+}
+async function loadChatgpt(method='GET',body,suffix='') {
+  if(!chatgptVisible())return;stopChatgptPolling();const request=state.chatgptRequest,controller=new AbortController();state.chatgptController=controller;
+  $('chatgpt-integration').setAttribute('aria-busy','true');for(const button of $('chatgpt-content').querySelectorAll('button'))button.disabled=true;
+  if(method==='POST'&&suffix==='/connect')$('chatgpt-status').textContent='Готовим вход через OpenAI…';
+  try {
+    const response=await fetch(`/api/integrations/chatgpt${suffix}`,{method,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:body!==undefined?{'Content-Type':'application/json'}:{},body:body!==undefined?JSON.stringify(body):undefined});
+    const errorCode=response.headers.get('X-Narma-Error');
+    if(response.status===401&&errorCode==='PORTAL_SIGN_IN'){state.user=null;await session();return;}
+    if(!response.ok)throw Object.assign(Error('unavailable'),{code:errorCode});
+    const data=await response.json();if(request!==state.chatgptRequest||!chatgptVisible())return;
+    state.chatgpt=data;renderChatgpt();
+    const device=chatgptDevice(data);if(device&&device.expires>Date.now()){
+      const delay=Math.max(5,Math.min(60,Number(device.poll_after_seconds)||Number(device.poll_interval_seconds)||5));
+      state.chatgptTimer=setTimeout(()=>void loadChatgpt('POST',{auth_generation:data.auth_generation},'/poll'),delay*1000);
+    }
+    return data;
+  }catch(error){if(error.name==='AbortError'||request!==state.chatgptRequest)return;state.chatgpt={...state.chatgpt,status:'unavailable',pending:null,last_error_code:error.code??null};renderChatgpt('Не удалось проверить подключение. Попробуй ещё раз.');}
+  finally {if(request===state.chatgptRequest){state.chatgptController=null;$('chatgpt-integration').setAttribute('aria-busy','false');}}
+}
+async function reconnectChatgpt() {
+  const disconnected=await loadChatgpt('DELETE',{});
+  if(disconnected?.status==='disconnected'&&chatgptVisible())await loadChatgpt('POST',{},'/connect');
+}
+window.addEventListener('pagehide',stopChatgptPolling);
+window.addEventListener('pageshow',event=>{if(event.persisted&&chatgptVisible())void loadChatgpt();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopChatgptPolling();else if(chatgptVisible())void loadChatgpt();});
+
 $('replay-file').addEventListener('change',()=>{ state.uploadId=null; buttons(); });
 $('nickname').addEventListener('input',()=>{ state.uploadId=null; buttons(); });
 $('replay-form').addEventListener('submit',async event=>{

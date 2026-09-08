@@ -91,6 +91,9 @@ try {
       return {summary:summarize(selected),heroes:[...groups].map(([key,rows])=>({hero:rows[0].hero,label:rows[0].label,position:rows[0].position,favorite:favorites.has(key),...summarize(rows)})),available_heroes:[{hero:'npc_dota_hero_necrolyte',label:'Necrophos'},{hero:'npc_dota_hero_lion',label:'Lion'}],history:selected,trends:sameRole.length===6?[{hero:'npc_dota_hero_necrolyte',position:2,metric:'deaths_per_30',status:'ready',early_n:3,recent_n:3,early_mean:9,recent_mean:6,delta:-3,unit:'смертей'}]:[],patterns:sameRole.length>=3?[{id:'repeat-death',hero:'npc_dota_hero_necrolyte',label:'Necrophos',position:2,title:malicious,observation:'Повторная смерть в двух матчах.',action:'Перед возвращением на линию проверь доступные предметы.',occurrences:2,eligible_matches:sameRole.length,evidence:[{job_id:'pool-0',match_id:'8984000000'}]}]:[],coaching:coaching.patterns.length?coaching:null,goals,limitations:['Синтетическая тестовая выборка. Дата разбора не является датой игры.']};
     }
     const errors=[], requests=[];
+    const integrationRequests=[];
+    let chatgpt={provider:'openai-codex',scope:'personal',configured:true,can_connect:true,status:'disconnected',auth_generation:null,connected_at:null,pending:null,last_error_code:null},chatgptPollConnect=false,chatgptRejectSession=false,chatgptDeleteFailed=false,chatgptProviderRejected=false;
+    const pendingChatgpt=()=>({...chatgpt,status:'pending',auth_generation:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',pending:{user_code:'ABCD-12345',verification_url:'https://auth.openai.com/codex/device',expires_at:new Date(Date.now()+600000).toISOString(),poll_interval_seconds:5,poll_after_seconds:5}});
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/*',async route=>{
       const url=route.request().url();
@@ -100,9 +103,20 @@ try {
     });
     await page.route('**/api/**',async route=>{
       const request=route.request(), url=new URL(request.url()), endpoint=url.pathname, method=request.method(); requests.push(endpoint);
-      let body, status=200;
+      let body, status=200, responseHeaders={};
       if(endpoint==='/api/auth/login') { authenticated=true; body={authenticated:true}; }
+      else if(endpoint==='/api/auth/logout') {authenticated=false;body={authenticated:false};}
       else if(endpoint==='/api/session') body={authenticated,setup_required:false,user:authenticated?{email:'fixture@example.test'}:null};
+      else if(endpoint.startsWith('/api/integrations/chatgpt')) {
+        integrationRequests.push({method,endpoint,body:request.postDataJSON()});
+        if(chatgptRejectSession){status=401;authenticated=false;responseHeaders={'X-Narma-Error':'PORTAL_SIGN_IN'};body={detail:malicious};}
+        else if(chatgptProviderRejected&&endpoint.endsWith('/connect')){status=401;responseHeaders={'X-Narma-Error':'CHATGPT_AUTH_REJECTED'};body={detail:malicious};}
+        else if(method==='DELETE'&&chatgptDeleteFailed){status=503;body={detail:malicious};}
+        else {if(endpoint.endsWith('/connect')){assert.equal(method,'POST');assert.deepEqual(request.postDataJSON(),{});if(chatgpt.status!=='connected')chatgpt=pendingChatgpt();}
+        else if(endpoint.endsWith('/poll')){assert.equal(method,'POST');assert.deepEqual(request.postDataJSON(),{auth_generation:chatgpt.auth_generation});if(chatgptPollConnect)chatgpt={...chatgpt,status:'connected',connected_at:new Date().toISOString(),pending:null};}
+        else if(method==='DELETE')chatgpt={...chatgpt,status:'disconnected',auth_generation:null,connected_at:null,pending:null};
+        body=chatgpt;}
+      }
       else if(endpoint==='/api/learning') {const hero=url.searchParams.get('hero'),position=Number(url.searchParams.get('position'))||null;body={schema_version:'narma.learning.v1',catalog:learningCatalog(position),profile,scope:{hero,position},plans:learningPlans.filter(plan=>(!hero||plan.hero===hero)&&(!position||plan.position===position)).map(projectPlan),history:[...poolMatches,...(job?[learningMatch(job.id)]:[])].filter(match=>(!hero||match.hero===hero)&&(!position||match.position===position))};}
       else if(endpoint.startsWith('/api/learning/reports/')) body=learningReport(endpoint.split('/').at(-1));
       else if(endpoint==='/api/learning/plans'&&method==='POST') {const command=request.postDataJSON(),match=learningMatch(command.job_id);assert.ok(match.position);for(const plan of learningPlans)if(plan.hero===match.hero&&plan.position===match.position)plan.status='paused';const plan={id:`practice-${learningPlans.length+1}`,exercise_id:command.exercise_id,exercise:learningExercises.find(item=>item.id===command.exercise_id),hero:match.hero,hero_label:'Necrophos',position:match.position,status:'active',created_at:new Date().toISOString(),source_job_id:match.job_id,source_match_id:match.match_id,checks:[]};learningPlans.push(plan);body={saved:true,plan:projectPlan(plan)};}
@@ -131,7 +145,7 @@ try {
       else if(job&&endpoint===`/api/replays/${job.id}/source`&&method==='DELETE') {job.source_retained=false;body={source_deleted:true,report_retained:true};}
       else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,hero_context:legacy?{...heroContext,hero:'npc_dota_hero_lion',label:'Lion'}:heroContext,parts:uploaded?[1]:[],archived_report:job.state==='ready'?{id:1,created_at:new Date().toISOString(),hero_context:{...heroContext,summary:'Контекст сохранённого разбора.',abilities:[{...heroContext.abilities[0],casts:7}]},report:{...report,metrics:{...report.metrics,kills:9},evidence:[{id:'old-death',type:'death',time:500,title:'Старый эпизод'}],coaching:{status:'ready',summary:'Сохранённый комментарий',points:[{title:'Сохранённый эпизод',observation:'Предыдущий разбор.',evidence_ids:['old-death']}]}}}:null,report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{})}:null};
       else throw Error(`Unexpected frontend API request: ${method} ${endpoint}`);
-      await route.fulfill({status,json:body});
+      await route.fulfill({status,json:body,headers:responseHeaders});
     });
     await page.goto(origin);
     await page.getByLabel('Email',{exact:true}).fill('fixture@example.test');
@@ -455,6 +469,62 @@ try {
     assert.match(await page.locator('#player-summary').textContent(),/Steam ID: 123/);
     await page.getByRole('button',{name:'Аккаунт',exact:true}).click();
     await page.getByRole('heading',{name:'Изменить пароль',exact:true}).waitFor();
+    const integration=page.locator('#chatgpt-integration');
+    await integration.getByRole('button',{name:'Подключить ChatGPT',exact:true}).waitFor();
+    assert.equal(integrationRequests.length,1,'ChatGPT settings are fetched only after opening the account.');
+    chatgptProviderRejected=true;await integration.getByRole('button',{name:'Подключить ChatGPT',exact:true}).click();await integration.getByText(/Проверь разрешение на вход по коду/).waitFor();
+    assert.equal(await page.locator('#workspace').isVisible(),true,'An OpenAI authorization rejection must not log the user out of Narma.');assert.equal(await integration.innerText().then(text=>text.includes(malicious)),false);
+    chatgptProviderRejected=false;
+    await page.clock.install();
+    const connect=integration.getByRole('button',{name:'Подключить ChatGPT',exact:true});await connect.focus();await connect.press('Enter');
+    await integration.getByLabel('Код для входа в OpenAI',{exact:true}).waitFor();
+    assert.equal(await integration.getByLabel('Код для входа в OpenAI',{exact:true}).inputValue(),'ABCD-12345');
+    const openai=integration.getByRole('link',{name:'Открыть OpenAI',exact:true});
+    assert.equal(await openai.getAttribute('href'),'https://auth.openai.com/codex/device');
+    assert.equal(await openai.getAttribute('target'),'_blank');assert.equal(await openai.getAttribute('rel'),'noopener noreferrer');
+    assert.equal(await integration.locator('img,script').count(),0);
+    assert.equal(await page.evaluate(()=>JSON.stringify(localStorage).includes('ABCD-12345')),false,'Login codes are not persisted in browser storage.');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    if(screenshotDir)await integration.screenshot({path:path.join(screenshotDir,`portal-${width}-chatgpt-login.png`)});
+    const integrationAccessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+    assert.deepEqual(integrationAccessibility.violations.map(violation=>({id:violation.id,nodes:violation.nodes.map(item=>item.target)})),[]);
+    await page.getByRole('button',{name:'Мой игрок',exact:true}).click();
+    const pausedCount=integrationRequests.length;await page.clock.fastForward(15000);assert.equal(integrationRequests.length,pausedCount,'Leaving account stops OAuth polling.');
+    await page.getByRole('button',{name:'Аккаунт',exact:true}).click();await openai.waitFor();
+    assert.equal(integrationRequests.filter(request=>request.endpoint.endsWith('/connect')).length,2,'Returning resumes the existing login without another connect request.');
+    chatgptPollConnect=true;await page.clock.fastForward(5100);await integration.getByText('ChatGPT подключён',{exact:true}).waitFor();
+    assert.match(await integration.innerText(),/Готовность тренерского разбора проверяется отдельно/);
+    assert.equal(await integration.getByRole('link').count(),0);assert.equal(await integration.getByLabel('Код для входа в OpenAI').count(),0);
+    const connectedCount=integrationRequests.length;await page.clock.fastForward(15000);assert.equal(integrationRequests.length,connectedCount,'Connected accounts no longer poll device auth.');
+    const refreshIntegration=async()=>{await page.getByRole('button',{name:'Мой игрок',exact:true}).click();await page.getByRole('button',{name:'Аккаунт',exact:true}).click();await page.waitForFunction(()=>document.getElementById('chatgpt-integration').getAttribute('aria-busy')==='false');};
+    chatgpt={...chatgpt,quota_paused:true,available:false,paused_until:null,last_error_code:'CHATGPT_QUOTA'};await refreshIntegration();await integration.getByText(/Время восстановления пока неизвестно/).waitFor();await integration.getByRole('button',{name:'Войти в ChatGPT заново',exact:true}).waitFor();
+    chatgptDeleteFailed=true;const failedReconnectStart=integrationRequests.length;
+    await integration.getByRole('button',{name:'Войти в ChatGPT заново',exact:true}).click();await integration.getByText('Не удалось проверить подключение. Попробуй ещё раз.',{exact:true}).waitFor();
+    assert.deepEqual(integrationRequests.slice(failedReconnectStart).map(request=>[request.method,request.endpoint]),[['DELETE','/api/integrations/chatgpt']],'A failed disconnect must not start a new authorization.');
+    chatgptDeleteFailed=false;await refreshIntegration();const reconnectStart=integrationRequests.length;
+    await integration.getByRole('button',{name:'Войти в ChatGPT заново',exact:true}).click();await openai.waitFor();
+    assert.deepEqual(integrationRequests.slice(reconnectStart).map(request=>[request.method,request.endpoint]),[['DELETE','/api/integrations/chatgpt'],['POST','/api/integrations/chatgpt/connect']],'Explicit reconnect must revoke the previous login before requesting a new code.');
+    await page.clock.fastForward(5100);await integration.getByText('ChatGPT подключён',{exact:true}).waitFor();
+    await integration.getByRole('button',{name:'Отключить ChatGPT',exact:true}).click();await connect.waitFor();
+    chatgpt={...chatgpt,status:'reconnect_required',last_error_code:malicious};await refreshIntegration();
+    await integration.getByRole('button',{name:'Войти в ChatGPT заново',exact:true}).waitFor();assert.equal(await integration.innerText().then(text=>text.includes(malicious)),false,'Provider error text is not rendered.');
+    chatgpt={...pendingChatgpt(),pending:{...pendingChatgpt().pending,expires_at:new Date(Date.now()-1000).toISOString()}};await refreshIntegration();
+    await integration.getByText('Время для входа истекло',{exact:true}).waitFor();assert.equal(await integration.getByRole('link').count(),0);
+    const expiredCount=integrationRequests.length;await page.clock.fastForward(10000);assert.equal(integrationRequests.length,expiredCount,'Expired codes never poll or open a stale login URL.');
+    for(const verification_url of ['javascript:alert(1)','https://auth.openai.com.evil.test/codex/device','https://auth.openai.com/codex/device?redirect=evil']){
+      chatgpt={...pendingChatgpt(),pending:{...pendingChatgpt().pending,verification_url}};await refreshIntegration();assert.equal(await integration.getByRole('link').count(),0);assert.equal(await integration.locator('img,script').count(),0);
+    }
+    chatgpt={...pendingChatgpt(),pending:{...pendingChatgpt().pending,user_code:malicious}};await refreshIntegration();assert.equal(await integration.getByLabel('Код для входа в OpenAI').count(),0);assert.equal(await integration.locator('img,script').count(),0);
+    chatgpt={...chatgpt,status:'unavailable',configured:false,can_connect:false,pending:null};await refreshIntegration();
+    assert.equal(await integration.getByRole('button',{name:'Подключить ChatGPT',exact:true}).count(),0);await integration.getByRole('button',{name:'Проверить снова',exact:true}).waitFor();
+    chatgptRejectSession=true;await integration.getByRole('button',{name:'Проверить снова',exact:true}).click();await page.getByRole('heading',{name:'Вход в NARMA VISION',exact:true}).waitFor();
+    assert.equal(await page.locator('#workspace').isHidden(),true);assert.equal(await page.locator('#chatgpt-content').innerText(),'');
+    const unauthorizedCount=integrationRequests.length;await page.clock.fastForward(15000);assert.equal(integrationRequests.length,unauthorizedCount,'Expired Narma sessions stop all OAuth polling.');
+    chatgptRejectSession=false;chatgptPollConnect=false;chatgpt={...chatgpt,status:'disconnected',configured:true,can_connect:true,pending:null,last_error_code:null};
+    await page.getByLabel('Email',{exact:true}).fill('fixture@example.test');await page.getByLabel('Пароль',{exact:true}).fill('Synthetic passphrase 2026');await page.getByRole('button',{name:'Войти',exact:true}).click();
+    await connect.waitFor();await connect.click();await openai.waitFor();
+    await page.getByRole('button',{name:'Выйти',exact:true}).click();await page.getByRole('heading',{name:'Вход в NARMA VISION',exact:true}).waitFor();
+    const loggedOutCount=integrationRequests.length;await page.clock.fastForward(15000);assert.equal(integrationRequests.length,loggedOutCount,'Logging out stops pending device auth and clears the login code.');
     assert.equal(requests.some(url=>url.startsWith('/api/videos')),false);
     assert.equal(requests.some(url=>url.startsWith('/api/hermes')),false,'The customer portal never requests internal Hermes status or export controls.');
     assert.deepEqual(externalRequests,[],'Synthetic UI fixtures must never contact external providers.');

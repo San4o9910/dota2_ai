@@ -134,3 +134,10 @@ Never print `video.env`, unfiltered `docker inspect` or the rendered Compose
 configuration into public logs. The database has no host port and the API is
 bound to loopback only. Domain/TLS, offserver backup/restore and full website,
 account and data migration remain launch gates; this is a private test server.
+
+## ChatGPT owner authorization
+
+Current branch deployments prepare ChatGPT authorization and Hermes using the
+existing owner account, without a generation smoke. See
+[CHATGPT_AUTH_RELEASE.md](CHATGPT_AUTH_RELEASE.md) for the readiness, secret
+preservation and rollback contract. The owner must finish authorization in Narma.

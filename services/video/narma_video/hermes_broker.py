@@ -34,7 +34,8 @@ _SAFE_FAILURES = frozenset({'HERMES_TOKEN_INVALID', 'HERMES_LEASE_EXPIRED', 'HER
     'HERMES_REQUEST_BUDGET_EXCEEDED', 'HERMES_NOT_CONFIGURED', 'HERMES_PROVIDER_RESPONSE_INVALID',
     'VIDEO_GLOBAL_BUDGET_DISABLED', 'VIDEO_GLOBAL_BUDGET_EXCEEDED', 'VIDEO_GLOBAL_BUDGET_INVALID',
     'VIDEO_BUDGET_PRICE_POLICY_EXPIRED', 'VIDEO_REQUEST_BUDGET_EXCEEDED',
-    'VIDEO_BUDGET_RECONCILIATION_REQUIRED', 'VIDEO_BUDGET_ACCOUNTING_FAILED', 'GEMINI_USAGE_UNSUPPORTED'})
+    'VIDEO_BUDGET_RECONCILIATION_REQUIRED', 'VIDEO_BUDGET_ACCOUNTING_FAILED', 'GEMINI_USAGE_UNSUPPORTED',
+    'HERMES_CONNECTION_CHANGED', 'HERMES_SUBSCRIPTION_UNAVAILABLE'})
 _FINISH_REASONS = frozenset({'STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION', 'OTHER', 'BLOCKLIST',
     'PROHIBITED_CONTENT', 'SPII', 'MALFORMED_FUNCTION_CALL', 'FINISH_REASON_UNSPECIFIED',
     'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT', 'IMAGE_RECITATION', 'NO_IMAGE',
@@ -184,7 +185,8 @@ def validate_request(value):
     """Accept only the bounded text-only subset used by the pinned AIAgent."""
     if not isinstance(value, dict) or set(value) - _FIELDS:
         raise ValueError('HERMES_REQUEST_INVALID')
-    if value.get('model') != budget.MODEL:
+    from .hermes_tasks import CHATGPT_MODEL
+    if value.get('model') not in (budget.MODEL, CHATGPT_MODEL):
         raise ValueError('HERMES_MODEL_UNSUPPORTED')
     for key in ('max_tokens', 'max_completion_tokens'):
         if key in value and (type(value[key]) is not int or not 1 <= value[key] <= 4096):
@@ -225,7 +227,7 @@ def validate_request(value):
         clean.append({'role': message['role'], 'content': content})
     if not has_user:
         raise ValueError('HERMES_REQUEST_INVALID')
-    return {'messages': clean, 'max_tokens': min(value.get('max_tokens', 4096),
+    return {'model': value['model'], 'messages': clean, 'max_tokens': min(value.get('max_tokens', 4096),
             value.get('max_completion_tokens', 4096)), 'temperature': value.get('temperature', .2),
             'top_p': value.get('top_p', 1), 'stop': stop}
 
@@ -299,12 +301,40 @@ class GeminiHermesProvider:
 def complete(token, request, provider_factory=GeminiHermesProvider):
     """Reserve durably before dispatch; settle even on invalid output or failure."""
     provider = None
+    subscription_call = None
     try:
         with database() as connection:
             task = authorize_call(connection, token)
-            # Configuration can fail without recording a provider attempt.
-            provider = provider_factory()
-            call_id = budget.reserve_hermes(connection, task, budget.MODEL)
+            from .hermes_tasks import CHATGPT_PROVIDER, task_model
+            model = task_model(task)
+            if request.get('model') != model:
+                raise ValueError('HERMES_MODEL_UNSUPPORTED')
+            if task.get('provider') == CHATGPT_PROVIDER:
+                from .chatgpt_provider import reserve_call
+                instructions = '\n\n'.join(message['content'] for message in request['messages']
+                    if message['role'] in ('system', 'developer'))
+                input_data = json.dumps([message for message in request['messages']
+                    if message['role'] in ('user', 'assistant')], ensure_ascii=False, separators=(',', ':'))
+                subscription_call = reserve_call(connection, owner_id=task['owner_id'],
+                    request_key=f"hermes:{task['id']}", task_id=task['id'], instructions=instructions,
+                    input_data=input_data, expected_generation=str(task['connection_generation']), model=model)
+            else:
+                # Configuration can fail without recording a provider attempt.
+                provider = provider_factory()
+                call_id = budget.reserve_hermes(connection, task, model)
+        if subscription_call is not None:
+            from .chatgpt_provider import perform_reserved
+            result = perform_reserved(subscription_call['id'], task['owner_id'], instructions, input_data)
+            if result['model'] != model or result['connection_generation'] != str(task['connection_generation']):
+                raise ValueError('HERMES_CONNECTION_CHANGED')
+            output = result['text']
+            if not isinstance(output, str) or not output or len(output.encode()) > MAX_RESPONSE_BYTES:
+                raise ValueError('HERMES_PROVIDER_RESPONSE_INVALID')
+            # Subscription accounting is separate from the Gemini dollar ledger.
+            # Missing token metadata remains unknown and is omitted, never zero.
+            return {'id': f"chatcmpl-narma-subscription-{subscription_call['id']}",
+                'object': 'chat.completion', 'created': int(time.time()), 'model': model,
+                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': output}, 'finish_reason': 'stop'}]}
         provider.last_usage = None
         try:
             output = provider.analyze(request)
@@ -312,7 +342,7 @@ def complete(token, request, provider_factory=GeminiHermesProvider):
             budget.settle(call_id, provider.last_usage)
         usage = provider.last_usage
         return {'id': f'chatcmpl-narma-{call_id}', 'object': 'chat.completion', 'created': int(time.time()),
-            'model': budget.MODEL, 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': output},
+            'model': model, 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': output},
                 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': usage['total_input_tokens'],
                     'completion_tokens': usage['total_output_tokens'] + usage['total_thought_tokens'],
                     'total_tokens': usage['total_tokens']}}
@@ -335,7 +365,7 @@ def _failure(error):
     code = str(error) if isinstance(error, ValueError) and str(error) in _SAFE_FAILURES else 'HERMES_PROVIDER_UNAVAILABLE'
     if code == 'HERMES_TOKEN_INVALID':
         status = 401
-    elif code in ('HERMES_LEASE_EXPIRED', 'HERMES_SOURCE_CHANGED'):
+    elif code in ('HERMES_LEASE_EXPIRED', 'HERMES_SOURCE_CHANGED', 'HERMES_CONNECTION_CHANGED'):
         status = 409
     elif code in ('HERMES_REQUEST_INVALID', 'HERMES_MODEL_UNSUPPORTED'):
         status = 400
@@ -394,8 +424,10 @@ async def models(request: Request):
         token = _credential(request)
         def read_model():
             with database() as connection:
-                authorize_call(connection, token)
-            return {'object': 'list', 'data': [{'id': budget.MODEL, 'object': 'model', 'created': 0,
+                task = authorize_call(connection, token)
+                from .hermes_tasks import task_model
+                model = task_model(task)
+            return {'object': 'list', 'data': [{'id': model, 'object': 'model', 'created': 0,
                 'owned_by': 'narma', 'context_length': 131072, 'max_output_tokens': 4096}]}
         return JSONResponse(await run_in_threadpool(read_model), headers={'Cache-Control': 'no-store'})
     except Exception as error:

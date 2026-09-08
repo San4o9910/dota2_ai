@@ -358,7 +358,33 @@ def deploy_hermes(ssh, release, sha, *, activate=False):
     return state
 
 
-def main(*, activate_hermes=False):
+def validate_chatgpt_preparation(state):
+    if (not isinstance(state, dict) or state.get('event') != 'hermes_chatgpt_auth_ready'
+            or state.get('provider') != 'chatgpt_subscription'
+            or state.get('runtime_revision') != '9fd44b4dfc44138b9e5d5689acb56c438364ff7b'
+            or state.get('network_isolation_verified') is not True
+            or state.get('generation_smoke_performed') is not False
+            or state.get('provider_calls_created_by_preflight') != 0
+            or state.get('gemini_ledger_preserved') is not True
+            or state.get('auth', {}).get('configured') is not True
+            or state.get('auth', {}).get('services_ready') is not True
+            or state.get('auth', {}).get('database_read_only') is not True
+            or state.get('auth', {}).get('provider') != 'chatgpt_subscription'
+            or type(state.get('auth', {}).get('runtime_verified')) is not bool
+            or state.get('auth', {}).get('readiness') not in ('waiting_auth', 'ready', 'running', 'verified', 'paused', 'requires_review')):
+        raise CheckError('hermes_chatgpt_preparation_unverified')
+    if state['auth']['readiness'] == 'waiting_auth' and state['auth']['runtime_verified']:
+        raise CheckError('hermes_chatgpt_preparation_unverified')
+    event('hermes_chatgpt_auth_ready', provider=state['provider'],
+        readiness=state['auth']['readiness'], runtime_verified=state['auth']['runtime_verified'],
+        services_ready=True, network_isolation_verified=True,
+        generation_smoke_performed=False, provider_calls_created_by_preflight=0,
+        gemini_ledger_preserved=True)
+
+
+def main(*, activate_hermes=False, prepare_chatgpt_auth=False):
+    if activate_hermes and prepare_chatgpt_auth:
+        raise CheckError('conflicting_provider_activation_modes')
     cloud = Cloud()
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     sha = os.environ.get("GITHUB_SHA", "")
@@ -502,11 +528,12 @@ runcmd:
             command(ssh+["tar --no-same-owner -xzf - -C " + release], input=archive.read_bytes(), timeout=120, phase="source_transfer")
             # Secrets cross SSH only; none enters cloud-init, the source archive,
             # GitHub artifacts, command arguments or public logs.
-            secret_input = json.dumps({"gemini_key":key, "release":sha}).encode()
+            secret_input = json.dumps({"gemini_key":key, "release":sha,
+                                      "prepare_chatgpt_auth":prepare_chatgpt_auth}).encode()
             command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
             event("installing_private_services", server_id=server_id, release=sha)
             command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
-            if not activate_hermes:
+            if not activate_hermes and not prepare_chatgpt_auth:
                 # Fail before stopping/changing services if this update would
                 # silently disable a previously active Hermes runtime.
                 deploy_hermes(ssh, release, sha)
@@ -539,7 +566,8 @@ runcmd:
             try:
                 # Learning/schema/owner checks run before starting the replay
                 # worker. Their failure restores the API as well as workers.
-                output=command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname],timeout=360)
+                auth_option = ' --prepare-chatgpt-auth' if prepare_chatgpt_auth else ''
+                output=command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+auth_option],timeout=540)
                 activated=json.loads(output)
                 if (activated.get('event')!='replay_pipeline_ready'
                         or activated.get('fresh_worker_heartbeat') is not True
@@ -548,7 +576,10 @@ runcmd:
                 event('replay_pipeline_ready',worker_enabled=True,fresh_worker_heartbeat=True,
                     video_worker_stopped=True,synthetic_paid_calls=0,
                     hero_pool=activated.get('hero_pool'), learning=activated.get('learning'))
-                deploy_hermes(ssh, release, sha, activate=activate_hermes)
+                if prepare_chatgpt_auth:
+                    validate_chatgpt_preparation(activated.get('chatgpt'))
+                else:
+                    deploy_hermes(ssh, release, sha, activate=activate_hermes)
             except Exception:
                 # Preserve the old working portal/worker release. Rollback only
                 # runtime containers/images; paid ledger entries remain durable.
@@ -595,6 +626,8 @@ if __name__ == "__main__":
             main()
         elif sys.argv[1:] == ['--activate-hermes']:
             main(activate_hermes=True)
+        elif sys.argv[1:] == ['--prepare-chatgpt-auth']:
+            main(prepare_chatgpt_auth=True)
         else:
             raise CheckError("invalid_pilot_arguments")
     except CheckError as error:

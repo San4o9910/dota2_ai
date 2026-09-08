@@ -199,6 +199,8 @@ def verify_preserved(before, after):
 
 
 def rollback(config, snapshot):
+    from chatgpt_secrets import restore_settings
+    restore_settings(snapshot['release'])
     # Always stop the new worker first: old + new workers must not compete for RAM.
     run(compose(config) + ['--profile', 'analysis', '--profile', 'hermes', 'stop', '--timeout', '20', *SERVICES])
     restored = []
@@ -233,7 +235,7 @@ def rollback(config, snapshot):
     return restored
 
 
-def activate(sha, hostname):
+def activate(sha, hostname, *, prepare_chatgpt_auth=False):
     os.umask(0o077)
     path = state_path(sha)
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?', hostname) or '..' in hostname:
@@ -265,6 +267,10 @@ def activate(sha, hostname):
             '--pull', 'never', '--entrypoint', 'python', 'replay-worker', '-c', PARSER_CHECK], timeout=70).strip() != b'REPLAY_RUNTIME_OK':
             raise RuntimeError('replay_runtime_check_failed')
         anonymous_checks(hostname)
+        chatgpt_status = None
+        if prepare_chatgpt_auth:
+            from prepare_chatgpt_auth import prepare
+            chatgpt_status = prepare(sha, hostname)
         started = datetime.now(timezone.utc).isoformat()
         heartbeat = '''import json
 from narma_video.db import database
@@ -287,6 +293,7 @@ with database() as c:
                         'existing_account_and_budget_preserved': snapshot.get('before') is not None,
                         'hero_pool': pool_status,
                         'learning': learning_status,
+                        'chatgpt': chatgpt_status,
                         'synthetic_paid_calls': 0, 'anonymous_replays_status': 401}
             time.sleep(2)
         raise RuntimeError('replay_worker_heartbeat_timeout')
@@ -301,7 +308,8 @@ with database() as c:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('sha'); parser.add_argument('hostname'); parser.add_argument('--rollback-only', action='store_true'); args = parser.parse_args()
+    parser.add_argument('sha'); parser.add_argument('hostname'); parser.add_argument('--rollback-only', action='store_true')
+    parser.add_argument('--prepare-chatgpt-auth', action='store_true'); args = parser.parse_args()
     try:
         if args.rollback_only:
             saved = json.loads(state_path(args.sha).read_text())
@@ -310,8 +318,9 @@ if __name__ == '__main__':
             restored = rollback('/opt/narma/releases/' + args.sha + '/services/video/compose.yaml', saved)
             print(json.dumps({'event': 'replay_activation_rollback', 'restored_services': restored}), flush=True)
         else:
-            print(json.dumps(activate(args.sha, args.hostname)), flush=True)
+            print(json.dumps(activate(args.sha, args.hostname, prepare_chatgpt_auth=args.prepare_chatgpt_auth)), flush=True)
     except Exception as error:
-        code = str(error) if isinstance(error, RuntimeError) and re.fullmatch('replay_[a-z_]{1,100}', str(error)) else 'replay_activation_failed'
-        print(json.dumps({'event': 'replay_activation_failure', 'code': code}), flush=True)
+        code = str(error) if isinstance(error, RuntimeError) and re.fullmatch('(replay|hermes)_[a-z_]{1,100}', str(error)) else 'replay_activation_failed'
+        event = 'hermes_activation_failure' if code.startswith('hermes_') else 'replay_activation_failure'
+        print(json.dumps({'event': event, 'code': code}), flush=True)
         sys.exit(1)

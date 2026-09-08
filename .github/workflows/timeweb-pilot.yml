@@ -13,6 +13,11 @@ on:
       - .dockerignore
   workflow_dispatch:
     inputs:
+      prepare_chatgpt_auth:
+        description: Prepare owner ChatGPT authorization and Hermes, without a generation smoke
+        type: boolean
+        required: false
+        default: true
       activate_hermes:
         description: Explicitly activate Hermes using the existing allowance and all review/network gates
         type: boolean
@@ -109,9 +114,17 @@ jobs:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ACTIVATE_HERMES: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_hermes && 'true' || 'false' }}
+          PREPARE_CHATGPT_AUTH: ${{ (github.event_name == 'push' || inputs.prepare_chatgpt_auth) && 'true' || 'false' }}
         run: |
           pilot_args=()
+          if [[ "$ACTIVATE_HERMES" == "true" && "$PREPARE_CHATGPT_AUTH" == "true" ]]; then
+            echo 'Choose one explicit provider preparation mode'
+            exit 1
+          fi
           if [[ "$ACTIVATE_HERMES" == "true" ]]; then
             pilot_args+=(--activate-hermes)
+          fi
+          if [[ "$PREPARE_CHATGPT_AUTH" == "true" ]]; then
+            pilot_args+=(--prepare-chatgpt-auth)
           fi
           python3 ops/timeweb/pilot.py "${pilot_args[@]}"

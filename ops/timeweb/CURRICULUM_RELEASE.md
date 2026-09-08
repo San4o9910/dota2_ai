@@ -1,5 +1,10 @@
 # Curriculum release: deploy the product without starting Hermes
 
+Historical release note: the subsequent owner-authorized ChatGPT release uses
+the explicit preparation path described in [CHATGPT_AUTH_RELEASE.md](CHATGPT_AUTH_RELEASE.md).
+The disabled-runtime behavior below remains available through plain `pilot.py`;
+it is no longer the current production workflow's push mode.
+
 The ordinary `timeweb-pilot.yml` push deploy and `python3 ops/timeweb/pilot.py`
 preserve an already stopped Hermes runtime. They deploy the API, curriculum,
 portal and replay worker. They do not schedule a Hermes review or modify the

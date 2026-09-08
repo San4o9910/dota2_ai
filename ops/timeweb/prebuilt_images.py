@@ -341,7 +341,9 @@ def validate_installed(release):
 
 def rollback_images(release):
     from snapshot_worker_state import CONFIG, compose, inspect_service, write_private
+    from chatgpt_secrets import restore_settings
     release_path(release)
+    restore_settings(release)
     path = checkpoint_path(release)
     if not path.is_file():
         return  # Nothing was loaded before this attempt failed.

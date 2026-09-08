@@ -13,7 +13,7 @@ import tempfile
 import threading
 from uuid import UUID
 
-from agent_task import REVISION, SAFE_ERROR_CODES
+from agent_task import ALLOWED_MODELS, MODEL, REVISION, SAFE_ERROR_CODES
 
 MAX_REQUEST_BYTES = 512 * 1024
 MAX_DEADLINE_SECONDS = 180
@@ -26,7 +26,7 @@ class RunError(Exception):
 
 
 def validate_request(value):
-    if not isinstance(value, dict) or set(value) - {"task_id", "token", "packet", "prior_goals"}:
+    if not isinstance(value, dict) or set(value) - {"task_id", "token", "packet", "prior_goals", "model"}:
         raise RunError("HERMES_INVALID_REQUEST", 400)
     try:
         value["task_id"] = str(UUID(value["task_id"]))
@@ -35,7 +35,9 @@ def validate_request(value):
     if (not isinstance(value.get("token"), str)
             or not re.fullmatch(r"[A-Za-z0-9_.~-]{16,512}", value["token"])
             or not isinstance(value.get("packet"), dict)
-            or not isinstance(value.get("prior_goals", []), list)):
+            or not isinstance(value.get("prior_goals", []), list)
+            or not isinstance(value.get("model", MODEL), str)
+            or value.get("model", MODEL) not in ALLOWED_MODELS):
         raise RunError("HERMES_INVALID_REQUEST", 400)
     return value
 

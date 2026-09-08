@@ -7,6 +7,8 @@ Its environment is installed with `uv sync --frozen` from the upstream lockfile,
 as described by the [official Python embedding guide](https://hermes-agent.nousresearch.com/docs/guides/python-library).
 Installation and production activation evidence are recorded in
 `HERMES_RUNTIME_RELEASE.md`; implementation alone is not a successful activation.
+The personal ChatGPT connection and its separate readiness/authorization gates
+are described in [CHATGPT_AUTH.md](CHATGPT_AUTH.md).
 
 ## Execution and accounting
 
@@ -25,12 +27,18 @@ Installation and production activation evidence are recorded in
   task-specific token. The broker resolves the owner and verifies the lease and
   source revisions before dispatch. Primary, retry and auxiliary requests cannot
   escape that boundary; a task permits at most one paid provider attempt.
-- The broker uses the existing approved Gemini model and global allowance. Each
+- The legacy Gemini broker uses the approved model and global allowance. Each
   attempt has `call_kind='hermes'` and exactly one `hermes_task_id` in
   `video_provider_calls`. Reservation commits before the provider call. Raw
   provider usage settles in `finally`, including invalid output and failures.
   Unknown usage retains its reservation. No budget or uncertain historical
   reservation is reset by installation, activation or rollback.
+- With `HERMES_PROVIDER=chatgpt_subscription`, the broker uses the owner's explicit
+  ChatGPT authorization through the native Codex Responses adapter. The isolated
+  AIAgent still receives only its expiring broker task token. Source, model and
+  authorization generation are pinned; `chatgpt_calls` records one subscription
+  attempt separately from Gemini spending. There is no Gemini fallback and no
+  automatic resend of uncertain ChatGPT requests after reconnecting.
 - A completed response must satisfy the strict JSON schema and every match-local
   evidence reference. Provenance is set by the server after an actual runtime
   response and a settled broker call, never by model text or an imported packet.
@@ -95,8 +103,11 @@ rendering, safe text, filtering and source navigation. The Docker network gate
 checks broker reachability and blocks direct external provider access.
 
 Deployment uses the existing Timeweb server and prebuilt verified image IDs.
-The activation gate checks available resources, starts the broker paused,
+The legacy Gemini activation gate checks available resources, starts the broker paused,
 performs a bounded real review through the existing ledger, verifies its saved
 provenance and accounting, then enables continuous scheduling. Rollback restores
 prior service state without deleting billing history. No new subscription,
 provider account, server or additional allowance is created.
+The ChatGPT preparation gate instead performs no generation: it starts the
+services waiting for the owner's explicit login and preserves both ledgers.
+Only a subsequent actual valid review can establish runtime-verified coaching.

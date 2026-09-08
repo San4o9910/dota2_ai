@@ -8,6 +8,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+from chatgpt_secrets import prepare_settings
 
 os.umask(0o077)
 lock = open("/var/lock/narma-deploy.lock", "a")
@@ -20,6 +21,7 @@ directory = Path("/opt/narma/secrets")
 directory.mkdir(parents=True, exist_ok=True, mode=0o700)
 path = directory/"video.env"
 values = {}
+established = path.exists()
 if path.exists():
     for line in path.read_text().splitlines():
         name, value = line.split("=", 1)
@@ -46,6 +48,8 @@ if portal['server_id']!=9037783 or portal['project_id']!=2655641 or portal['orig
 if not re.fullmatch('[0-9a-f]{64}',portal['setup_token_sha256']):
     raise SystemExit(6)
 values.update(APP_ORIGIN=portal['origin'],PORTAL_SETUP_TOKEN_SHA256=portal['setup_token_sha256'],PORTAL_SETUP_EXPIRES_AT=portal['setup_expires_at'])
+if incoming.get('prepare_chatgpt_auth') is True:
+    prepare_settings(values, incoming['release'], established=established)
 temporary = path.with_suffix(".new")
 temporary.write_text("".join(name+"="+value+"\n" for name,value in values.items()))
 temporary.chmod(0o600)

@@ -228,15 +228,17 @@ def validate_review(review, snapshot, digest):
     return review.model_dump()
 
 
-def _sources_available(connection, owner_id, sources):
+def _sources_available(connection, owner_id, sources, *, lock=True):
     if not sources:
         return False
-    rows = connection.execute("""SELECT r.id,r.match_id,r.account_id,r.source_sha256,m.position,m.played_at,
+    query = """SELECT r.id,r.match_id,r.account_id,r.source_sha256,m.position,m.played_at,
         encode(sha256(convert_to(r.result_payload::text,'UTF8')),'hex') AS report_sha256 FROM replay_jobs r
         JOIN portal_dota_profiles p ON p.owner_id=r.owner_id AND p.account_id=r.account_id
         JOIN hero_pool_matches m ON m.owner_id=r.owner_id AND m.account_id=r.account_id AND m.match_id=r.match_id
-        WHERE r.owner_id=%s AND r.id=ANY(%s) AND r.state='ready'
-        FOR SHARE OF r,p,m""", (owner_id, [UUID(value["job_id"]) for value in sources.values()])).fetchall()
+        WHERE r.owner_id=%s AND r.id=ANY(%s) AND r.state='ready'"""
+    if lock:
+        query += " FOR SHARE OF r,p,m"
+    rows = connection.execute(query, (owner_id, [UUID(value["job_id"]) for value in sources.values()])).fetchall()
     return {str(row["match_id"]): {"job_id": str(row["id"]), "account_id": row["account_id"],
             "source_sha256": row["source_sha256"], "report_sha256": row["report_sha256"],
             "pool_metadata": {"position": row["position"], "played_at": _date(row["played_at"])}} for row in rows} == sources
@@ -315,7 +317,7 @@ def bridge_status(owner_id):
     with database() as connection:
         rows = connection.execute("""SELECT r.*,e.source_jobs FROM hermes_reviews r JOIN hermes_exports e ON e.id=r.export_id
             WHERE r.owner_id=%s ORDER BY r.created_at DESC LIMIT 50""", (owner_id,)).fetchall()
-        active = [row for row in rows if _sources_available(connection, owner_id, row["source_jobs"])]
+        active = [row for row in rows if _sources_available(connection, owner_id, row["source_jobs"], lock=False)]
         exports = connection.execute("SELECT id,created_at FROM hermes_exports WHERE owner_id=%s ORDER BY created_at DESC LIMIT 50", (owner_id,)).fetchall()
     runtime = get_runtime_status(owner_id)
     latest = latest_valid_review(owner_id)

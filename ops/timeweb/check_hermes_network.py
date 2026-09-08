@@ -62,9 +62,10 @@ for host,port in %r:
   connection.close()
   raise AssertionError('Runner has external egress')
 print(json.dumps({'broker_reachable':True,'external_destinations_blocked':blocked}))
-""" % [(external_ip, 8093), ('generativelanguage.googleapis.com', 443), ('api.openai.com', 443)]
+""" % [(external_ip, 8093), ('generativelanguage.googleapis.com', 443), ('api.openai.com', 443),
+       ('chatgpt.com', 443), ('auth.openai.com', 443)]
         evidence = json.loads(run(['docker', 'exec', runner, '/opt/hermes-venv/bin/python', '-c', probe], timeout=60))
-        if evidence != {'broker_reachable': True, 'external_destinations_blocked': 3}:
+        if evidence != {'broker_reachable': True, 'external_destinations_blocked': 5}:
             raise RuntimeError('Hermes network isolation not proved')
         print(json.dumps({'event': 'hermes_network_verified', **evidence}))
     finally:
