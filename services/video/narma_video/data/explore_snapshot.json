@@ -1,0 +1,1373 @@
+{
+  "schema_version": "narma.explore.v1",
+  "heroes": {
+    "checked_at": "2026-09-08T18:42:38Z",
+    "source_url": "https://www.dota2.com/datafeed/herolist?language=russian",
+    "source_published_at": null,
+    "heroes": [
+      {
+        "id": 102,
+        "name": "npc_dota_hero_abaddon",
+        "slug": "abaddon",
+        "display_name": "Abaddon",
+        "attribute": "universal",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/abaddon.png",
+        "official_url": "https://www.dota2.com/hero/abaddon"
+      },
+      {
+        "id": 73,
+        "name": "npc_dota_hero_alchemist",
+        "slug": "alchemist",
+        "display_name": "Alchemist",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/alchemist.png",
+        "official_url": "https://www.dota2.com/hero/alchemist"
+      },
+      {
+        "id": 68,
+        "name": "npc_dota_hero_ancient_apparition",
+        "slug": "ancient_apparition",
+        "display_name": "Ancient Apparition",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/ancient_apparition.png",
+        "official_url": "https://www.dota2.com/hero/ancientapparition"
+      },
+      {
+        "id": 1,
+        "name": "npc_dota_hero_antimage",
+        "slug": "antimage",
+        "display_name": "Anti-Mage",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/antimage.png",
+        "official_url": "https://www.dota2.com/hero/antimage"
+      },
+      {
+        "id": 113,
+        "name": "npc_dota_hero_arc_warden",
+        "slug": "arc_warden",
+        "display_name": "Arc Warden",
+        "attribute": "universal",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/arc_warden.png",
+        "official_url": "https://www.dota2.com/hero/arcwarden"
+      },
+      {
+        "id": 2,
+        "name": "npc_dota_hero_axe",
+        "slug": "axe",
+        "display_name": "Axe",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/axe.png",
+        "official_url": "https://www.dota2.com/hero/axe"
+      },
+      {
+        "id": 3,
+        "name": "npc_dota_hero_bane",
+        "slug": "bane",
+        "display_name": "Bane",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/bane.png",
+        "official_url": "https://www.dota2.com/hero/bane"
+      },
+      {
+        "id": 65,
+        "name": "npc_dota_hero_batrider",
+        "slug": "batrider",
+        "display_name": "Batrider",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/batrider.png",
+        "official_url": "https://www.dota2.com/hero/batrider"
+      },
+      {
+        "id": 38,
+        "name": "npc_dota_hero_beastmaster",
+        "slug": "beastmaster",
+        "display_name": "Beastmaster",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/beastmaster.png",
+        "official_url": "https://www.dota2.com/hero/beastmaster"
+      },
+      {
+        "id": 4,
+        "name": "npc_dota_hero_bloodseeker",
+        "slug": "bloodseeker",
+        "display_name": "Bloodseeker",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/bloodseeker.png",
+        "official_url": "https://www.dota2.com/hero/bloodseeker"
+      },
+      {
+        "id": 62,
+        "name": "npc_dota_hero_bounty_hunter",
+        "slug": "bounty_hunter",
+        "display_name": "Bounty Hunter",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/bounty_hunter.png",
+        "official_url": "https://www.dota2.com/hero/bountyhunter"
+      },
+      {
+        "id": 78,
+        "name": "npc_dota_hero_brewmaster",
+        "slug": "brewmaster",
+        "display_name": "Brewmaster",
+        "attribute": "universal",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/brewmaster.png",
+        "official_url": "https://www.dota2.com/hero/brewmaster"
+      },
+      {
+        "id": 99,
+        "name": "npc_dota_hero_bristleback",
+        "slug": "bristleback",
+        "display_name": "Bristleback",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/bristleback.png",
+        "official_url": "https://www.dota2.com/hero/bristleback"
+      },
+      {
+        "id": 61,
+        "name": "npc_dota_hero_broodmother",
+        "slug": "broodmother",
+        "display_name": "Broodmother",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/broodmother.png",
+        "official_url": "https://www.dota2.com/hero/broodmother"
+      },
+      {
+        "id": 96,
+        "name": "npc_dota_hero_centaur",
+        "slug": "centaur",
+        "display_name": "Centaur Warrunner",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/centaur.png",
+        "official_url": "https://www.dota2.com/hero/centaurwarrunner"
+      },
+      {
+        "id": 81,
+        "name": "npc_dota_hero_chaos_knight",
+        "slug": "chaos_knight",
+        "display_name": "Chaos Knight",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/chaos_knight.png",
+        "official_url": "https://www.dota2.com/hero/chaosknight"
+      },
+      {
+        "id": 66,
+        "name": "npc_dota_hero_chen",
+        "slug": "chen",
+        "display_name": "Chen",
+        "attribute": "intelligence",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/chen.png",
+        "official_url": "https://www.dota2.com/hero/chen"
+      },
+      {
+        "id": 56,
+        "name": "npc_dota_hero_clinkz",
+        "slug": "clinkz",
+        "display_name": "Clinkz",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/clinkz.png",
+        "official_url": "https://www.dota2.com/hero/clinkz"
+      },
+      {
+        "id": 51,
+        "name": "npc_dota_hero_rattletrap",
+        "slug": "rattletrap",
+        "display_name": "Clockwerk",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/rattletrap.png",
+        "official_url": "https://www.dota2.com/hero/clockwerk"
+      },
+      {
+        "id": 5,
+        "name": "npc_dota_hero_crystal_maiden",
+        "slug": "crystal_maiden",
+        "display_name": "Crystal Maiden",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/crystal_maiden.png",
+        "official_url": "https://www.dota2.com/hero/crystalmaiden"
+      },
+      {
+        "id": 55,
+        "name": "npc_dota_hero_dark_seer",
+        "slug": "dark_seer",
+        "display_name": "Dark Seer",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/dark_seer.png",
+        "official_url": "https://www.dota2.com/hero/darkseer"
+      },
+      {
+        "id": 119,
+        "name": "npc_dota_hero_dark_willow",
+        "slug": "dark_willow",
+        "display_name": "Dark Willow",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/dark_willow.png",
+        "official_url": "https://www.dota2.com/hero/darkwillow"
+      },
+      {
+        "id": 135,
+        "name": "npc_dota_hero_dawnbreaker",
+        "slug": "dawnbreaker",
+        "display_name": "Dawnbreaker",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/dawnbreaker.png",
+        "official_url": "https://www.dota2.com/hero/dawnbreaker"
+      },
+      {
+        "id": 50,
+        "name": "npc_dota_hero_dazzle",
+        "slug": "dazzle",
+        "display_name": "Dazzle",
+        "attribute": "universal",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/dazzle.png",
+        "official_url": "https://www.dota2.com/hero/dazzle"
+      },
+      {
+        "id": 43,
+        "name": "npc_dota_hero_death_prophet",
+        "slug": "death_prophet",
+        "display_name": "Death Prophet",
+        "attribute": "universal",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/death_prophet.png",
+        "official_url": "https://www.dota2.com/hero/deathprophet"
+      },
+      {
+        "id": 87,
+        "name": "npc_dota_hero_disruptor",
+        "slug": "disruptor",
+        "display_name": "Disruptor",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/disruptor.png",
+        "official_url": "https://www.dota2.com/hero/disruptor"
+      },
+      {
+        "id": 69,
+        "name": "npc_dota_hero_doom_bringer",
+        "slug": "doom_bringer",
+        "display_name": "Doom",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/doom_bringer.png",
+        "official_url": "https://www.dota2.com/hero/doom"
+      },
+      {
+        "id": 49,
+        "name": "npc_dota_hero_dragon_knight",
+        "slug": "dragon_knight",
+        "display_name": "Dragon Knight",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/dragon_knight.png",
+        "official_url": "https://www.dota2.com/hero/dragonknight"
+      },
+      {
+        "id": 6,
+        "name": "npc_dota_hero_drow_ranger",
+        "slug": "drow_ranger",
+        "display_name": "Drow Ranger",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/drow_ranger.png",
+        "official_url": "https://www.dota2.com/hero/drowranger"
+      },
+      {
+        "id": 107,
+        "name": "npc_dota_hero_earth_spirit",
+        "slug": "earth_spirit",
+        "display_name": "Earth Spirit",
+        "attribute": "strength",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/earth_spirit.png",
+        "official_url": "https://www.dota2.com/hero/earthspirit"
+      },
+      {
+        "id": 7,
+        "name": "npc_dota_hero_earthshaker",
+        "slug": "earthshaker",
+        "display_name": "Earthshaker",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/earthshaker.png",
+        "official_url": "https://www.dota2.com/hero/earthshaker"
+      },
+      {
+        "id": 103,
+        "name": "npc_dota_hero_elder_titan",
+        "slug": "elder_titan",
+        "display_name": "Elder Titan",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/elder_titan.png",
+        "official_url": "https://www.dota2.com/hero/eldertitan"
+      },
+      {
+        "id": 106,
+        "name": "npc_dota_hero_ember_spirit",
+        "slug": "ember_spirit",
+        "display_name": "Ember Spirit",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/ember_spirit.png",
+        "official_url": "https://www.dota2.com/hero/emberspirit"
+      },
+      {
+        "id": 58,
+        "name": "npc_dota_hero_enchantress",
+        "slug": "enchantress",
+        "display_name": "Enchantress",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/enchantress.png",
+        "official_url": "https://www.dota2.com/hero/enchantress"
+      },
+      {
+        "id": 33,
+        "name": "npc_dota_hero_enigma",
+        "slug": "enigma",
+        "display_name": "Enigma",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/enigma.png",
+        "official_url": "https://www.dota2.com/hero/enigma"
+      },
+      {
+        "id": 41,
+        "name": "npc_dota_hero_faceless_void",
+        "slug": "faceless_void",
+        "display_name": "Faceless Void",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/faceless_void.png",
+        "official_url": "https://www.dota2.com/hero/facelessvoid"
+      },
+      {
+        "id": 121,
+        "name": "npc_dota_hero_grimstroke",
+        "slug": "grimstroke",
+        "display_name": "Grimstroke",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/grimstroke.png",
+        "official_url": "https://www.dota2.com/hero/grimstroke"
+      },
+      {
+        "id": 72,
+        "name": "npc_dota_hero_gyrocopter",
+        "slug": "gyrocopter",
+        "display_name": "Gyrocopter",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/gyrocopter.png",
+        "official_url": "https://www.dota2.com/hero/gyrocopter"
+      },
+      {
+        "id": 123,
+        "name": "npc_dota_hero_hoodwink",
+        "slug": "hoodwink",
+        "display_name": "Hoodwink",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/hoodwink.png",
+        "official_url": "https://www.dota2.com/hero/hoodwink"
+      },
+      {
+        "id": 59,
+        "name": "npc_dota_hero_huskar",
+        "slug": "huskar",
+        "display_name": "Huskar",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/huskar.png",
+        "official_url": "https://www.dota2.com/hero/huskar"
+      },
+      {
+        "id": 74,
+        "name": "npc_dota_hero_invoker",
+        "slug": "invoker",
+        "display_name": "Invoker",
+        "attribute": "intelligence",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/invoker.png",
+        "official_url": "https://www.dota2.com/hero/invoker"
+      },
+      {
+        "id": 91,
+        "name": "npc_dota_hero_wisp",
+        "slug": "wisp",
+        "display_name": "Io",
+        "attribute": "universal",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/wisp.png",
+        "official_url": "https://www.dota2.com/hero/io"
+      },
+      {
+        "id": 64,
+        "name": "npc_dota_hero_jakiro",
+        "slug": "jakiro",
+        "display_name": "Jakiro",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/jakiro.png",
+        "official_url": "https://www.dota2.com/hero/jakiro"
+      },
+      {
+        "id": 8,
+        "name": "npc_dota_hero_juggernaut",
+        "slug": "juggernaut",
+        "display_name": "Juggernaut",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/juggernaut.png",
+        "official_url": "https://www.dota2.com/hero/juggernaut"
+      },
+      {
+        "id": 90,
+        "name": "npc_dota_hero_keeper_of_the_light",
+        "slug": "keeper_of_the_light",
+        "display_name": "Keeper of the Light",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/keeper_of_the_light.png",
+        "official_url": "https://www.dota2.com/hero/keeperofthelight"
+      },
+      {
+        "id": 145,
+        "name": "npc_dota_hero_kez",
+        "slug": "kez",
+        "display_name": "Kez",
+        "attribute": "agility",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/kez.png",
+        "official_url": "https://www.dota2.com/hero/kez"
+      },
+      {
+        "id": 23,
+        "name": "npc_dota_hero_kunkka",
+        "slug": "kunkka",
+        "display_name": "Kunkka",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/kunkka.png",
+        "official_url": "https://www.dota2.com/hero/kunkka"
+      },
+      {
+        "id": 155,
+        "name": "npc_dota_hero_largo",
+        "slug": "largo",
+        "display_name": "Largo",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/largo.png",
+        "official_url": "https://www.dota2.com/hero/largo"
+      },
+      {
+        "id": 104,
+        "name": "npc_dota_hero_legion_commander",
+        "slug": "legion_commander",
+        "display_name": "Legion Commander",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/legion_commander.png",
+        "official_url": "https://www.dota2.com/hero/legioncommander"
+      },
+      {
+        "id": 52,
+        "name": "npc_dota_hero_leshrac",
+        "slug": "leshrac",
+        "display_name": "Leshrac",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/leshrac.png",
+        "official_url": "https://www.dota2.com/hero/leshrac"
+      },
+      {
+        "id": 31,
+        "name": "npc_dota_hero_lich",
+        "slug": "lich",
+        "display_name": "Lich",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/lich.png",
+        "official_url": "https://www.dota2.com/hero/lich"
+      },
+      {
+        "id": 54,
+        "name": "npc_dota_hero_life_stealer",
+        "slug": "life_stealer",
+        "display_name": "Lifestealer",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/life_stealer.png",
+        "official_url": "https://www.dota2.com/hero/lifestealer"
+      },
+      {
+        "id": 25,
+        "name": "npc_dota_hero_lina",
+        "slug": "lina",
+        "display_name": "Lina",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/lina.png",
+        "official_url": "https://www.dota2.com/hero/lina"
+      },
+      {
+        "id": 26,
+        "name": "npc_dota_hero_lion",
+        "slug": "lion",
+        "display_name": "Lion",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/lion.png",
+        "official_url": "https://www.dota2.com/hero/lion"
+      },
+      {
+        "id": 80,
+        "name": "npc_dota_hero_lone_druid",
+        "slug": "lone_druid",
+        "display_name": "Lone Druid",
+        "attribute": "agility",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/lone_druid.png",
+        "official_url": "https://www.dota2.com/hero/lonedruid"
+      },
+      {
+        "id": 48,
+        "name": "npc_dota_hero_luna",
+        "slug": "luna",
+        "display_name": "Luna",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/luna.png",
+        "official_url": "https://www.dota2.com/hero/luna"
+      },
+      {
+        "id": 77,
+        "name": "npc_dota_hero_lycan",
+        "slug": "lycan",
+        "display_name": "Lycan",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/lycan.png",
+        "official_url": "https://www.dota2.com/hero/lycan"
+      },
+      {
+        "id": 97,
+        "name": "npc_dota_hero_magnataur",
+        "slug": "magnataur",
+        "display_name": "Magnus",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/magnataur.png",
+        "official_url": "https://www.dota2.com/hero/magnus"
+      },
+      {
+        "id": 136,
+        "name": "npc_dota_hero_marci",
+        "slug": "marci",
+        "display_name": "Marci",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/marci.png",
+        "official_url": "https://www.dota2.com/hero/marci"
+      },
+      {
+        "id": 129,
+        "name": "npc_dota_hero_mars",
+        "slug": "mars",
+        "display_name": "Mars",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/mars.png",
+        "official_url": "https://www.dota2.com/hero/mars"
+      },
+      {
+        "id": 94,
+        "name": "npc_dota_hero_medusa",
+        "slug": "medusa",
+        "display_name": "Medusa",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/medusa.png",
+        "official_url": "https://www.dota2.com/hero/medusa"
+      },
+      {
+        "id": 82,
+        "name": "npc_dota_hero_meepo",
+        "slug": "meepo",
+        "display_name": "Meepo",
+        "attribute": "agility",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/meepo.png",
+        "official_url": "https://www.dota2.com/hero/meepo"
+      },
+      {
+        "id": 9,
+        "name": "npc_dota_hero_mirana",
+        "slug": "mirana",
+        "display_name": "Mirana",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/mirana.png",
+        "official_url": "https://www.dota2.com/hero/mirana"
+      },
+      {
+        "id": 114,
+        "name": "npc_dota_hero_monkey_king",
+        "slug": "monkey_king",
+        "display_name": "Monkey King",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/monkey_king.png",
+        "official_url": "https://www.dota2.com/hero/monkeyking"
+      },
+      {
+        "id": 10,
+        "name": "npc_dota_hero_morphling",
+        "slug": "morphling",
+        "display_name": "Morphling",
+        "attribute": "agility",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/morphling.png",
+        "official_url": "https://www.dota2.com/hero/morphling"
+      },
+      {
+        "id": 138,
+        "name": "npc_dota_hero_muerta",
+        "slug": "muerta",
+        "display_name": "Muerta",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/muerta.png",
+        "official_url": "https://www.dota2.com/hero/muerta"
+      },
+      {
+        "id": 89,
+        "name": "npc_dota_hero_naga_siren",
+        "slug": "naga_siren",
+        "display_name": "Naga Siren",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/naga_siren.png",
+        "official_url": "https://www.dota2.com/hero/nagasiren"
+      },
+      {
+        "id": 53,
+        "name": "npc_dota_hero_furion",
+        "slug": "furion",
+        "display_name": "Nature's Prophet",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/furion.png",
+        "official_url": "https://www.dota2.com/hero/naturesprophet"
+      },
+      {
+        "id": 36,
+        "name": "npc_dota_hero_necrolyte",
+        "slug": "necrolyte",
+        "display_name": "Necrophos",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/necrolyte.png",
+        "official_url": "https://www.dota2.com/hero/necrophos"
+      },
+      {
+        "id": 60,
+        "name": "npc_dota_hero_night_stalker",
+        "slug": "night_stalker",
+        "display_name": "Night Stalker",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/night_stalker.png",
+        "official_url": "https://www.dota2.com/hero/nightstalker"
+      },
+      {
+        "id": 88,
+        "name": "npc_dota_hero_nyx_assassin",
+        "slug": "nyx_assassin",
+        "display_name": "Nyx Assassin",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/nyx_assassin.png",
+        "official_url": "https://www.dota2.com/hero/nyxassassin"
+      },
+      {
+        "id": 84,
+        "name": "npc_dota_hero_ogre_magi",
+        "slug": "ogre_magi",
+        "display_name": "Ogre Magi",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/ogre_magi.png",
+        "official_url": "https://www.dota2.com/hero/ogremagi"
+      },
+      {
+        "id": 57,
+        "name": "npc_dota_hero_omniknight",
+        "slug": "omniknight",
+        "display_name": "Omniknight",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/omniknight.png",
+        "official_url": "https://www.dota2.com/hero/omniknight"
+      },
+      {
+        "id": 111,
+        "name": "npc_dota_hero_oracle",
+        "slug": "oracle",
+        "display_name": "Oracle",
+        "attribute": "intelligence",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/oracle.png",
+        "official_url": "https://www.dota2.com/hero/oracle"
+      },
+      {
+        "id": 76,
+        "name": "npc_dota_hero_obsidian_destroyer",
+        "slug": "obsidian_destroyer",
+        "display_name": "Outworld Destroyer",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/obsidian_destroyer.png",
+        "official_url": "https://www.dota2.com/hero/outworlddestroyer"
+      },
+      {
+        "id": 120,
+        "name": "npc_dota_hero_pangolier",
+        "slug": "pangolier",
+        "display_name": "Pangolier",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/pangolier.png",
+        "official_url": "https://www.dota2.com/hero/pangolier"
+      },
+      {
+        "id": 44,
+        "name": "npc_dota_hero_phantom_assassin",
+        "slug": "phantom_assassin",
+        "display_name": "Phantom Assassin",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/phantom_assassin.png",
+        "official_url": "https://www.dota2.com/hero/phantomassassin"
+      },
+      {
+        "id": 12,
+        "name": "npc_dota_hero_phantom_lancer",
+        "slug": "phantom_lancer",
+        "display_name": "Phantom Lancer",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/phantom_lancer.png",
+        "official_url": "https://www.dota2.com/hero/phantomlancer"
+      },
+      {
+        "id": 110,
+        "name": "npc_dota_hero_phoenix",
+        "slug": "phoenix",
+        "display_name": "Phoenix",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/phoenix.png",
+        "official_url": "https://www.dota2.com/hero/phoenix"
+      },
+      {
+        "id": 137,
+        "name": "npc_dota_hero_primal_beast",
+        "slug": "primal_beast",
+        "display_name": "Primal Beast",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/primal_beast.png",
+        "official_url": "https://www.dota2.com/hero/primalbeast"
+      },
+      {
+        "id": 13,
+        "name": "npc_dota_hero_puck",
+        "slug": "puck",
+        "display_name": "Puck",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/puck.png",
+        "official_url": "https://www.dota2.com/hero/puck"
+      },
+      {
+        "id": 14,
+        "name": "npc_dota_hero_pudge",
+        "slug": "pudge",
+        "display_name": "Pudge",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/pudge.png",
+        "official_url": "https://www.dota2.com/hero/pudge"
+      },
+      {
+        "id": 45,
+        "name": "npc_dota_hero_pugna",
+        "slug": "pugna",
+        "display_name": "Pugna",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/pugna.png",
+        "official_url": "https://www.dota2.com/hero/pugna"
+      },
+      {
+        "id": 39,
+        "name": "npc_dota_hero_queenofpain",
+        "slug": "queenofpain",
+        "display_name": "Queen of Pain",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/queenofpain.png",
+        "official_url": "https://www.dota2.com/hero/queenofpain"
+      },
+      {
+        "id": 15,
+        "name": "npc_dota_hero_razor",
+        "slug": "razor",
+        "display_name": "Razor",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/razor.png",
+        "official_url": "https://www.dota2.com/hero/razor"
+      },
+      {
+        "id": 32,
+        "name": "npc_dota_hero_riki",
+        "slug": "riki",
+        "display_name": "Riki",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/riki.png",
+        "official_url": "https://www.dota2.com/hero/riki"
+      },
+      {
+        "id": 131,
+        "name": "npc_dota_hero_ringmaster",
+        "slug": "ringmaster",
+        "display_name": "Ringmaster",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/ringmaster.png",
+        "official_url": "https://www.dota2.com/hero/ringmaster"
+      },
+      {
+        "id": 86,
+        "name": "npc_dota_hero_rubick",
+        "slug": "rubick",
+        "display_name": "Rubick",
+        "attribute": "intelligence",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/rubick.png",
+        "official_url": "https://www.dota2.com/hero/rubick"
+      },
+      {
+        "id": 16,
+        "name": "npc_dota_hero_sand_king",
+        "slug": "sand_king",
+        "display_name": "Sand King",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/sand_king.png",
+        "official_url": "https://www.dota2.com/hero/sandking"
+      },
+      {
+        "id": 79,
+        "name": "npc_dota_hero_shadow_demon",
+        "slug": "shadow_demon",
+        "display_name": "Shadow Demon",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/shadow_demon.png",
+        "official_url": "https://www.dota2.com/hero/shadowdemon"
+      },
+      {
+        "id": 11,
+        "name": "npc_dota_hero_nevermore",
+        "slug": "nevermore",
+        "display_name": "Shadow Fiend",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/nevermore.png",
+        "official_url": "https://www.dota2.com/hero/shadowfiend"
+      },
+      {
+        "id": 27,
+        "name": "npc_dota_hero_shadow_shaman",
+        "slug": "shadow_shaman",
+        "display_name": "Shadow Shaman",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/shadow_shaman.png",
+        "official_url": "https://www.dota2.com/hero/shadowshaman"
+      },
+      {
+        "id": 75,
+        "name": "npc_dota_hero_silencer",
+        "slug": "silencer",
+        "display_name": "Silencer",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/silencer.png",
+        "official_url": "https://www.dota2.com/hero/silencer"
+      },
+      {
+        "id": 101,
+        "name": "npc_dota_hero_skywrath_mage",
+        "slug": "skywrath_mage",
+        "display_name": "Skywrath Mage",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/skywrath_mage.png",
+        "official_url": "https://www.dota2.com/hero/skywrathmage"
+      },
+      {
+        "id": 28,
+        "name": "npc_dota_hero_slardar",
+        "slug": "slardar",
+        "display_name": "Slardar",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/slardar.png",
+        "official_url": "https://www.dota2.com/hero/slardar"
+      },
+      {
+        "id": 93,
+        "name": "npc_dota_hero_slark",
+        "slug": "slark",
+        "display_name": "Slark",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/slark.png",
+        "official_url": "https://www.dota2.com/hero/slark"
+      },
+      {
+        "id": 128,
+        "name": "npc_dota_hero_snapfire",
+        "slug": "snapfire",
+        "display_name": "Snapfire",
+        "attribute": "universal",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/snapfire.png",
+        "official_url": "https://www.dota2.com/hero/snapfire"
+      },
+      {
+        "id": 35,
+        "name": "npc_dota_hero_sniper",
+        "slug": "sniper",
+        "display_name": "Sniper",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/sniper.png",
+        "official_url": "https://www.dota2.com/hero/sniper"
+      },
+      {
+        "id": 67,
+        "name": "npc_dota_hero_spectre",
+        "slug": "spectre",
+        "display_name": "Spectre",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/spectre.png",
+        "official_url": "https://www.dota2.com/hero/spectre"
+      },
+      {
+        "id": 71,
+        "name": "npc_dota_hero_spirit_breaker",
+        "slug": "spirit_breaker",
+        "display_name": "Spirit Breaker",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/spirit_breaker.png",
+        "official_url": "https://www.dota2.com/hero/spiritbreaker"
+      },
+      {
+        "id": 17,
+        "name": "npc_dota_hero_storm_spirit",
+        "slug": "storm_spirit",
+        "display_name": "Storm Spirit",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/storm_spirit.png",
+        "official_url": "https://www.dota2.com/hero/stormspirit"
+      },
+      {
+        "id": 18,
+        "name": "npc_dota_hero_sven",
+        "slug": "sven",
+        "display_name": "Sven",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/sven.png",
+        "official_url": "https://www.dota2.com/hero/sven"
+      },
+      {
+        "id": 105,
+        "name": "npc_dota_hero_techies",
+        "slug": "techies",
+        "display_name": "Techies",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/techies.png",
+        "official_url": "https://www.dota2.com/hero/techies"
+      },
+      {
+        "id": 46,
+        "name": "npc_dota_hero_templar_assassin",
+        "slug": "templar_assassin",
+        "display_name": "Templar Assassin",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/templar_assassin.png",
+        "official_url": "https://www.dota2.com/hero/templarassassin"
+      },
+      {
+        "id": 109,
+        "name": "npc_dota_hero_terrorblade",
+        "slug": "terrorblade",
+        "display_name": "Terrorblade",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/terrorblade.png",
+        "official_url": "https://www.dota2.com/hero/terrorblade"
+      },
+      {
+        "id": 29,
+        "name": "npc_dota_hero_tidehunter",
+        "slug": "tidehunter",
+        "display_name": "Tidehunter",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/tidehunter.png",
+        "official_url": "https://www.dota2.com/hero/tidehunter"
+      },
+      {
+        "id": 98,
+        "name": "npc_dota_hero_shredder",
+        "slug": "shredder",
+        "display_name": "Timbersaw",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/shredder.png",
+        "official_url": "https://www.dota2.com/hero/timbersaw"
+      },
+      {
+        "id": 34,
+        "name": "npc_dota_hero_tinker",
+        "slug": "tinker",
+        "display_name": "Tinker",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/tinker.png",
+        "official_url": "https://www.dota2.com/hero/tinker"
+      },
+      {
+        "id": 19,
+        "name": "npc_dota_hero_tiny",
+        "slug": "tiny",
+        "display_name": "Tiny",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/tiny.png",
+        "official_url": "https://www.dota2.com/hero/tiny"
+      },
+      {
+        "id": 83,
+        "name": "npc_dota_hero_treant",
+        "slug": "treant",
+        "display_name": "Treant Protector",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/treant.png",
+        "official_url": "https://www.dota2.com/hero/treantprotector"
+      },
+      {
+        "id": 95,
+        "name": "npc_dota_hero_troll_warlord",
+        "slug": "troll_warlord",
+        "display_name": "Troll Warlord",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/troll_warlord.png",
+        "official_url": "https://www.dota2.com/hero/trollwarlord"
+      },
+      {
+        "id": 100,
+        "name": "npc_dota_hero_tusk",
+        "slug": "tusk",
+        "display_name": "Tusk",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/tusk.png",
+        "official_url": "https://www.dota2.com/hero/tusk"
+      },
+      {
+        "id": 108,
+        "name": "npc_dota_hero_abyssal_underlord",
+        "slug": "abyssal_underlord",
+        "display_name": "Underlord",
+        "attribute": "strength",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/abyssal_underlord.png",
+        "official_url": "https://www.dota2.com/hero/underlord"
+      },
+      {
+        "id": 85,
+        "name": "npc_dota_hero_undying",
+        "slug": "undying",
+        "display_name": "Undying",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/undying.png",
+        "official_url": "https://www.dota2.com/hero/undying"
+      },
+      {
+        "id": 70,
+        "name": "npc_dota_hero_ursa",
+        "slug": "ursa",
+        "display_name": "Ursa",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/ursa.png",
+        "official_url": "https://www.dota2.com/hero/ursa"
+      },
+      {
+        "id": 20,
+        "name": "npc_dota_hero_vengefulspirit",
+        "slug": "vengefulspirit",
+        "display_name": "Vengeful Spirit",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/vengefulspirit.png",
+        "official_url": "https://www.dota2.com/hero/vengefulspirit"
+      },
+      {
+        "id": 40,
+        "name": "npc_dota_hero_venomancer",
+        "slug": "venomancer",
+        "display_name": "Venomancer",
+        "attribute": "universal",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/venomancer.png",
+        "official_url": "https://www.dota2.com/hero/venomancer"
+      },
+      {
+        "id": 47,
+        "name": "npc_dota_hero_viper",
+        "slug": "viper",
+        "display_name": "Viper",
+        "attribute": "agility",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/viper.png",
+        "official_url": "https://www.dota2.com/hero/viper"
+      },
+      {
+        "id": 92,
+        "name": "npc_dota_hero_visage",
+        "slug": "visage",
+        "display_name": "Visage",
+        "attribute": "universal",
+        "complexity": 3,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/visage.png",
+        "official_url": "https://www.dota2.com/hero/visage"
+      },
+      {
+        "id": 126,
+        "name": "npc_dota_hero_void_spirit",
+        "slug": "void_spirit",
+        "display_name": "Void Spirit",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/void_spirit.png",
+        "official_url": "https://www.dota2.com/hero/voidspirit"
+      },
+      {
+        "id": 37,
+        "name": "npc_dota_hero_warlock",
+        "slug": "warlock",
+        "display_name": "Warlock",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/warlock.png",
+        "official_url": "https://www.dota2.com/hero/warlock"
+      },
+      {
+        "id": 63,
+        "name": "npc_dota_hero_weaver",
+        "slug": "weaver",
+        "display_name": "Weaver",
+        "attribute": "agility",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/weaver.png",
+        "official_url": "https://www.dota2.com/hero/weaver"
+      },
+      {
+        "id": 21,
+        "name": "npc_dota_hero_windrunner",
+        "slug": "windrunner",
+        "display_name": "Windranger",
+        "attribute": "universal",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/windrunner.png",
+        "official_url": "https://www.dota2.com/hero/windranger"
+      },
+      {
+        "id": 112,
+        "name": "npc_dota_hero_winter_wyvern",
+        "slug": "winter_wyvern",
+        "display_name": "Winter Wyvern",
+        "attribute": "intelligence",
+        "complexity": 2,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/winter_wyvern.png",
+        "official_url": "https://www.dota2.com/hero/winterwyvern"
+      },
+      {
+        "id": 30,
+        "name": "npc_dota_hero_witch_doctor",
+        "slug": "witch_doctor",
+        "display_name": "Witch Doctor",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/witch_doctor.png",
+        "official_url": "https://www.dota2.com/hero/witchdoctor"
+      },
+      {
+        "id": 42,
+        "name": "npc_dota_hero_skeleton_king",
+        "slug": "skeleton_king",
+        "display_name": "Wraith King",
+        "attribute": "strength",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/skeleton_king.png",
+        "official_url": "https://www.dota2.com/hero/wraithking"
+      },
+      {
+        "id": 22,
+        "name": "npc_dota_hero_zuus",
+        "slug": "zuus",
+        "display_name": "Zeus",
+        "attribute": "intelligence",
+        "complexity": 1,
+        "image_url": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/zuus.png",
+        "official_url": "https://www.dota2.com/hero/zeus"
+      }
+    ]
+  },
+  "updates": {
+    "checked_at": "2026-09-08T18:42:38Z",
+    "source_url": "https://store.steampowered.com/feeds/news/app/570/?l=russian",
+    "patch_source_url": "https://www.dota2.com/datafeed/patchnoteslist?language=russian",
+    "source_published_at": "2026-08-27T01:07:42Z",
+    "news": [
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/680759856779493378",
+        "title": "Чемпионы The International 2026",
+        "url": "https://store.steampowered.com/news/app/570/view/680759856779493378",
+        "published_at": "2026-08-27T01:07:42Z",
+        "image_url": "https://clan.fastly.steamstatic.com/images/3703047/bab4343d906943ef2117ae553347d8f8991ebca3.png",
+        "category": "event"
+      },
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/680758587997293716",
+        "title": "Основной этап The International",
+        "url": "https://store.steampowered.com/news/app/570/view/680758587997293716",
+        "published_at": "2026-08-19T02:46:04Z",
+        "image_url": "https://clan.fastly.steamstatic.com/images/3703047/a7ab9b6d4c788583a689e0519021a93a76c17f30.png",
+        "category": "event"
+      },
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/689765153413006763",
+        "title": "The International: трансляции, потайная лавка и многое другое",
+        "url": "https://store.steampowered.com/news/app/570/view/689765153413006763",
+        "published_at": "2026-08-12T00:28:39Z",
+        "image_url": "https://clan.fastly.steamstatic.com/images/3703047/aa83bcaaafe7cd4d11a841ec381ec28ccb039d41.png",
+        "category": "event"
+      },
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/678505520073540065",
+        "title": "Обновление 7.41e и летняя чистка",
+        "url": "https://store.steampowered.com/news/app/570/view/678505520073540065",
+        "published_at": "2026-07-30T23:58:15Z",
+        "image_url": "https://clan.fastly.steamstatic.com/images/3703047/5179a724ee3987b0b0dab399b9ef2eaba7b2abf4.png",
+        "category": "patch"
+      },
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/678505520073540063",
+        "title": "The International: прогнозы, фэнтези-лига и наборы поддержки",
+        "url": "https://store.steampowered.com/news/app/570/view/678505520073540063",
+        "published_at": "2026-07-30T23:57:48Z",
+        "image_url": "https://clan.fastly.steamstatic.com/images/3703047/5c825b3d35627bfc4276c013745aa6fd4de935ea.png",
+        "category": "event"
+      },
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/670621050832160174",
+        "title": "Обновление Dota 2 — 1 июля 2026 года",
+        "url": "https://store.steampowered.com/news/app/570/view/670621050832160174",
+        "published_at": "2026-07-01T23:26:01Z",
+        "image_url": null,
+        "category": "patch"
+      },
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/695390213817504687",
+        "title": "Тёмный карнавал",
+        "url": "https://store.steampowered.com/news/app/570/view/695390213817504687",
+        "published_at": "2026-06-25T19:55:51Z",
+        "image_url": "https://clan.fastly.steamstatic.com/images/3703047/7942925df6ae43659acf60f2d2ff827461c02485.png",
+        "category": "event"
+      },
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/672870947178414450",
+        "title": "Обновление 7.41d",
+        "url": "https://store.steampowered.com/news/app/570/view/672870947178414450",
+        "published_at": "2026-06-05T00:45:14Z",
+        "image_url": null,
+        "category": "patch"
+      },
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/655981180194128451",
+        "title": "Билеты на The International 2026",
+        "url": "https://store.steampowered.com/news/app/570/view/655981180194128451",
+        "published_at": "2026-05-26T04:09:28Z",
+        "image_url": "https://clan.fastly.steamstatic.com/images/3703047/882f6398bbe0c283cb33d57a3c18160c5d5a9f00.png",
+        "category": "event"
+      },
+      {
+        "id": "https://store.steampowered.com/news/app/570/view/655981180194128453",
+        "title": "Приглашения и отборы на The International 2026",
+        "url": "https://store.steampowered.com/news/app/570/view/655981180194128453",
+        "published_at": "2026-05-26T03:30:03Z",
+        "image_url": "https://clan.fastly.steamstatic.com/images/3703047/819de5d529e60414f616266ec753bf279e2f0626.png",
+        "category": "event"
+      }
+    ],
+    "latest_patch": {
+      "version": "7.41e",
+      "published_at": "2026-07-30T07:00:00Z",
+      "url": "https://www.dota2.com/patches/7.41e"
+    }
+  }
+}

@@ -265,7 +265,9 @@ def ensure_https(ssh,release,hostname,host):
             raise CheckError('https_auth_check_failed') from None
     event('https_public_endpoint',origin='https://'+hostname,certificate_verified=True,anonymous_api_status=401)
     portal_origin='https://'+hostname
-    for path,signature in (('/',b'NARMA VISION'),('/assets/portal.js',b'/api/session'),('/assets/portal.css',b'--surface')):
+    for path,signature in (('/',b'NARMA VISION'),('/replays',b'/assets/portal.js'),
+                           ('/my-learning',b'pool-learning'),('/assets/portal.js',b'/api/session'),
+                           ('/assets/portal.css',b'--surface'),('/practice',b'/assets/explore.js')):
         with opener.open(portal_origin+path,timeout=20) as response:
             content=response.read(256*1024)
             if signature not in content or b'opendota' in content.lower():
@@ -284,6 +286,21 @@ def ensure_https(ssh,release,hostname,host):
             if error.code!=expected:
                 raise CheckError('standalone_portal_access_check_failed') from None
     event('standalone_portal_ready',origin=portal_origin,anonymous_video_status=401,cross_origin_mutation_status=403,setup_required=session.get('setup_required'))
+    # Public content must work without an account. These GETs inspect existing
+    # content only; they never upload a replay, authorize a model, or generate.
+    public_data = {}
+    for name in ('heroes', 'updates', 'learning'):
+        with opener.open(portal_origin+'/api/explore/'+name,timeout=20) as response:
+            public_data[name]=json.loads(response.read(1024*1024))
+    heroes=public_data['heroes'].get('heroes',[])
+    news=public_data['updates'].get('news',[])
+    lessons=public_data['learning'].get('exercises',[])
+    if (len(heroes)<100 or not news or not lessons
+            or not public_data['heroes'].get('checked_at')
+            or not public_data['updates'].get('checked_at')):
+        raise CheckError('public_experience_content_invalid')
+    event('public_experience_ready',anonymous_access=True,hero_count=len(heroes),
+          news_count=len(news),lesson_count=len(lessons),provider_calls_created=0)
 
 
 def selected_project(cloud):

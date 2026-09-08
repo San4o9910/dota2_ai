@@ -11,7 +11,8 @@ function dependency(name) {
 }
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
-const files={'/':['index.html','text/html'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']};
+const files=Object.fromEntries(['/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
+Object.assign(files,{'/assets/portal.js':['portal.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type',file[1]); response.end(await readFile(path.join(root,file[0])));
@@ -64,7 +65,7 @@ report.insights.pace=report.insights.gold.bins.map((bin,index)=>({...bin,last_hi
 try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
-    let authenticated=false, bound=false, job=null, uploaded=false, legacy=false, poolFailed=false, poolSaveFailed=false;
+    let authenticated=false, bound=false, job=null, uploaded=false, legacy=false, poolFailed=false, poolSaveFailed=false, learningEmpty=true, learningFailed=false, connectionMissing=false;
     const poolMatches=Array.from({length:8},(_,index)=>({job_id:'pool-'+index,match_id:String(8984000000+index),hero:index===7?'npc_dota_hero_lion':'npc_dota_hero_necrolyte',label:index===7?'Lion':'Necrophos',position:index===7?5:index===6?null:2,outcome:index===6?null:index%2?'loss':'win',played_at:index===6?null:new Date(Date.now()-(50-index*7)*86400000).toISOString(),date_source:index===6?'analysis':'user',chronology_at:new Date(Date.now()-(50-index*7)*86400000).toISOString(),metrics:{deaths_per_30:10-index,gpm:400+index*20,xpm:500+index*20,last_hits_10:30+index,net_worth_10:4000+index*100,item_delay_seconds:index===3?null:120-index*10}}));
     const favorites=new Set(), goals=[], poolWrites=[], externalRequests=[];
     let learningPosition=null, learningAlias=false;
@@ -97,7 +98,7 @@ try {
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/*',async route=>{
       const url=route.request().url();
-      if(url===itemImageUrl||url===blinkImageUrl||url===heroImageUrl) { if(width===1440) await route.fulfill({contentType:'image/png',body:itemImage}); else await route.abort(); }
+      if(url===itemImageUrl||url===blinkImageUrl||/^https:\/\/cdn\.cloudflare\.steamstatic\.com\/apps\/dota2\/images\/dota_react\/heroes\/(necrolyte|lion)\.png$/.test(url)) { if(width===1440) await route.fulfill({contentType:'image/png',body:itemImage}); else await route.abort(); }
       else if(new URL(url).origin!==origin) {externalRequests.push(url);await route.abort();}
       else await route.fallback();
     });
@@ -117,7 +118,8 @@ try {
         else if(method==='DELETE')chatgpt={...chatgpt,status:'disconnected',auth_generation:null,connected_at:null,pending:null};
         body=chatgpt;}
       }
-      else if(endpoint==='/api/learning') {const hero=url.searchParams.get('hero'),position=Number(url.searchParams.get('position'))||null;body={schema_version:'narma.learning.v1',catalog:learningCatalog(position),profile,scope:{hero,position},plans:learningPlans.filter(plan=>(!hero||plan.hero===hero)&&(!position||plan.position===position)).map(projectPlan),history:[...poolMatches,...(job?[learningMatch(job.id)]:[])].filter(match=>(!hero||match.hero===hero)&&(!position||match.position===position))};}
+      else if(endpoint==='/api/learning'&&learningFailed) {status=503;body={detail:'Synthetic learning refresh failure.'};}
+      else if(endpoint==='/api/learning') {const hero=url.searchParams.get('hero'),position=Number(url.searchParams.get('position'))||null;body={schema_version:'narma.learning.v1',catalog:learningCatalog(position),profile:bound?profile:null,scope:{hero,position},plans:learningPlans.filter(plan=>(!hero||plan.hero===hero)&&(!position||plan.position===position)).map(projectPlan),history:(learningEmpty?[]:[...poolMatches,...(job?[learningMatch(job.id)]:[])]).filter(match=>(!hero||match.hero===hero)&&(!position||match.position===position))};}
       else if(endpoint.startsWith('/api/learning/reports/')) body=learningReport(endpoint.split('/').at(-1));
       else if(endpoint==='/api/learning/plans'&&method==='POST') {const command=request.postDataJSON(),match=learningMatch(command.job_id);assert.ok(match.position);for(const plan of learningPlans)if(plan.hero===match.hero&&plan.position===match.position)plan.status='paused';const plan={id:`practice-${learningPlans.length+1}`,exercise_id:command.exercise_id,exercise:learningExercises.find(item=>item.id===command.exercise_id),hero:match.hero,hero_label:'Necrophos',position:match.position,status:'active',created_at:new Date().toISOString(),source_job_id:match.job_id,source_match_id:match.match_id,checks:[]};learningPlans.push(plan);body={saved:true,plan:projectPlan(plan)};}
       else if(/^\/api\/learning\/plans\/[^/]+\/checks$/.test(endpoint)&&method==='PUT') {const plan=learningPlans.find(item=>item.id===endpoint.split('/').at(-2)),command=request.postDataJSON();assert.ok(plan);learningWrites.push(command);const match=learningMatch(command.job_id);plan.checks=plan.checks.filter(check=>check.job_id!==command.job_id);plan.checks.push({...command,match_id:match.match_id,source:'player_self_report',validity:'current',chronology_status:command.job_id===plan.source_job_id?'baseline':'predates_plan',is_training:false,checked_at:new Date().toISOString()});body={saved:true,plan:projectPlan(plan)};}
@@ -140,19 +142,49 @@ try {
         job={...command,state:'uploading',progress:0,match_id:null,created_at:new Date().toISOString()}; status=201; body={replay:job,part_bytes:5*1024**2};
       }
       else if(endpoint==='/api/replays') body={replays:job?[job]:[],worker_ready:true,max_bytes:512*1024**2};
-      else if(job&&endpoint===`/api/replays/${job.id}/parts/1`&&method==='PUT') { uploaded=true; assert.equal(request.postDataBuffer().subarray(0,8).toString('binary'),'PBDEMS2\x00'); body={uploaded:true,part_number:1}; }
+      else if(job&&endpoint===`/api/replays/${job.id}/parts/1`&&method==='PUT') { uploaded=true; learningEmpty=false; assert.equal(request.postDataBuffer().subarray(0,8).toString('binary'),'PBDEMS2\x00'); body={uploaded:true,part_number:1}; }
       else if(job&&endpoint===`/api/replays/${job.id}/complete`) { assert.equal(uploaded,true); bound=true; job={...job,state:'ready',progress:100,match_id:'8984479726'}; body={replay:job}; }
       else if(job&&endpoint===`/api/replays/${job.id}/source`&&method==='DELETE') {job.source_retained=false;body={source_deleted:true,report_retained:true};}
-      else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,hero_context:legacy?{...heroContext,hero:'npc_dota_hero_lion',label:'Lion'}:heroContext,parts:uploaded?[1]:[],archived_report:job.state==='ready'?{id:1,created_at:new Date().toISOString(),hero_context:{...heroContext,summary:'Контекст сохранённого разбора.',abilities:[{...heroContext.abilities[0],casts:7}]},report:{...report,metrics:{...report.metrics,kills:9},evidence:[{id:'old-death',type:'death',time:500,title:'Старый эпизод'}],coaching:{status:'ready',summary:'Сохранённый комментарий',points:[{title:'Сохранённый эпизод',observation:'Предыдущий разбор.',evidence_ids:['old-death']}]}}}:null,report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{})}:null};
+      else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,hero_context:legacy?{...heroContext,hero:'npc_dota_hero_lion',label:'Lion'}:heroContext,parts:uploaded?[1]:[],archived_report:job.state==='ready'?{id:1,created_at:new Date().toISOString(),hero_context:{...heroContext,summary:'Контекст сохранённого разбора.',abilities:[{...heroContext.abilities[0],casts:7}]},report:{...report,metrics:{...report.metrics,kills:9},evidence:[{id:'old-death',type:'death',time:500,title:'Старый эпизод'}],coaching:{status:'ready',summary:'Сохранённый комментарий',points:[{title:'Сохранённый эпизод',observation:'Предыдущий разбор.',evidence_ids:['old-death']}]}}}:null,report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{}),...(connectionMissing?{coaching:{status:'unavailable',failure_code:'CHATGPT_NOT_CONNECTED',points:[]}}:{})}:null};
       else throw Error(`Unexpected frontend API request: ${method} ${endpoint}`);
       await route.fulfill({status,json:body,headers:responseHeaders});
     });
-    await page.goto(origin);
+    await page.goto(origin+'/replays');
     await page.getByLabel('Email',{exact:true}).fill('fixture@example.test');
     await page.getByLabel('Пароль',{exact:true}).fill('Synthetic passphrase 2026');
     await page.getByRole('button',{name:'Войти',exact:true}).click();
     await page.getByRole('heading',{name:'Разбор твоего матча'}).waitFor();
     if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-entry.png`)});
+    // A new player gets a usable learning section before uploading any match.
+    const initialPoolRequests=requests.filter(endpoint=>endpoint==='/api/hero-pool').length;
+    await page.locator('nav [data-tab="learning"]').click();
+    assert.equal(new URL(page.url()).pathname,'/my-learning');
+    await page.locator('#learning .learning-stages').waitFor();
+    assert.equal(await page.locator('#learning .learning-stages button').count(),6);
+    await page.locator('#learning').getByRole('button',{name:'3 · Риск и возвращение в игру',exact:true}).click();
+    await page.locator('#learning .learning-exercise').waitFor();
+    assert.equal(await page.locator('#learning .learning-start').count(),0,'No-match learning is readable without inventing a saved training plan.');
+    assert.equal(requests.filter(endpoint=>endpoint==='/api/hero-pool').length,initialPoolRequests,'Learning does not depend on first opening the hero pool.');
+    await page.locator('#learning-position').selectOption('2');
+    await page.locator('#learning .learning-exercise').waitFor();
+    assert.equal(await page.locator('#pool-position').inputValue(),'','Learning has its own position filter.');
+    await page.locator('nav [data-tab="player"]').click();
+    assert.equal(new URL(page.url()).pathname,'/player');
+    await page.goBack();
+    assert.equal(new URL(page.url()).pathname,'/my-learning');
+    assert.equal(await page.locator('#learning').isVisible(),true);
+    assert.equal(await page.locator('#learning-position').inputValue(),'2','Back navigation preserves the learning scope.');
+    await page.goBack();
+    assert.equal(new URL(page.url()).pathname,'/replays');
+    assert.equal(await page.locator('#review').isVisible(),true);
+    await page.goForward();
+    assert.equal(new URL(page.url()).pathname,'/my-learning');
+    assert.equal(await page.locator('#learning').isVisible(),true);
+    await page.reload();
+    await page.locator('#learning .learning-stages').waitFor();
+    assert.equal(await page.locator('#learning').isVisible(),true,'The learning URL survives a full reload.');
+    await page.locator('nav [data-tab="review"]').click();
+    assert.equal(new URL(page.url()).pathname,'/replays');
     assert.equal(await page.getByRole('button',{name:'Загрузить и разобрать'}).isDisabled(),true);
     assert.equal(await page.locator('#replay-file').getAttribute('accept'),'.dem');
     assert.equal(await page.locator('body').innerText().then(text=>/OpenDota|Open Dota|MP4|3\s?600 кадров/.test(text)),false);
@@ -204,7 +236,8 @@ try {
     assert.match(await page.locator('#hero-context').textContent(),/Позиция 2 · указана тобой/);
     assert.match(await page.locator('#hero-context').textContent(),/Death Pulse42 применений−0:05 — 76:40/);
     assert.equal(await page.locator('#hero-context a').count(),1,'Only safe source links are shown.');
-    assert.equal(await page.locator('#next-game-plan h4').textContent(),'План за Necrophos','The hero plan replaces generic training even without Gemini.');
+    assert.equal(await page.locator('#next-game-plan h4').textContent(),width===390?'Один предмет — один план':'План за Necrophos','A validated personal coaching plan takes priority; the hero template is only the fallback.');
+    if(width===390){assert.match(await page.locator('#next-game-plan').textContent(),/Перед покупкой выбери следующий безопасный эпизод/);assert.doesNotMatch(await page.locator('#next-game-plan').textContent(),/Проверь применение Death Pulse/);}
     if(screenshotDir) await page.locator('#hero-context').screenshot({path:path.join(screenshotDir,`portal-${width}-hero-context.png`)});
     const itemCard=page.locator('#item-cards .item-card').first();
     await itemCard.scrollIntoViewIfNeeded();
@@ -271,13 +304,20 @@ try {
     await page.getByRole('button',{name:'Вернуться к текущему разбору',exact:true}).click();
     assert.equal(await page.locator('#item-cards .item-card:visible h4').textContent(),'Radiance','Current-report selection never inherits the archived selection.');
     assert.equal(await page.locator('#events [data-evidence-id=old-death]').count(),0);
+    connectionMissing=true;
+    await page.getByRole('button',{name:'Обновить',exact:true}).click();
+    const coachingConnect=page.locator('#coaching a.coaching-connect');
+    await coachingConnect.waitFor();
+    assert.equal(await coachingConnect.getAttribute('href'),'/account','Unavailable coaching explains the next useful action.');
+    assert.match(await page.locator('#coaching-summary').textContent(),/Подключи ChatGPT/);
+    connectionMissing=false;
     legacy=true; await page.getByRole('button',{name:'Обновить',exact:true}).click();
     await page.getByText('В этом отчёте нет разбивки золота по источникам. Изменение ценности предметов показано выше.',{exact:true}).waitFor();
     assert.equal(await page.locator('#gold-chart .chart-line').count(),1);
     assert.equal(await page.locator('#item-cards .item-card').count(),1);
     assert.equal(await page.locator('#income-chart .chart-bar').count(),0);
     assert.equal(await page.locator('#hero-context').isHidden(),true,'Context for another hero is never attached to this report.');
-    await page.getByRole('button',{name:'Пул героев',exact:true}).click();
+    await page.locator('nav [data-tab="hero-pool"]').click();
     await page.getByRole('heading',{name:'Пул героев',exact:true}).waitFor();
     await page.locator('#pool-roster .pool-hero-row').first().waitFor();
     assert.equal(await page.locator('#pool-roster .pool-hero-row').count(),3);
@@ -298,22 +338,22 @@ try {
     assert.equal(await coachCards.locator('img,script,iframe').count(),0);
     assert.equal(/Hermes|runtime_connected|snapshot_sha256|token|offline_bridge/.test(await page.locator('#hero-pool').innerText()),false,'Customers see coaching, without operational status or credentials.');
     if(screenshotDir) await page.locator('#pool-patterns').screenshot({path:path.join(screenshotDir,`portal-${width}-coach-patterns.png`)});
-    await page.getByLabel('Герой',{exact:true}).selectOption('npc_dota_hero_necrolyte');
+    await page.locator('#pool-hero').selectOption('npc_dota_hero_necrolyte');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-patterns .pool-coach-card').length===1);
     assert.equal(await coachCards.getByRole('heading',{name:'Решения в разных позициях',exact:true}).count(),0,'Filtering a hero hides conclusions that cite another hero.');
-    await page.getByLabel('Герой',{exact:true}).selectOption('npc_dota_hero_lion');
+    await page.locator('#pool-hero').selectOption('npc_dota_hero_lion');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-roster .pool-hero-row').length===1&&document.querySelector('#pool-roster').textContent.includes('Lion'));
     assert.equal(await coachCards.count(),0,'One matching episode cannot retain a two-match recommendation.');
-    await page.getByLabel('Герой',{exact:true}).selectOption('');
+    await page.locator('#pool-hero').selectOption('');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-patterns .pool-coach-card').length===2);
-    await page.getByLabel('Позиция',{exact:true}).selectOption('2');
+    await page.locator('#pool-position').selectOption('2');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-patterns .pool-coach-card').length===1);
     assert.match(await coachCards.textContent(),/Necrophos · 2 · Мидер/);
     assert.doesNotMatch(await coachCards.textContent(),/Lion/);
-    await page.getByLabel('Позиция',{exact:true}).selectOption('5');
+    await page.locator('#pool-position').selectOption('5');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-matches .pool-match-row').length===1&&document.querySelector('#pool-matches').textContent.includes('Lion'));
     assert.equal(await coachCards.count(),0,'Position filters cannot turn mixed-context conclusions into same-role advice.');
-    await page.getByLabel('Позиция',{exact:true}).selectOption('');
+    await page.locator('#pool-position').selectOption('');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-patterns .pool-coach-card').length===2);
     await coachCard.locator('summary').click();
     await coachCard.getByRole('button',{name:'Матч 8984000001 · 12:00',exact:true}).click();
@@ -323,7 +363,7 @@ try {
     assert.ok(requests.includes('/api/replays/pool-1'),'A coaching episode opens its own saved report.');
     await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
     await page.getByRole('heading',{name:'Матч 8984479726',exact:true}).waitFor();
-    await page.getByRole('button',{name:'Пул героев',exact:true}).click();
+    await page.locator('nav [data-tab="hero-pool"]').click();
     await page.waitForFunction(()=>document.querySelectorAll('#pool-patterns .pool-coach-card').length===2);
     await page.getByRole('button',{name:'Избранное: Necrophos, 2 · Мидер',exact:true}).click();
     await page.locator('#pool-status').filter({hasText:'добавлены в избранное'}).waitFor();
@@ -356,10 +396,10 @@ try {
     await page.locator('#pool-status').filter({hasText:'Дата матча 8984000006 сохранена.'}).waitFor();
     assert.match(poolMatches[6].played_at,/2020-01-02T/);
     assert.equal(poolMatches[6].date_source,'user');
-    await page.getByLabel('Позиция',{exact:true}).selectOption('3');
+    await page.locator('#pool-position').selectOption('3');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-matches .pool-match-row').length===1);
     assert.equal(await page.locator('#pool-summary .metric dd').nth(1).textContent(),'—');
-    await page.getByLabel('Позиция',{exact:true}).selectOption('');
+    await page.locator('#pool-position').selectOption('');
     await page.getByLabel('Период',{exact:true}).selectOption('30');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-matches .pool-match-row').length===4);
     await page.getByLabel('Период',{exact:true}).selectOption('all');
@@ -382,7 +422,8 @@ try {
     assert.deepEqual(poolWrites.at(-1),{focus:'safe_return',reflection:'partial',note:malicious});
     assert.equal(poolMatches[5].note,malicious);
     assert.equal(await journal.locator('.pool-reflection').inputValue(),'partial');
-    assert.equal(await page.locator('#hero-pool img').count(),0,'Reflection notes remain safe text.');
+    assert.equal(await journal.locator('img,script,iframe').count(),0,'Reflection notes remain safe text.');
+    for(const src of await page.locator('#hero-pool img').evaluateAll(images=>images.map(image=>image.getAttribute('src'))))assert.match(src,/^https:\/\/cdn\.cloudflare\.steamstatic\.com\/apps\/dota2\/images\/dota_react\/heroes\/(necrolyte|lion)\.png$/,'Only allowlisted Dota portraits appear in the hero pool.');
     assert.match(await page.locator('#pool-practice-summary').textContent(),/1 · частично/);
     if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-pool.png`),fullPage:true});
     const poolAccessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
@@ -393,7 +434,7 @@ try {
     assert.equal(await page.locator('#pool-content').isHidden(),true);
     poolFailed=false; await page.getByRole('button',{name:'Обновить пул',exact:true}).click();
     await page.locator('#pool-content').waitFor();
-    await page.getByRole('button',{name:'Разбор матча',exact:true}).click();
+    await page.locator('nav [data-tab="review"]').click();
     page.once('dialog',dialog=>dialog.accept());
     await page.getByRole('button',{name:'Освободить место',exact:true}).click();
     await page.getByText('Исходный реплей удалён. Разбор и статистика сохранены.',{exact:true}).waitFor();
@@ -432,10 +473,11 @@ try {
     assert.equal(await learning.locator('.learning-exercise').count(),1,'A role change cannot retain the previous role’s active plan.');
     await learning.getByLabel('Моя позиция в этом матче',{exact:true}).selectOption('2');
     await learning.locator('.learning-plan').waitFor();
-    await page.getByRole('button',{name:'Пул героев',exact:true}).click();
-    await page.getByLabel('Герой',{exact:true}).selectOption('npc_dota_hero_necrolyte');
-    await page.getByLabel('Позиция',{exact:true}).selectOption('2');
-    const practice=page.locator('#pool-learning');
+    await page.locator('nav [data-tab="learning"]').click();
+    assert.equal(new URL(page.url()).pathname,'/my-learning');
+    await page.locator('#learning-hero').selectOption('npc_dota_hero_necrolyte');
+    await page.locator('#learning-position').selectOption('2');
+    const practice=page.locator('#learning #pool-learning');
     await practice.locator('.learning-plan').waitFor();
     assert.equal(await practice.locator('.learning-stages button').count(),6);
     assert.equal(await practice.locator('.learning-stages button[aria-pressed=true]').count(),1);
@@ -447,7 +489,20 @@ try {
     const checkToggle=practice.getByText('Проверить матч по этому фокусу',{exact:true});await checkToggle.focus();await checkToggle.press('Enter');
     assert.equal(await practice.locator('.learning-check-form').isVisible(),true,'The personal check opens with the keyboard.');
     assert.match(await practice.locator('.learning-check-form').textContent(),/Это твоя оценка решения/);
-    await checkToggle.press('Enter');
+    const draft='Несохранённое наблюдение перед сменой раздела';
+    await practice.locator('.learning-check-form textarea').fill(draft);
+    await page.locator('nav [data-tab="player"]').click();
+    await page.goBack();
+    await page.waitForFunction(()=>!document.querySelector('#learning-refresh').disabled);
+    assert.equal(await practice.locator('.learning-check-form textarea').inputValue(),draft,'Back navigation cannot discard an unsaved personal check.');
+    assert.equal(await practice.locator('.learning-check-form').isVisible(),true,'Back navigation keeps the opened check form.');
+    learningFailed=true;
+    await page.locator('nav [data-tab="player"]').click();
+    await page.goBack();
+    await page.locator('#learning-refresh-notice').waitFor();
+    assert.equal(await practice.locator('.learning-check-form textarea').inputValue(),draft,'A failed background refresh cannot erase the current learning draft.');
+    learningFailed=false;
+    await checkToggle.focus();await checkToggle.press('Enter');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     if(screenshotDir)await practice.screenshot({path:path.join(screenshotDir,`portal-${width}-learning.png`)});
     await page.addScriptTag({content:axe.source});
@@ -455,7 +510,7 @@ try {
     assert.deepEqual(learningAccessibility.violations.map(violation=>({id:violation.id,nodes:violation.nodes.map(item=>item.target)})),[]);
     // A duplicate upload must navigate to the canonical report before exposing practice.
     learningAlias=true;
-    await page.getByRole('button',{name:'Разбор матча',exact:true}).click();
+    await page.locator('nav [data-tab="review"]').click();
     await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
     await page.getByRole('heading',{name:'Матч 8984000001',exact:true}).waitFor();
     await page.waitForFunction(()=>document.querySelector('#report-learning .learning-check-form select')?.value==='pool-1');
@@ -464,10 +519,10 @@ try {
     const canonicalEvent=page.locator('#events [data-evidence-id="death-1"]');
     assert.match(await canonicalEvent.textContent(),/12:00/,'Practice anchors and the visible replay share canonical timestamps.');
     assert.match(await page.locator('#notice').textContent(),/Открыт актуальный сохранённый разбор/);
-    await page.getByRole('button',{name:'Мой игрок',exact:true}).click();
+    await page.locator('nav [data-tab="player"]').click();
     await page.getByRole('heading',{name:'Мой игрок',exact:true}).waitFor();
     assert.match(await page.locator('#player-summary').textContent(),/Steam ID: 123/);
-    await page.getByRole('button',{name:'Аккаунт',exact:true}).click();
+    await page.locator('nav [data-tab="account"]').click();
     await page.getByRole('heading',{name:'Изменить пароль',exact:true}).waitFor();
     const integration=page.locator('#chatgpt-integration');
     await integration.getByRole('button',{name:'Подключить ChatGPT',exact:true}).waitFor();
@@ -488,15 +543,15 @@ try {
     if(screenshotDir)await integration.screenshot({path:path.join(screenshotDir,`portal-${width}-chatgpt-login.png`)});
     const integrationAccessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
     assert.deepEqual(integrationAccessibility.violations.map(violation=>({id:violation.id,nodes:violation.nodes.map(item=>item.target)})),[]);
-    await page.getByRole('button',{name:'Мой игрок',exact:true}).click();
+    await page.locator('nav [data-tab="player"]').click();
     const pausedCount=integrationRequests.length;await page.clock.fastForward(15000);assert.equal(integrationRequests.length,pausedCount,'Leaving account stops OAuth polling.');
-    await page.getByRole('button',{name:'Аккаунт',exact:true}).click();await openai.waitFor();
+    await page.locator('nav [data-tab="account"]').click();await openai.waitFor();
     assert.equal(integrationRequests.filter(request=>request.endpoint.endsWith('/connect')).length,2,'Returning resumes the existing login without another connect request.');
     chatgptPollConnect=true;await page.clock.fastForward(5100);await integration.getByText('ChatGPT подключён',{exact:true}).waitFor();
     assert.match(await integration.innerText(),/Готовность тренерского разбора проверяется отдельно/);
     assert.equal(await integration.getByRole('link').count(),0);assert.equal(await integration.getByLabel('Код для входа в OpenAI').count(),0);
     const connectedCount=integrationRequests.length;await page.clock.fastForward(15000);assert.equal(integrationRequests.length,connectedCount,'Connected accounts no longer poll device auth.');
-    const refreshIntegration=async()=>{await page.getByRole('button',{name:'Мой игрок',exact:true}).click();await page.getByRole('button',{name:'Аккаунт',exact:true}).click();await page.waitForFunction(()=>document.getElementById('chatgpt-integration').getAttribute('aria-busy')==='false');};
+    const refreshIntegration=async()=>{await page.locator('nav [data-tab="player"]').click();await page.locator('nav [data-tab="account"]').click();await page.waitForFunction(()=>document.getElementById('chatgpt-integration').getAttribute('aria-busy')==='false');};
     chatgpt={...chatgpt,quota_paused:true,available:false,paused_until:null,last_error_code:'CHATGPT_QUOTA'};await refreshIntegration();await integration.getByText(/Время восстановления пока неизвестно/).waitFor();await integration.getByRole('button',{name:'Войти в ChatGPT заново',exact:true}).waitFor();
     chatgptDeleteFailed=true;const failedReconnectStart=integrationRequests.length;
     await integration.getByRole('button',{name:'Войти в ChatGPT заново',exact:true}).click();await integration.getByText('Не удалось проверить подключение. Попробуй ещё раз.',{exact:true}).waitFor();

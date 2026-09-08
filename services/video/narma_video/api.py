@@ -236,6 +236,8 @@ from .hermes_bridge import attach_hermes
 attach_hermes(app)
 from .chatgpt_auth import attach_chatgpt
 attach_chatgpt(app)
+from .explore import router as explore_router
+app.include_router(explore_router)
 
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
@@ -243,10 +245,20 @@ STATIC_ROOT=Path(__file__).parent/'static'
 app.mount('/assets',StaticFiles(directory=STATIC_ROOT),name='portal-assets')
 
 @app.get('/')
+@app.get('/heroes')
+@app.get('/learn')
+@app.get('/practice')
+@app.get('/updates')
+def explore_page():
+    return FileResponse(STATIC_ROOT/'explore.html',media_type='text/html',headers={'Cache-Control':'no-cache'})
+
+
 @app.get('/setup')
 @app.get('/videos')
 @app.get('/replays')
 @app.get('/hero-pool')
+@app.get('/player')
+@app.get('/my-learning')
 @app.get('/account')
 def portal_page():
     return FileResponse(STATIC_ROOT/'index.html',media_type='text/html',headers={'Cache-Control':'no-store'})
@@ -257,7 +269,7 @@ async def portal_headers(request: Request,call_next):
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
     response.headers['Referrer-Policy']='no-referrer'
-    response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://cdn.cloudflare.steamstatic.com; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://cdn.cloudflare.steamstatic.com https://clan.fastly.steamstatic.com; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     response.headers['Permissions-Policy']='camera=(), microphone=(), geolocation=()'
     response.headers['Strict-Transport-Security']='max-age=31536000'
     if request.url.path.startswith('/assets/'):
