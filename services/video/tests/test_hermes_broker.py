@@ -111,7 +111,7 @@ def test_adapter_has_one_sdk_attempt(monkeypatch):
     assert observed['http_options'].timeout == 120000
 
 
-def test_real_sdk_serializes_supported_schema_and_preserves_raw_usage_without_network():
+def test_real_sdk_maps_native_json_object_without_provider_schema_and_preserves_usage():
     pool = pool_fixture()
     pool['history'] = [deepcopy(pool['history'][i % 2]) for i in range(4)]
     for index, row in enumerate(pool['history']):
@@ -146,29 +146,14 @@ def test_real_sdk_serializes_supported_schema_and_preserves_raw_usage_without_ne
     assert len(captured) == 1
     sent = captured[0]
     config = sent['generationConfig']
-    schema = config['responseJsonSchema']
-    assert schema == broker.provider_review_schema()
-    assert schema['properties']['schema_version']['enum'] == [1]
-    assert schema['$defs']['Producer']['properties']['name']['enum'] == ['NousResearch/hermes-agent']
-    def check_keywords(node):
-        if not isinstance(node, dict):
-            return
-        assert set(node) <= broker._PROVIDER_SCHEMA_KEYS
-        for key, value in node.items():
-            if key in ('$defs', 'properties'):
-                for child in value.values():
-                    check_keywords(child)
-            elif key in ('items', 'additionalProperties'):
-                check_keywords(value)
-            elif key in ('anyOf', 'oneOf', 'prefixItems'):
-                for child in value:
-                    check_keywords(child)
-    check_keywords(schema)
+    assert not {'responseJsonSchema', '_responseJsonSchema', 'responseSchema', 'responseFormat'} & set(config)
+    prompt = json.loads(sent['contents'][0]['parts'][0]['text'])
+    assert prompt['packet']['response_schema'] == hermes_bridge.Review.model_json_schema()
     assert config['maxOutputTokens'] == 4096 and config['candidateCount'] == 1
     assert config['thinkingConfig'] == {'thinking_level': 'LOW'}
     assert config['responseMimeType'] == 'application/json' and sent['serviceTier'] == 'standard'
     assert provider.last_usage == USAGE
-    assert hermes_bridge.validate_review(broker.Review.model_validate_json(result), snapshot, digest) == final
+    assert hermes_bridge.validate_review(hermes_bridge.Review.model_validate_json(result), snapshot, digest) == final
 
 
 @pytest.mark.parametrize('change', [
@@ -177,10 +162,8 @@ def test_real_sdk_serializes_supported_schema_and_preserves_raw_usage_without_ne
     lambda review: review['patterns'][0].update(title=''),
     lambda review: review['patterns'][0].update(observation='x' * 501),
 ])
-def test_provider_schema_projection_never_relaxes_saved_review_validation(change):
-    original = broker.Review.model_json_schema()
-    broker.provider_review_schema()
-    assert broker.Review.model_json_schema() == original
+def test_native_json_mode_never_relaxes_saved_review_validation(change):
+    original = hermes_bridge.Review.model_json_schema()
     assert original['properties']['schema_version']['const'] == 1
     assert 'pattern' in original['$defs']['Pattern']['properties']['id']
     assert original['$defs']['Pattern']['properties']['observation']['maxLength'] == 500
@@ -188,7 +171,7 @@ def test_provider_schema_projection_never_relaxes_saved_review_validation(change
     review = review_fixture(snapshot, digest)
     change(review)
     with pytest.raises(ValidationError):
-        broker.Review.model_validate(review)
+        hermes_bridge.Review.model_validate(review)
 
 
 @pytest.mark.parametrize('body', [response_body(finish='MAX_TOKENS'), response_body(parts=[{'functionCall': {'name': 'blocked'}}]),
@@ -249,12 +232,56 @@ def test_provider_failure_diagnostics_omit_exception_messages_and_bodies(error, 
     response = broker._failure(error)
     logged = capsys.readouterr().out
     assert 'private prompt and secret' not in logged and b'private prompt and secret' not in response.body
-    assert json.loads(logged) == {'event': 'hermes_broker_rejected', 'code': 'HERMES_PROVIDER_UNAVAILABLE', **expected}
+    assert json.loads(logged) == {'event': 'hermes_broker_rejected', 'code': 'HERMES_PROVIDER_UNAVAILABLE',
+        'reason_flags': [], 'field_labels': [], **expected}
 
 
 def test_provider_diagnostics_do_not_log_unrecognized_status_values():
     error = errors.ClientError(400, {'error': {'status': 'private secret', 'message': 'private secret'}})
     assert broker.failure_diagnostics(error, 'HERMES_PROVIDER_UNAVAILABLE')['provider_status'] is None
+
+
+@pytest.mark.parametrize('message,reason,field', [
+    ('generation_config.response_json_schema has too many states for serving.', 'schema_complexity', 'response_json_schema'),
+    ('Unsupported keyword in responseJsonSchema.', 'schema_keyword_unsupported', 'response_json_schema'),
+    ('Invalid $ref reference in responseJsonSchema.', 'schema_reference_invalid', 'response_json_schema'),
+    ('Invalid enum in responseSchema.', 'enum_invalid', 'response_schema'),
+    ('thinking_level minimal is not supported.', 'thinking_unsupported', 'thinking_config'),
+    ('serviceTier is not supported.', 'service_tier_unsupported', 'service_tier'),
+    ('User location is not supported for API use.', 'location_unsupported', None),
+    ('Your project has been denied access.', 'permission_denied', None),
+    ('Billing must be enabled.', 'billing_required', None),
+    ('API key not valid.', 'api_key_invalid', None),
+    ('This model is not supported.', 'model_unsupported', 'model'),
+    ('temperature must be between zero and one.', 'parameter_out_of_range', 'temperature'),
+    ('top_p must be between zero and one.', 'parameter_out_of_range', 'top_p'),
+    ('maxOutputTokens exceeds the maximum.', 'parameter_out_of_range', 'max_output_tokens'),
+    ('Unknown name responseFormat.', 'unexpected_field', 'response_format'),
+])
+def test_error_hints_are_fixed_reason_and_field_labels_only(message, reason, field, capsys):
+    secret = 'PRIVATE_TOKEN_AND_PROMPT_DO_NOT_PRINT'
+    error = errors.ClientError(400, {'error': {'status': 'INVALID_ARGUMENT', 'message': message + ' ' + secret,
+        'details': [{'@type': 'type.googleapis.com/google.rpc.BadRequest', 'fieldViolations': [
+            {'field': 'generation_config.' + secret, 'description': secret}]}]}})
+    broker._failure(error)
+    logged = capsys.readouterr().out
+    assert secret not in logged and message not in logged
+    event = json.loads(logged)
+    assert reason in event['reason_flags']
+    if field:
+        assert field in event['field_labels']
+
+
+def test_error_hints_use_bounded_field_violations_without_logging_paths():
+    error = errors.ClientError(400, {'error': {'message': 'Request rejected.', 'details': [
+        {'fieldViolations': [{'field': 'generationConfig.responseMimeType', 'description': 'Unknown field.'},
+            {'field': 'contents.private-player-text', 'description': 'Do not print private-player-text.'}]}]}})
+    hints = broker.provider_error_hints(error)
+    assert hints == {'reason_flags': ['unexpected_field'], 'field_labels': ['contents', 'response_mime_type']}
+    assert 'private-player-text' not in json.dumps(hints)
+    assert broker.provider_error_hints(RuntimeError('User location is not supported')) == {'reason_flags': [], 'field_labels': []}
+    error = errors.ClientError(400, {'error': {'message': 'x' * 4096 + 'User location is not supported'}})
+    assert broker.provider_error_hints(error) == {'reason_flags': [], 'field_labels': []}
 
 
 @pytest.fixture

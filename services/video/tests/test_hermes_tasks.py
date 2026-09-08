@@ -1,4 +1,5 @@
 """Runtime jobs keep identity, evidence, attempt limits and billing durable."""
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
@@ -40,9 +41,12 @@ def response(task):
     return json.dumps(review_fixture(task["snapshot"], task["snapshot_sha256"]))
 
 
-def legacy_task(pool):
-    """The deployed v1 contract had no runtime_contract field in its snapshot."""
+def legacy_task(pool, contract=None):
+    """V1 omitted runtime_contract; V2 recorded its provider-schema contract."""
     snapshot, digest, sources = tasks.build_snapshot(pool)
+    if contract is not None:
+        snapshot["runtime_contract"] = contract
+        digest = hashlib.sha256(tasks.canonical_bytes(snapshot)).hexdigest()
     with database() as connection:
         connection.execute("""INSERT INTO hermes_tasks
             (id,owner_id,account_id,snapshot_sha256,snapshot,source_jobs)
@@ -230,8 +234,9 @@ def test_lease_expiring_while_sources_are_locked_is_rechecked(queue, monkeypatch
                 tasks.authorize_call(connection, task["token"])
 
 
-def test_corrected_contract_preserves_failed_v1_and_unknown_reservation(queue):
-    old = legacy_task(queue)
+@pytest.mark.parametrize("previous_contract", [None, "narma.hermes.review.v2"])
+def test_json_object_contract_preserves_failed_prior_task_and_unknown_reservation(queue, previous_contract):
+    old = legacy_task(queue, previous_contract)
     call_id = billed(old, known=False)
     tasks.fail_task(old["id"], old["lease_token"], "HERMES_RUNNER_FAILED")
     with database() as connection:
@@ -242,8 +247,9 @@ def test_corrected_contract_preserves_failed_v1_and_unknown_reservation(queue):
     assert tasks.enqueue_eligible() == 0
     new = tasks.claim_task()
     assert new["id"] != old["id"] and new["snapshot_sha256"] != old["snapshot_sha256"]
-    assert new["snapshot"]["runtime_contract"] == "narma.hermes.review.v2"
-    assert {key: value for key, value in new["snapshot"].items() if key != "runtime_contract"} == old["snapshot"]
+    assert new["snapshot"]["runtime_contract"] == "narma.hermes.json-object.v1"
+    assert {key: value for key, value in new["snapshot"].items() if key != "runtime_contract"} == {
+        key: value for key, value in old["snapshot"].items() if key != "runtime_contract"}
     assert budget.status() == allowance
     with database() as connection:
         assert connection.execute("SELECT * FROM hermes_tasks WHERE id=%s", (old["id"],)).fetchone() == before

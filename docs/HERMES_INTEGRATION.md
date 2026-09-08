@@ -35,7 +35,9 @@ Installation and production activation evidence are recorded in
   evidence reference. Provenance is set by the server after an actual runtime
   response and a settled broker call, never by model text or an imported packet.
   Expired leases, changed sources and invalid responses cannot publish a review.
-  The provider-facing schema uses Gemini's supported keywords; all stricter
+  Hermes requests `response_format={"type":"json_object"}`. The broker maps that
+  to Gemini's JSON MIME mode without adding a provider-side schema compiler.
+  The full Review schema stays in the supplied task packet; all structure,
   string, literal and evidence constraints are enforced locally on the response.
 
 The scheduler runs without a customer export action. New reports and corrected

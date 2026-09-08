@@ -21,9 +21,10 @@ from .hermes_bridge import (MAX_EXPORT_BYTES, MAX_REVIEW_BYTES, Review,
     _sources_available, build_snapshot, canonical_bytes, packet_for, validate_review)
 
 RUNTIME_REVISION = "9fd44b4dfc44138b9e5d5689acb56c438364ff7b"
-# Version the corrected provider schema contract as real immutable task input.
-# A version change never resets an earlier task or its provider accounting.
-RUNTIME_CONTRACT = "narma.hermes.review.v2"
+# JSON-object provider output, as requested by native Hermes; the full Review
+# schema remains in the prompt and strict local validation. This immutable input
+# change never resets an earlier task or its provider accounting.
+RUNTIME_CONTRACT = "narma.hermes.json-object.v1"
 LEASE_SECONDS = 240
 RUNNER_TIMEOUT_SECONDS = 200
 TOKEN = re.compile(r"^[A-Za-z0-9_-]{43}$")

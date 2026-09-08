@@ -22,7 +22,6 @@ from starlette.responses import JSONResponse
 from . import budget
 from .db import database
 from .gemini import generate_usage
-from .hermes_bridge import Review
 
 MAX_REQUEST_BYTES = 512 * 1024
 MAX_RESPONSE_BYTES = 100000
@@ -33,7 +32,6 @@ _FIELDS = frozenset({'model', 'messages', 'max_tokens', 'max_completion_tokens',
 _SAFE_FAILURES = frozenset({'HERMES_TOKEN_INVALID', 'HERMES_LEASE_EXPIRED', 'HERMES_SOURCE_CHANGED',
     'HERMES_REQUEST_INVALID', 'HERMES_REQUEST_TOO_LARGE', 'HERMES_MODEL_UNSUPPORTED',
     'HERMES_REQUEST_BUDGET_EXCEEDED', 'HERMES_NOT_CONFIGURED', 'HERMES_PROVIDER_RESPONSE_INVALID',
-    'HERMES_PROVIDER_SCHEMA_UNSUPPORTED',
     'VIDEO_GLOBAL_BUDGET_DISABLED', 'VIDEO_GLOBAL_BUDGET_EXCEEDED', 'VIDEO_GLOBAL_BUDGET_INVALID',
     'VIDEO_BUDGET_PRICE_POLICY_EXPIRED', 'VIDEO_REQUEST_BUDGET_EXCEEDED',
     'VIDEO_BUDGET_RECONCILIATION_REQUIRED', 'VIDEO_BUDGET_ACCOUNTING_FAILED', 'GEMINI_USAGE_UNSUPPORTED'})
@@ -46,48 +44,11 @@ _PART_KEYS = frozenset({'text', 'thought', 'thoughtSignature', 'functionCall', '
 _API_STATUSES = frozenset({'INVALID_ARGUMENT', 'FAILED_PRECONDITION', 'OUT_OF_RANGE', 'UNAUTHENTICATED',
     'PERMISSION_DENIED', 'NOT_FOUND', 'ALREADY_EXISTS', 'RESOURCE_EXHAUSTED', 'CANCELLED',
     'DATA_LOSS', 'UNKNOWN', 'INTERNAL', 'UNIMPLEMENTED', 'UNAVAILABLE', 'DEADLINE_EXCEEDED'})
-_PROVIDER_SCHEMA_KEYS = frozenset({'$id', '$defs', '$ref', '$anchor', 'type', 'format', 'title',
-    'description', 'enum', 'items', 'prefixItems', 'minItems', 'maxItems', 'minimum', 'maximum',
-    'anyOf', 'oneOf', 'properties', 'additionalProperties', 'required', 'propertyOrdering'})
 
 
 def authorize_call(connection, token):
     from .hermes_tasks import authorize_call as authorize
     return authorize(connection, token)
-
-
-def provider_review_schema():
-    """Gemini's documented JSON Schema subset; Review still validates the result.
-
-    responseJsonSchema supports singleton string/numeric enums, but its published
-    keyword list omits const, pattern and string-length bounds. Keep those exact
-    constraints in the local Review model and the task evidence validator.
-    https://ai.google.dev/api/generate-content#v1beta.GenerationConfig
-    """
-    def project(schema):
-        if not isinstance(schema, dict):
-            return schema  # Boolean additionalProperties is supported.
-        result = {}
-        for key, value in schema.items():
-            if key == 'const':
-                if type(value) not in (str, int, float):
-                    raise ValueError('HERMES_PROVIDER_SCHEMA_UNSUPPORTED')
-                result['enum'] = [value]
-            elif key in ('pattern', 'minLength', 'maxLength'):
-                continue
-            elif key not in _PROVIDER_SCHEMA_KEYS:
-                raise ValueError('HERMES_PROVIDER_SCHEMA_UNSUPPORTED')
-            elif key in ('$defs', 'properties'):
-                # These are maps of schema names, not schema keyword objects.
-                result[key] = {name: project(child) for name, child in value.items()}
-            elif key in ('anyOf', 'oneOf', 'prefixItems'):
-                result[key] = [project(child) for child in value]
-            elif key in ('items', 'additionalProperties'):
-                result[key] = project(value)
-            else:
-                result[key] = value
-        return result
-    return project(Review.model_json_schema())
 
 
 def response_diagnostics(raw):
@@ -120,6 +81,62 @@ def response_diagnostics(raw):
         'part_types': sorted(kinds), 'output_bytes': min(output_bytes, 1024 * 1024)}
 
 
+def provider_error_hints(error):
+    """Classify a bounded API error using fixed labels; never retain its text."""
+    if not isinstance(error, errors.APIError) or not isinstance(error.details, dict):
+        return {'reason_flags': [], 'field_labels': []}
+    detail = error.details.get('error', error.details)
+    if not isinstance(detail, dict):
+        return {'reason_flags': [], 'field_labels': []}
+    texts = []
+    def take(value):
+        if isinstance(value, str):
+            texts.append(value[:4096])
+    take(detail.get('message'))
+    nested = detail.get('details')
+    if isinstance(nested, list):
+        for entry in nested[:8]:
+            if not isinstance(entry, dict):
+                continue
+            take(entry.get('reason'))
+            violations = entry.get('fieldViolations')
+            if isinstance(violations, list):
+                for violation in violations[:16]:
+                    if isinstance(violation, dict):
+                        take(violation.get('field'))
+                        take(violation.get('description'))
+    source = '\n'.join(texts)[:16384].casefold()
+    compact = re.sub('[^a-z0-9]', '', source)
+    aliases = {
+        'response_json_schema': ('responsejsonschema',), 'response_schema': ('responseschema',),
+        'response_format': ('responseformat',), 'response_mime_type': ('responsemimetype',),
+        'thinking_config': ('thinkingconfig', 'thinkinglevel', 'thinkingbudget'),
+        'service_tier': ('servicetier',), 'max_output_tokens': ('maxoutputtokens',),
+        'temperature': ('temperature',), 'top_p': ('topp',), 'contents': ('contents',),
+        'model': ('model',),
+    }
+    labels = {label for label, variants in aliases.items() if any(value in compact for value in variants)}
+    unsupported = any(value in source for value in ('not supported', 'unsupported', 'not allowed', 'not available'))
+    invalid = unsupported or any(value in source for value in ('invalid', 'not valid', 'unknown', 'expected', 'must', 'requires'))
+    checks = {
+        'schema_complexity': 'schema' in source and any(value in source for value in ('complex', 'too many states', 'too large', 'deeply nested')),
+        'schema_keyword_unsupported': 'schema' in source and unsupported,
+        'schema_reference_invalid': 'schema' in source and invalid and any(value in source for value in ('$ref', 'reference')),
+        'enum_invalid': 'enum' in source and invalid,
+        'thinking_unsupported': 'thinking_config' in labels and invalid,
+        'service_tier_unsupported': 'service_tier' in labels and invalid,
+        'location_unsupported': any(value in source for value in ('location', 'region', 'country')) and unsupported,
+        'permission_denied': 'permission denied' in source or 'permission_denied' in source or 'denied access' in source,
+        'billing_required': 'billing' in source and any(value in source for value in ('enable', 'required', 'disabled', 'without')),
+        'api_key_invalid': ('apikey' in compact or 'api key' in source) and (invalid or 'leaked' in source or 'expired' in source),
+        'model_unsupported': 'model' in labels and unsupported,
+        'parameter_out_of_range': any(value in source for value in ('out of range', 'must be between', 'must be greater', 'must be less', 'exceeds the maximum')),
+        'unexpected_field': any(value in source for value in ('unknown name', 'unknown field', 'unrecognized field', 'unexpected field')),
+    }
+    return {'reason_flags': sorted(label for label, matched in checks.items() if matched),
+        'field_labels': sorted(labels)}
+
+
 def failure_diagnostics(error, code):
     """Provider exception messages and bodies can contain private request data."""
     status = (error.code if isinstance(error, errors.APIError) else
@@ -141,7 +158,7 @@ def failure_diagnostics(error, code):
         category = 'provider_rejected'
     elif 'BUDGET' in code or code == 'GEMINI_USAGE_UNSUPPORTED':
         category = 'budget'
-    elif code in ('HERMES_NOT_CONFIGURED', 'HERMES_PROVIDER_SCHEMA_UNSUPPORTED'):
+    elif code == 'HERMES_NOT_CONFIGURED':
         category = 'configuration'
     elif code == 'HERMES_LEASE_EXPIRED':
         category = 'lease'
@@ -149,7 +166,8 @@ def failure_diagnostics(error, code):
         category = 'validation'
     else:
         category = 'unknown'
-    return {'category': category, 'provider_http_status': status, 'provider_status': api_status}
+    return {'category': category, 'provider_http_status': status, 'provider_status': api_status,
+        **provider_error_hints(error)}
 
 
 def _plain_content(value):
@@ -218,8 +236,6 @@ class GeminiHermesProvider:
         key = os.environ.get('GEMINI_API_KEY', '')
         if not key or os.environ.get('GEMINI_MODEL', '') != budget.MODEL:
             raise ValueError('HERMES_NOT_CONFIGURED')
-        # Detect future schema changes before any reservation or provider call.
-        provider_review_schema()
         self.last_usage = None
         self.client = genai.Client(api_key=key, http_options=types.HttpOptions(
             timeout=120000, retry_options=types.HttpRetryOptions(attempts=1)))
@@ -237,7 +253,10 @@ class GeminiHermesProvider:
                 temperature=request['temperature'], top_p=request['top_p'], stop_sequences=request['stop'],
                 thinking_config=types.ThinkingConfig(thinking_level='low'),
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                response_mime_type='application/json', response_json_schema=provider_review_schema(),
+                # Hermes requested json_object. Its full Review contract is in
+                # the prompt and is checked locally with match-local evidence;
+                # do not add an unrequested provider schema-compilation mode.
+                response_mime_type='application/json',
                 should_return_http_response=True))
         body = response.sdk_http_response.body
         if not body or len(body) > 1024 * 1024:
@@ -326,7 +345,7 @@ def _failure(error):
         status = 403  # Non-retryable: this task has consumed its one attempt.
     elif 'BUDGET' in code:
         status = 429
-    elif code in ('HERMES_NOT_CONFIGURED', 'HERMES_PROVIDER_SCHEMA_UNSUPPORTED'):
+    elif code == 'HERMES_NOT_CONFIGURED':
         status = 503
     else:
         status = 502

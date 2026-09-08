@@ -49,5 +49,45 @@ The corrected contract is part of immutable task input and receives a new
 digest. It never resets the failed task, its one-attempt limit or its ledger.
 Identical completed facts are reused across contract versions, and a repeated
 v2 snapshot cannot generate another attempt. This is one corrective release,
-not an automatic retry policy. Live activation of that release remains pending;
-record its exact source revision, workflow and before/after accounting below.
+not an automatic retry policy. Its live activation result is recorded below.
+
+### Corrective release result
+
+`d39c50178c17cc7f66e91014ada1169cf8551413` (workflow `34198341110`)
+passed all Docker/network/browser gates, 25 deployment tests and 331 native
+PostgreSQL tests (one optional replay test skipped). Its v2 activation failed
+with a provider HTTP 400 `INVALID_ARGUMENT`; no valid response was produced.
+Read-only workflow `34199193025` verified this category and the successful
+rollback to the same working `dddac36` release. API health is healthy and the
+replay worker is running. Both Hermes services are stopped; automatic tracking
+is not active and must not be reported as connected.
+
+V2 task `8f413400-f040-4dee-a261-6cce7c2138f0` and call 10 remain in failed/
+unknown states respectively. The limit is still 10,000,000 micro-USD, spent
+124,938 and reserved 8,400,000, leaving 1,475,062 available. The first task/call
+and all earlier unknown reservations are unchanged. Further investigation uses
+non-generative synthetic requests only until a concrete correction is known.
+
+### Native JSON-object bridge contract
+
+Read-only workflow `34199833911` performed exactly two free `countTokens`
+requests with synthetic text: the exact v2 generation configuration and a
+baseline without that configuration. Both returned HTTP 200 and 11 tokens.
+This does not prove that the generation engine accepts the output schema and
+does not establish the cause of the previous HTTP 400. No generation or ledger
+mutation occurred.
+
+The final bounded correction maps Hermes's actual `json_object` request to
+Gemini's independent JSON MIME mode. The broker no longer adds the optional
+provider-side schema compiler. The immutable input contract is
+`narma.hermes.json-object.v1`; full local Review and evidence validation remain
+mandatory. This is a transport simplification, not a claim that the discarded
+provider error message has been recovered. A real SDK interception gate checks
+that no provider schema fields are sent. Fixed error reason and field labels
+are retained without exposing provider text, credentials or match data.
+
+At most one new activation attempt is permitted within the remaining existing
+allowance. All old failed tasks, provider calls and unknown reservations remain
+unchanged, and successfully reviewed facts are reused across contracts. If this
+attempt fails, do not bump the contract or spend again without a concrete new
+diagnosis. Production activation of the final contract is not yet confirmed.
