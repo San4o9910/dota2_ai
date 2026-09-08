@@ -21,12 +21,18 @@ from .hermes_bridge import (MAX_EXPORT_BYTES, MAX_REVIEW_BYTES, Review,
     _sources_available, build_snapshot, canonical_bytes, packet_for, validate_review)
 
 RUNTIME_REVISION = "9fd44b4dfc44138b9e5d5689acb56c438364ff7b"
+# Version the corrected provider schema contract as real immutable task input.
+# A version change never resets an earlier task or its provider accounting.
+RUNTIME_CONTRACT = "narma.hermes.review.v2"
 LEASE_SECONDS = 240
 RUNNER_TIMEOUT_SECONDS = 200
 TOKEN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 ERROR_CODES = frozenset({"HERMES_RUNTIME_UNAVAILABLE", "HERMES_RUNTIME_REVISION",
     "HERMES_RUNNER_TIMEOUT", "HERMES_RUNNER_FAILED", "HERMES_REVIEW_INVALID",
-    "HERMES_SOURCE_CHANGED", "HERMES_LEASE_EXPIRED", "HERMES_CALL_NOT_SETTLED"})
+    "HERMES_SOURCE_CHANGED", "HERMES_LEASE_EXPIRED", "HERMES_CALL_NOT_SETTLED",
+    "HERMES_UPSTREAM_INIT_FAILED", "HERMES_UPSTREAM_CALL_FAILED", "HERMES_OUTPUT_EMPTY",
+    "HERMES_OUTPUT_TOO_LARGE", "HERMES_OUTPUT_JSON_INVALID", "HERMES_RUNTIME_INVARIANT",
+    "HERMES_REVISION_MISMATCH", "HERMES_EXECUTION_FAILED", "HERMES_DEADLINE_EXCEEDED"})
 
 
 def enqueue_eligible():
@@ -40,13 +46,19 @@ def enqueue_eligible():
     added = 0
     for owner in owners:
         owner_id = owner["owner_id"]
-        snapshot, digest, sources = build_snapshot(get_pool(owner_id, include_coaching=False))
+        snapshot, _, sources = build_snapshot(get_pool(owner_id, include_coaching=False))
         # Without evidence from two games there can be no supported repetition.
         if sum(bool(row["evidence"]) for row in snapshot["observations"]) < 2:
             continue
+        snapshot = {**snapshot, "runtime_contract": RUNTIME_CONTRACT}
+        digest = hashlib.sha256(canonical_bytes(snapshot)).hexdigest()
         with database() as connection:
             connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner_id,))
             if not _sources_available(connection, owner_id, sources):
+                continue
+            if _completed_facts(connection, owner_id, snapshot["player"]["account_id"], snapshot):
+                # A corrected transport does not justify buying another review
+                # of facts already reviewed successfully under an older contract.
                 continue
             connection.execute("""UPDATE hermes_tasks SET state='stale',
                 error_code='HERMES_SOURCE_CHANGED',finished_at=now()
@@ -59,6 +71,13 @@ def enqueue_eligible():
                     digest, Jsonb(snapshot), Jsonb(sources))).fetchone()
             added += bool(row)
     return added
+
+
+def _completed_facts(connection, owner_id, account_id, snapshot):
+    facts = {key: value for key, value in snapshot.items() if key != "runtime_contract"}
+    return bool(connection.execute("""SELECT 1 FROM hermes_tasks
+        WHERE owner_id=%s AND account_id=%s AND state='succeeded'
+        AND snapshot-'runtime_contract'=%s LIMIT 1""", (owner_id, account_id, Jsonb(facts))).fetchone())
 
 
 def claim_task():
@@ -88,6 +107,10 @@ def claim_task():
             if not _sources_available(connection, row["owner_id"], row["source_jobs"]):
                 connection.execute("""UPDATE hermes_tasks SET state='stale',
                     error_code='HERMES_SOURCE_CHANGED',finished_at=now() WHERE id=%s""", (row["id"],))
+                continue
+            if _completed_facts(connection, row["owner_id"], row["account_id"], row["snapshot"]):
+                connection.execute("""UPDATE hermes_tasks SET state='stale',
+                    error_code='HERMES_FACTS_ALREADY_REVIEWED',finished_at=now() WHERE id=%s""", (row["id"],))
                 continue
             token, lease_token = secrets.token_urlsafe(32), uuid4()
             claimed = connection.execute("""UPDATE hermes_tasks SET state='running',attempts=1,
@@ -216,8 +239,20 @@ def _runner_json(path, body=None, timeout=10):
     request = urllib.request.Request(base + path,
         data=canonical_bytes(body) if body is not None else None,
         headers={"Content-Type": "application/json"} if body is not None else {})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        raw = response.read(MAX_EXPORT_BYTES + MAX_REVIEW_BYTES + 1)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(MAX_EXPORT_BYTES + MAX_REVIEW_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        code = "HERMES_RUNNER_FAILED"
+        try:
+            body = json.loads(error.read(1025))
+            if isinstance(body, dict) and body.get("error") in ERROR_CODES:
+                code = body["error"]
+        except (OSError, ValueError, TypeError):
+            pass
+        finally:
+            error.close()
+        raise ValueError(code) from None
     if len(raw) > MAX_EXPORT_BYTES + MAX_REVIEW_BYTES:
         raise ValueError("HERMES_RUNNER_FAILED")
     return json.loads(raw)

@@ -13,6 +13,9 @@ Installation and production activation evidence are recorded in
 - `hermes-broker` discovers eligible ready reports, creates immutable durable
   tasks and invokes `hermes-runner` privately. At least two distinct matches
   containing verified evidence are required. A repeated snapshot is idempotent.
+  Automatic snapshots include the versioned provider request contract. Failed
+  tasks and their ledger are immutable across contract updates; completed facts
+  are deduplicated across versions. An unchanged failed contract is not retried.
 - `hermes-runner` executes the pinned `AIAgent` in a fresh child process and
   temporary profile. Tools, memory, context files, compression, streaming and
   background review are disabled. The process has a hard deadline. No Gemini
@@ -32,6 +35,8 @@ Installation and production activation evidence are recorded in
   evidence reference. Provenance is set by the server after an actual runtime
   response and a settled broker call, never by model text or an imported packet.
   Expired leases, changed sources and invalid responses cannot publish a review.
+  The provider-facing schema uses Gemini's supported keywords; all stricter
+  string, literal and evidence constraints are enforced locally on the response.
 
 The scheduler runs without a customer export action. New reports and corrected
 hero-pool context create new snapshots; prior valid goals are passed as explicitly

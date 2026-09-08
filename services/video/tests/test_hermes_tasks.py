@@ -40,6 +40,17 @@ def response(task):
     return json.dumps(review_fixture(task["snapshot"], task["snapshot_sha256"]))
 
 
+def legacy_task(pool):
+    """The deployed v1 contract had no runtime_contract field in its snapshot."""
+    snapshot, digest, sources = tasks.build_snapshot(pool)
+    with database() as connection:
+        connection.execute("""INSERT INTO hermes_tasks
+            (id,owner_id,account_id,snapshot_sha256,snapshot,source_jobs)
+            VALUES (%s,%s,1000,%s,%s,%s)""", (uuid4(), OWNER, digest,
+                tasks.Jsonb(snapshot), tasks.Jsonb(sources)))
+    return tasks.claim_task()
+
+
 def test_snapshot_enqueues_once_and_concurrent_claims_have_one_lease(queue):
     assert tasks.enqueue_eligible() == 1
     assert tasks.enqueue_eligible() == 0
@@ -217,3 +228,53 @@ def test_lease_expiring_while_sources_are_locked_is_rechecked(queue, monkeypatch
         else:
             with database() as connection:
                 tasks.authorize_call(connection, task["token"])
+
+
+def test_corrected_contract_preserves_failed_v1_and_unknown_reservation(queue):
+    old = legacy_task(queue)
+    call_id = billed(old, known=False)
+    tasks.fail_task(old["id"], old["lease_token"], "HERMES_RUNNER_FAILED")
+    with database() as connection:
+        before = connection.execute("SELECT * FROM hermes_tasks WHERE id=%s", (old["id"],)).fetchone()
+        call_before = connection.execute("SELECT * FROM video_provider_calls WHERE id=%s", (call_id,)).fetchone()
+    allowance = budget.status()
+    assert tasks.enqueue_eligible() == 1
+    assert tasks.enqueue_eligible() == 0
+    new = tasks.claim_task()
+    assert new["id"] != old["id"] and new["snapshot_sha256"] != old["snapshot_sha256"]
+    assert new["snapshot"]["runtime_contract"] == "narma.hermes.review.v2"
+    assert {key: value for key, value in new["snapshot"].items() if key != "runtime_contract"} == old["snapshot"]
+    assert budget.status() == allowance
+    with database() as connection:
+        assert connection.execute("SELECT * FROM hermes_tasks WHERE id=%s", (old["id"],)).fetchone() == before
+        assert connection.execute("SELECT * FROM video_provider_calls WHERE id=%s", (call_id,)).fetchone() == call_before
+        assert connection.execute("SELECT count(*) AS n FROM hermes_tasks").fetchone()["n"] == 2
+
+
+def test_corrected_contract_skips_identical_successfully_reviewed_v1_facts(queue):
+    old = legacy_task(queue)
+    billed(old)
+    tasks.complete_task(old["id"], old["lease_token"], response(old), tasks.RUNTIME_REVISION)
+    allowance = budget.status()
+    assert tasks.enqueue_eligible() == 0
+    assert tasks.claim_task() is None
+    assert budget.status() == allowance
+    with database() as connection:
+        assert connection.execute("SELECT count(*) AS n FROM hermes_tasks").fetchone()["n"] == 1
+        assert connection.execute("SELECT count(*) AS n FROM video_provider_calls WHERE call_kind='hermes'").fetchone()["n"] == 1
+
+
+@pytest.mark.parametrize("value,expected", [
+    ({"error": "HERMES_UPSTREAM_CALL_FAILED"}, "HERMES_UPSTREAM_CALL_FAILED"),
+    ({"error": "private provider body"}, "HERMES_RUNNER_FAILED"),
+    ({"error": ["private"]}, "HERMES_RUNNER_FAILED"),
+])
+def test_runner_http_failures_propagate_only_fixed_categories(monkeypatch, value, expected):
+    import io
+    import urllib.error
+    def failed(*args, **kwargs):
+        raise urllib.error.HTTPError("http://hermes-runner/run", 502, "private detail", {},
+                                     io.BytesIO(json.dumps(value).encode()))
+    monkeypatch.setattr(tasks.urllib.request, "urlopen", failed)
+    with pytest.raises(ValueError, match=expected):
+        tasks._runner_json("/run", {})

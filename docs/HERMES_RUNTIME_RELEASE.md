@@ -22,8 +22,32 @@
 
 ## Production activation
 
-Not yet confirmed. The release pipeline must still build and verify the actual
-Docker runtime and network isolation, run native PostgreSQL and Chromium gates,
-then inspect server resources and complete one bounded live review through the
-shared provider ledger. Record the exact deployed source revision, workflow and
-before/after accounting here after that activation succeeds.
+The first activation of `ca680f41a1da57ac1028cd71cd5bfbba3b95f7c6`
+(workflow `34195780521`) passed the actual Docker runtime/network checks,
+Chromium mobile/desktop checks, 25 deployment tests and 312 native PostgreSQL
+tests (one optional replay test skipped). Its live provider attempt failed;
+activation rolled back to `dddac362d404ec04bfc1a384e8ad6fbb0317b7ad`.
+The existing site and replay worker remained available after rollback.
+
+Task `83576cfc-0942-44df-ba14-8da6d90bad54` is terminally failed. Provider call 9
+has unknown usage and retains its 1,200,000 micro-USD reservation. Read-only
+diagnostics confirmed the existing $10 limit, spent 124,938 and reserved
+7,200,000 micro-USD, leaving 2,675,062 available. No reservation was released.
+Server memory was sufficient, neither container was OOM-killed, and a free
+model metadata request from the existing server succeeded. The original
+generic error did not preserve a provider HTTP status, so its exact cause
+cannot be established from the retained logs.
+
+The corrective request contract `narma.hermes.review.v2` projects the JSON
+schema onto Gemini's documented subset, while keeping strict local response
+validation. Fixed-vocabulary diagnostics now distinguish provider HTTP status,
+transport errors, empty output and invalid JSON without exposing request or
+response text. A real Google SDK request with synthetic four-match input passes
+an intercepted HTTP test without a paid call.
+
+The corrected contract is part of immutable task input and receives a new
+digest. It never resets the failed task, its one-attempt limit or its ledger.
+Identical completed facts are reused across contract versions, and a repeated
+v2 snapshot cannot generate another attempt. This is one corrective release,
+not an automatic retry policy. Live activation of that release remains pending;
+record its exact source revision, workflow and before/after accounting below.

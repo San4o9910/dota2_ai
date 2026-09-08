@@ -13,7 +13,7 @@ import tempfile
 import threading
 from uuid import UUID
 
-from agent_task import REVISION
+from agent_task import REVISION, SAFE_ERROR_CODES
 
 MAX_REQUEST_BYTES = 512 * 1024
 MAX_DEADLINE_SECONDS = 180
@@ -77,12 +77,15 @@ def run_isolated(request, *, deadline=MAX_DEADLINE_SECONDS):
                 os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        if child.returncode or not output.is_file() or output.stat().st_size > 64 * 1024:
+        if not output.is_file() or output.stat().st_size > 64 * 1024:
             raise RunError("HERMES_EXECUTION_FAILED")
         try:
             result = json.loads(output.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raise RunError("HERMES_EXECUTION_FAILED") from None
+        if child.returncode:
+            code = result.get("error") if isinstance(result, dict) else None
+            raise RunError(code if code in SAFE_ERROR_CODES else "HERMES_EXECUTION_FAILED")
         if result.get("runtime_revision") != REVISION:
             raise RunError("HERMES_REVISION_MISMATCH")
         return result
@@ -137,6 +140,7 @@ class Handler(BaseHTTPRequestHandler):
             result = run_isolated(validate_request(request))
             self.respond(200, result)
         except RunError as exc:
+            print(json.dumps({"event": "hermes_runtime_failed", "code": exc.code}), flush=True)
             self.respond(exc.status, {"error": exc.code})
         except Exception:
             self.respond(500, {"error": "HERMES_EXECUTION_FAILED"})

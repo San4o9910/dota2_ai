@@ -10,10 +10,14 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from google import genai
+from google.genai import errors, types
+import httpx
+from pydantic import ValidationError
 
 from narma_video import budget, hermes_bridge, hermes_broker as broker
 from narma_video.db import database
-from test_hermes_bridge import OWNER, browser
+from test_hermes_bridge import OWNER, browser, pool_fixture, review_fixture
 
 TOKEN = 'b' * 43
 REQUEST = {'model': budget.MODEL, 'messages': [{'role': 'system', 'content': 'Return evidence-bound JSON.'},
@@ -107,6 +111,86 @@ def test_adapter_has_one_sdk_attempt(monkeypatch):
     assert observed['http_options'].timeout == 120000
 
 
+def test_real_sdk_serializes_supported_schema_and_preserves_raw_usage_without_network():
+    pool = pool_fixture()
+    pool['history'] = [deepcopy(pool['history'][i % 2]) for i in range(4)]
+    for index, row in enumerate(pool['history']):
+        row.update(job_id=str(uuid4()), match_id=str(8984479726 + index),
+            evidence=[{'id': f'event-{number}', 'type': 'death', 'time': 420 + number} for number in range(40)])
+    snapshot, digest, sources = hermes_bridge.build_snapshot(pool)
+    packet = hermes_bridge.packet_for({'id': uuid4(), 'snapshot': snapshot, 'snapshot_sha256': digest})['packet']
+    final = review_fixture(snapshot, digest)
+    captured = []
+    def respond(request):
+        # Both SDK transports are mocked. This request never reaches a provider.
+        assert request.method == 'POST'
+        assert request.url.host == 'generativelanguage.googleapis.com'
+        assert request.url.path == '/v1beta/models/' + budget.MODEL + ':generateContent'
+        assert request.headers['x-goog-api-key'] == 'synthetic-not-real'
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json=response_body(parts=[{'text': json.dumps(final, ensure_ascii=False)}]))
+    transport = httpx.MockTransport(respond)
+    provider = broker.GeminiHermesProvider.__new__(broker.GeminiHermesProvider)
+    provider.last_usage = None
+    provider.client = genai.Client(api_key='synthetic-not-real', http_options=types.HttpOptions(
+        timeout=1000, retry_options=types.HttpRetryOptions(attempts=1),
+        client_args={'transport': transport, 'trust_env': False},
+        async_client_args={'transport': transport, 'trust_env': False}))
+    request = deepcopy(REQUEST)
+    request['messages'][1]['content'] = json.dumps({'packet': packet}, ensure_ascii=False)
+    assert 9000 < len(request['messages'][1]['content'].encode()) < broker.MAX_REQUEST_BYTES
+    try:
+        result = provider.analyze(broker.validate_request(request))
+    finally:
+        provider.close()
+    assert len(captured) == 1
+    sent = captured[0]
+    config = sent['generationConfig']
+    schema = config['responseJsonSchema']
+    assert schema == broker.provider_review_schema()
+    assert schema['properties']['schema_version']['enum'] == [1]
+    assert schema['$defs']['Producer']['properties']['name']['enum'] == ['NousResearch/hermes-agent']
+    def check_keywords(node):
+        if not isinstance(node, dict):
+            return
+        assert set(node) <= broker._PROVIDER_SCHEMA_KEYS
+        for key, value in node.items():
+            if key in ('$defs', 'properties'):
+                for child in value.values():
+                    check_keywords(child)
+            elif key in ('items', 'additionalProperties'):
+                check_keywords(value)
+            elif key in ('anyOf', 'oneOf', 'prefixItems'):
+                for child in value:
+                    check_keywords(child)
+    check_keywords(schema)
+    assert config['maxOutputTokens'] == 4096 and config['candidateCount'] == 1
+    assert config['thinkingConfig'] == {'thinking_level': 'LOW'}
+    assert config['responseMimeType'] == 'application/json' and sent['serviceTier'] == 'standard'
+    assert provider.last_usage == USAGE
+    assert hermes_bridge.validate_review(broker.Review.model_validate_json(result), snapshot, digest) == final
+
+
+@pytest.mark.parametrize('change', [
+    lambda review: review.update(schema_version=2),
+    lambda review: review['patterns'][0].update(id='../not-an-evidence-id'),
+    lambda review: review['patterns'][0].update(title=''),
+    lambda review: review['patterns'][0].update(observation='x' * 501),
+])
+def test_provider_schema_projection_never_relaxes_saved_review_validation(change):
+    original = broker.Review.model_json_schema()
+    broker.provider_review_schema()
+    assert broker.Review.model_json_schema() == original
+    assert original['properties']['schema_version']['const'] == 1
+    assert 'pattern' in original['$defs']['Pattern']['properties']['id']
+    assert original['$defs']['Pattern']['properties']['observation']['maxLength'] == 500
+    snapshot, digest, _ = hermes_bridge.build_snapshot(pool_fixture())
+    review = review_fixture(snapshot, digest)
+    change(review)
+    with pytest.raises(ValidationError):
+        broker.Review.model_validate(review)
+
+
 @pytest.mark.parametrize('body', [response_body(finish='MAX_TOKENS'), response_body(parts=[{'functionCall': {'name': 'blocked'}}]),
     response_body(parts=[]), response_body(parts=[{'text': 'x' * (broker.MAX_RESPONSE_BYTES + 1)}])])
 def test_bad_provider_output_preserves_known_usage(body):
@@ -126,6 +210,51 @@ def test_unknown_or_non_text_usage_cannot_be_silently_dropped(extra):
     with pytest.raises(ValueError, match='USAGE_UNSUPPORTED|USAGE_INVALID'):
         provider.analyze(broker.validate_request(REQUEST))
     assert provider.last_usage == {'unrecognized_generate_content_usage': raw}
+
+
+def test_candidate_diagnostics_expose_only_counts_and_fixed_vocabulary(capsys):
+    secret = 'private prompt, task-token and provider-key'
+    body = response_body(finish='MAX_TOKENS', parts=[{'text': secret}, {'thought': True, 'text': secret},
+        {'thoughtSignature': secret}, {'functionCall': {'secret': secret}}, {secret: secret}])
+    provider, _ = provider_with_response(body)
+    with pytest.raises(ValueError, match='RESPONSE_INVALID'):
+        provider.analyze(broker.validate_request(REQUEST))
+    logged = capsys.readouterr().out
+    assert secret not in logged
+    event = json.loads(logged)
+    assert event == {'event': 'hermes_provider_response', 'candidate_count': 1, 'finish_reason': 'MAX_TOKENS',
+        'part_count': 5, 'part_types': ['functionCall:object', 'text:string', 'thought:boolean',
+            'thoughtSignature:string', 'unrecognized_key'], 'output_bytes': len(secret.encode())}
+    assert provider.last_usage == USAGE
+    assert broker.response_diagnostics({'candidates': [{'finishReason': secret}]})['finish_reason'] == 'unrecognized'
+
+
+@pytest.mark.parametrize('error,expected', [
+    (errors.ClientError(400, {'error': {'status': 'INVALID_ARGUMENT', 'message': 'private prompt and secret'}}),
+        {'category': 'provider_rejected', 'provider_http_status': 400, 'provider_status': 'INVALID_ARGUMENT'}),
+    (errors.ClientError(401, {'error': {'status': 'UNAUTHENTICATED', 'message': 'private prompt and secret'}}),
+        {'category': 'authentication', 'provider_http_status': 401, 'provider_status': 'UNAUTHENTICATED'}),
+    (errors.ClientError(429, {'error': {'status': 'RESOURCE_EXHAUSTED', 'message': 'private prompt and secret'}}),
+        {'category': 'rate_limited', 'provider_http_status': 429, 'provider_status': 'RESOURCE_EXHAUSTED'}),
+    (errors.ServerError(503, {'error': {'status': 'UNAVAILABLE', 'message': 'private prompt and secret'}}),
+        {'category': 'provider_unavailable', 'provider_http_status': 503, 'provider_status': 'UNAVAILABLE'}),
+    (httpx.ReadTimeout('private prompt and secret'),
+        {'category': 'timeout', 'provider_http_status': None, 'provider_status': None}),
+    (httpx.ConnectError('private prompt and secret'),
+        {'category': 'transport', 'provider_http_status': None, 'provider_status': None}),
+    (RuntimeError('private prompt and secret'),
+        {'category': 'unknown', 'provider_http_status': None, 'provider_status': None}),
+])
+def test_provider_failure_diagnostics_omit_exception_messages_and_bodies(error, expected, capsys):
+    response = broker._failure(error)
+    logged = capsys.readouterr().out
+    assert 'private prompt and secret' not in logged and b'private prompt and secret' not in response.body
+    assert json.loads(logged) == {'event': 'hermes_broker_rejected', 'code': 'HERMES_PROVIDER_UNAVAILABLE', **expected}
+
+
+def test_provider_diagnostics_do_not_log_unrecognized_status_values():
+    error = errors.ClientError(400, {'error': {'status': 'private secret', 'message': 'private secret'}})
+    assert broker.failure_diagnostics(error, 'HERMES_PROVIDER_UNAVAILABLE')['provider_status'] is None
 
 
 @pytest.fixture

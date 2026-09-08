@@ -10,6 +10,17 @@ import sys
 REVISION = "9fd44b4dfc44138b9e5d5689acb56c438364ff7b"
 MODEL = "gemini-3.8-flash"
 MAX_OUTPUT_BYTES = 32 * 1024
+SAFE_ERROR_CODES = frozenset({
+    "HERMES_UPSTREAM_INIT_FAILED", "HERMES_UPSTREAM_CALL_FAILED", "HERMES_OUTPUT_EMPTY",
+    "HERMES_OUTPUT_TOO_LARGE", "HERMES_OUTPUT_JSON_INVALID", "HERMES_RUNTIME_INVARIANT",
+    "HERMES_REVISION_MISMATCH", "HERMES_EXECUTION_FAILED",
+})
+
+
+class TaskError(Exception):
+    """Fixed operational categories; never attach model text or provider errors."""
+    def __init__(self, code):
+        self.code = code if code in SAFE_ERROR_CODES else "HERMES_EXECUTION_FAILED"
 
 
 def execute(request, profile: Path):
@@ -39,9 +50,9 @@ def execute(request, profile: Path):
 
     upstream = Path(os.environ.get("NARMA_HERMES_UPSTREAM", "/opt/hermes")).resolve()
     if not Path(run_agent.__file__).resolve().is_relative_to(upstream):
-        raise RuntimeError("wrong upstream module")
+        raise TaskError("HERMES_REVISION_MISMATCH")
     if (upstream / ".narma-upstream-revision").read_text().strip() != REVISION:
-        raise RuntimeError("wrong upstream revision")
+        raise TaskError("HERMES_REVISION_MISMATCH")
     if request is None:
         return {"runtime_revision": REVISION, "status": "ready"}
 
@@ -57,29 +68,43 @@ def execute(request, profile: Path):
         "A pattern is a cautious interpretation, not proof of a cause or player intent. "
         "When previous goals exist, use new evidence to refine a measurable next-game action."
     )
-    agent = AIAgent(
-        provider="custom", api_mode="chat_completions", model=MODEL,
-        base_url=os.environ["HERMES_BROKER_URL"], api_key=request["token"],
-        enabled_toolsets=[], disabled_toolsets=[], max_iterations=1, max_tokens=4096,
-        request_overrides={"response_format": {"type": "json_object"}},
-        skip_context_files=True, load_soul_identity=False, skip_memory=True,
-        skip_background_review=True, fallback_model=[], run_budget_seconds=170,
-        save_trajectories=False, verbose_logging=False, quiet_mode=True,
-        checkpoints_enabled=False, ephemeral_system_prompt=instructions,
-        session_id="narma-" + request["task_id"],
-    )
+    try:
+        agent = AIAgent(
+            provider="custom", api_mode="chat_completions", model=MODEL,
+            base_url=os.environ["HERMES_BROKER_URL"], api_key=request["token"],
+            enabled_toolsets=[], disabled_toolsets=[], max_iterations=1, max_tokens=4096,
+            request_overrides={"response_format": {"type": "json_object"}},
+            skip_context_files=True, load_soul_identity=False, skip_memory=True,
+            skip_background_review=True, fallback_model=[], run_budget_seconds=170,
+            save_trajectories=False, verbose_logging=False, quiet_mode=True,
+            checkpoints_enabled=False, ephemeral_system_prompt=instructions,
+            session_id="narma-" + request["task_id"],
+        )
+    except Exception:
+        raise TaskError("HERMES_UPSTREAM_INIT_FAILED") from None
     try:
         if agent.tools or agent._fallback_chain or agent._api_max_retries != 1:
-            raise RuntimeError("runtime capability invariant")
-        result = agent.run_conversation(user_message=json.dumps(
-            {"packet": request["packet"], "prior_goals": request.get("prior_goals", [])},
-            ensure_ascii=False, separators=(",", ":"), allow_nan=False,
-        ))
+            raise TaskError("HERMES_RUNTIME_INVARIANT")
+        try:
+            result = agent.run_conversation(user_message=json.dumps(
+                {"packet": request["packet"], "prior_goals": request.get("prior_goals", [])},
+                ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+            ))
+        except Exception:
+            raise TaskError("HERMES_UPSTREAM_CALL_FAILED") from None
+        if not isinstance(result, dict) or result.get("failed") or result.get("error"):
+            raise TaskError("HERMES_UPSTREAM_CALL_FAILED")
         final = result.get("final_response")
-        if not isinstance(final, str) or not final or len(final.encode()) > MAX_OUTPUT_BYTES:
-            raise ValueError("invalid response size")
-        if not isinstance(json.loads(final), dict):
-            raise ValueError("response is not a JSON object")
+        if not isinstance(final, str) or not final.strip():
+            raise TaskError("HERMES_OUTPUT_EMPTY")
+        if len(final.encode()) > MAX_OUTPUT_BYTES:
+            raise TaskError("HERMES_OUTPUT_TOO_LARGE")
+        try:
+            parsed = json.loads(final)
+        except ValueError:
+            raise TaskError("HERMES_OUTPUT_JSON_INVALID") from None
+        if not isinstance(parsed, dict):
+            raise TaskError("HERMES_OUTPUT_JSON_INVALID")
         # Evidence/schema validation and verified provenance are owned by the broker.
         return {"final_response": final, "runtime_revision": REVISION}
     finally:
@@ -98,9 +123,10 @@ def main():
         request = None if raw == b"null" else json.loads(raw)
         result = execute(request, profile)
         output.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
-    except Exception:
+    except Exception as exc:
         # Provider exceptions may contain credentials, prompts or response text.
-        output.write_text('{"error":"HERMES_EXECUTION_FAILED"}', encoding="utf-8")
+        code = exc.code if isinstance(exc, TaskError) else "HERMES_EXECUTION_FAILED"
+        output.write_text(json.dumps({"error": code}), encoding="utf-8")
         raise SystemExit(1)
 
 

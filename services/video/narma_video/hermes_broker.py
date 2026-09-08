@@ -14,7 +14,8 @@ import time
 
 from fastapi import FastAPI, Request
 from google import genai
-from google.genai import types
+from google.genai import errors, types
+import httpx
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
@@ -32,14 +33,123 @@ _FIELDS = frozenset({'model', 'messages', 'max_tokens', 'max_completion_tokens',
 _SAFE_FAILURES = frozenset({'HERMES_TOKEN_INVALID', 'HERMES_LEASE_EXPIRED', 'HERMES_SOURCE_CHANGED',
     'HERMES_REQUEST_INVALID', 'HERMES_REQUEST_TOO_LARGE', 'HERMES_MODEL_UNSUPPORTED',
     'HERMES_REQUEST_BUDGET_EXCEEDED', 'HERMES_NOT_CONFIGURED', 'HERMES_PROVIDER_RESPONSE_INVALID',
+    'HERMES_PROVIDER_SCHEMA_UNSUPPORTED',
     'VIDEO_GLOBAL_BUDGET_DISABLED', 'VIDEO_GLOBAL_BUDGET_EXCEEDED', 'VIDEO_GLOBAL_BUDGET_INVALID',
     'VIDEO_BUDGET_PRICE_POLICY_EXPIRED', 'VIDEO_REQUEST_BUDGET_EXCEEDED',
     'VIDEO_BUDGET_RECONCILIATION_REQUIRED', 'VIDEO_BUDGET_ACCOUNTING_FAILED', 'GEMINI_USAGE_UNSUPPORTED'})
+_FINISH_REASONS = frozenset({'STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION', 'OTHER', 'BLOCKLIST',
+    'PROHIBITED_CONTENT', 'SPII', 'MALFORMED_FUNCTION_CALL', 'FINISH_REASON_UNSPECIFIED',
+    'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT', 'IMAGE_RECITATION', 'NO_IMAGE',
+    'UNEXPECTED_TOOL_CALL', 'TOO_MANY_TOOL_CALLS'})
+_PART_KEYS = frozenset({'text', 'thought', 'thoughtSignature', 'functionCall', 'functionResponse',
+    'inlineData', 'fileData', 'executableCode', 'codeExecutionResult', 'videoMetadata'})
+_API_STATUSES = frozenset({'INVALID_ARGUMENT', 'FAILED_PRECONDITION', 'OUT_OF_RANGE', 'UNAUTHENTICATED',
+    'PERMISSION_DENIED', 'NOT_FOUND', 'ALREADY_EXISTS', 'RESOURCE_EXHAUSTED', 'CANCELLED',
+    'DATA_LOSS', 'UNKNOWN', 'INTERNAL', 'UNIMPLEMENTED', 'UNAVAILABLE', 'DEADLINE_EXCEEDED'})
+_PROVIDER_SCHEMA_KEYS = frozenset({'$id', '$defs', '$ref', '$anchor', 'type', 'format', 'title',
+    'description', 'enum', 'items', 'prefixItems', 'minItems', 'maxItems', 'minimum', 'maximum',
+    'anyOf', 'oneOf', 'properties', 'additionalProperties', 'required', 'propertyOrdering'})
 
 
 def authorize_call(connection, token):
     from .hermes_tasks import authorize_call as authorize
     return authorize(connection, token)
+
+
+def provider_review_schema():
+    """Gemini's documented JSON Schema subset; Review still validates the result.
+
+    responseJsonSchema supports singleton string/numeric enums, but its published
+    keyword list omits const, pattern and string-length bounds. Keep those exact
+    constraints in the local Review model and the task evidence validator.
+    https://ai.google.dev/api/generate-content#v1beta.GenerationConfig
+    """
+    def project(schema):
+        if not isinstance(schema, dict):
+            return schema  # Boolean additionalProperties is supported.
+        result = {}
+        for key, value in schema.items():
+            if key == 'const':
+                if type(value) not in (str, int, float):
+                    raise ValueError('HERMES_PROVIDER_SCHEMA_UNSUPPORTED')
+                result['enum'] = [value]
+            elif key in ('pattern', 'minLength', 'maxLength'):
+                continue
+            elif key not in _PROVIDER_SCHEMA_KEYS:
+                raise ValueError('HERMES_PROVIDER_SCHEMA_UNSUPPORTED')
+            elif key in ('$defs', 'properties'):
+                # These are maps of schema names, not schema keyword objects.
+                result[key] = {name: project(child) for name, child in value.items()}
+            elif key in ('anyOf', 'oneOf', 'prefixItems'):
+                result[key] = [project(child) for child in value]
+            elif key in ('items', 'additionalProperties'):
+                result[key] = project(value)
+            else:
+                result[key] = value
+        return result
+    return project(Review.model_json_schema())
+
+
+def response_diagnostics(raw):
+    """Only fixed vocabulary and bounded counts; no provider text or field values."""
+    candidates = raw.get('candidates')
+    first = candidates[0] if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict) else {}
+    finish = first.get('finishReason')
+    content = first.get('content')
+    parts = content.get('parts') if isinstance(content, dict) else None
+    kinds, output_bytes = set(), 0
+    if isinstance(parts, list):
+        for part in parts:
+            if not isinstance(part, dict):
+                kinds.add('invalid_part')
+                continue
+            for key, value in part.items():
+                if key not in _PART_KEYS:
+                    kinds.add('unrecognized_key')
+                    continue
+                kind = ('null' if value is None else 'boolean' if type(value) is bool else
+                        'string' if isinstance(value, str) else 'object' if isinstance(value, dict) else
+                        'array' if isinstance(value, list) else 'number' if type(value) in (int, float) else 'other')
+                kinds.add(key + ':' + kind)
+            if isinstance(part.get('text'), str) and not part.get('thought'):
+                output_bytes += len(part['text'].encode('utf-8', errors='replace'))
+    return {'candidate_count': min(len(candidates), 10000) if isinstance(candidates, list) else None,
+        'finish_reason': finish if isinstance(finish, str) and finish in _FINISH_REASONS else
+            'missing' if finish is None else 'unrecognized',
+        'part_count': min(len(parts), 10000) if isinstance(parts, list) else None,
+        'part_types': sorted(kinds), 'output_bytes': min(output_bytes, 1024 * 1024)}
+
+
+def failure_diagnostics(error, code):
+    """Provider exception messages and bodies can contain private request data."""
+    status = (error.code if isinstance(error, errors.APIError) else
+              error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None)
+    status = status if type(status) is int and 100 <= status <= 599 else None
+    api_status = error.status if isinstance(error, errors.APIError) else None
+    api_status = api_status if isinstance(api_status, str) and api_status in _API_STATUSES else None
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):
+        category = 'timeout'
+    elif isinstance(error, (ConnectionError, httpx.TransportError)):
+        category = 'transport'
+    elif status == 429:
+        category = 'rate_limited'
+    elif status in (401, 403):
+        category = 'authentication'
+    elif status is not None and status >= 500:
+        category = 'provider_unavailable'
+    elif status is not None and status >= 400:
+        category = 'provider_rejected'
+    elif 'BUDGET' in code or code == 'GEMINI_USAGE_UNSUPPORTED':
+        category = 'budget'
+    elif code in ('HERMES_NOT_CONFIGURED', 'HERMES_PROVIDER_SCHEMA_UNSUPPORTED'):
+        category = 'configuration'
+    elif code == 'HERMES_LEASE_EXPIRED':
+        category = 'lease'
+    elif code in _SAFE_FAILURES:
+        category = 'validation'
+    else:
+        category = 'unknown'
+    return {'category': category, 'provider_http_status': status, 'provider_status': api_status}
 
 
 def _plain_content(value):
@@ -108,6 +218,8 @@ class GeminiHermesProvider:
         key = os.environ.get('GEMINI_API_KEY', '')
         if not key or os.environ.get('GEMINI_MODEL', '') != budget.MODEL:
             raise ValueError('HERMES_NOT_CONFIGURED')
+        # Detect future schema changes before any reservation or provider call.
+        provider_review_schema()
         self.last_usage = None
         self.client = genai.Client(api_key=key, http_options=types.HttpOptions(
             timeout=120000, retry_options=types.HttpRetryOptions(attempts=1)))
@@ -125,7 +237,7 @@ class GeminiHermesProvider:
                 temperature=request['temperature'], top_p=request['top_p'], stop_sequences=request['stop'],
                 thinking_config=types.ThinkingConfig(thinking_level='low'),
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                response_mime_type='application/json', response_json_schema=Review.model_json_schema(),
+                response_mime_type='application/json', response_json_schema=provider_review_schema(),
                 should_return_http_response=True))
         body = response.sdk_http_response.body
         if not body or len(body) > 1024 * 1024:
@@ -136,6 +248,7 @@ class GeminiHermesProvider:
             raise ValueError('HERMES_PROVIDER_RESPONSE_INVALID') from None
         if not isinstance(raw, dict):
             raise ValueError('HERMES_PROVIDER_RESPONSE_INVALID')
+        print(json.dumps({'event': 'hermes_provider_response', **response_diagnostics(raw)}), flush=True)
         usage = raw.get('usageMetadata')
         # Unknown fields remain visible to settlement; never let the SDK silently
         # discard a new billable counter or refund an uncertain attempt.
@@ -213,13 +326,13 @@ def _failure(error):
         status = 403  # Non-retryable: this task has consumed its one attempt.
     elif 'BUDGET' in code:
         status = 429
-    elif code == 'HERMES_NOT_CONFIGURED':
+    elif code in ('HERMES_NOT_CONFIGURED', 'HERMES_PROVIDER_SCHEMA_UNSUPPORTED'):
         status = 503
     else:
         status = 502
     # Neither provider bodies, prompts, task credentials nor exception strings are
     # returned or logged. Runtime failures remain an optional-coaching failure.
-    print(json.dumps({'event': 'hermes_broker_rejected', 'code': code}), flush=True)
+    print(json.dumps({'event': 'hermes_broker_rejected', 'code': code, **failure_diagnostics(error, code)}), flush=True)
     return JSONResponse({'error': {'message': code, 'type': 'invalid_request_error' if status < 500 else 'server_error',
         'param': None, 'code': code}}, status_code=status, headers={'Cache-Control': 'no-store'})
 

@@ -89,7 +89,9 @@ def main():
             except RunError as exc:
                 if mode == "valid":
                     raise
-                assert exc.code == ("HERMES_DEADLINE_EXCEEDED" if mode == "deadline" else "HERMES_EXECUTION_FAILED")
+                assert exc.code == {"deadline": "HERMES_DEADLINE_EXCEEDED",
+                                    "malformed": "HERMES_OUTPUT_JSON_INVALID",
+                                    "provider_error": "HERMES_UPSTREAM_CALL_FAILED"}[mode]
             assert len(CALLS) == 1, f"{mode}: unexpected auxiliary/retry provider calls: {len(CALLS)}"
             # No task profile persists, including after kill and provider error.
             assert not {p for p in set(os.listdir(tempfile.gettempdir())) - profiles_before
