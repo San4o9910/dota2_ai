@@ -14,7 +14,7 @@ PATH = Path(__file__).resolve().parents[3] / 'services/hermes/fetch_source.py'
 spec = importlib.util.spec_from_file_location('narma_hermes_source', PATH)
 source = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(source)
-TOKEN = 'unit_test_only_' + 'x' * 30
+TOKEN = 'unit_test_only.header-body_payload.signature=+' + 'x' * 30
 
 
 def result(code=0, output=b'', error=b''):
@@ -55,6 +55,17 @@ class HermesSourceTest(unittest.TestCase):
             self.assertTrue(environment['GIT_CONFIG_VALUE_0'].startswith('AUTHORIZATION: basic '))
             self.assertEqual({path.name for path in cache.iterdir()}, {'HEAD', 'config'})
             self.assertNotIn(TOKEN, (cache / 'config').read_text())
+
+    def test_empty_oversized_and_control_bearing_credentials_never_reach_git(self):
+        for value in ('', 'short', 'x' * 16385, 'x' * 30 + '\nInjected',
+                      'x' * 30 + '\x00', 'x' * 30 + ' space', 'x' * 30 + '\u0430'):
+            with self.subTest(value_kind=repr(value[:8])), tempfile.TemporaryDirectory() as directory:
+                cache, token = self.fixture(directory)
+                token.write_text(value)
+                with patch.object(source, 'identity', return_value=False), patch.object(source, 'git') as git:
+                    with self.assertRaisesRegex(source.SourceError, 'HERMES_SOURCE_AUTH_REQUIRED'):
+                        source.fetch(cache, token)
+                git.assert_not_called()
 
     def test_429_waits_one_minute_then_makes_one_authenticated_retry(self):
         with tempfile.TemporaryDirectory() as directory:

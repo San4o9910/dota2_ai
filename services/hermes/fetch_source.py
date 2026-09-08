@@ -100,7 +100,10 @@ def fetch(cache, token_path):
     if identity(cache):
         return
     token = token_path.read_text().strip()
-    if not re.fullmatch('[A-Za-z0-9_]{20,16384}', token):
+    # GitHub tokens are opaque and may contain punctuation (for example in a
+    # signed token). Only bound the value and reject whitespace/control bytes;
+    # Basic authorization encodes it before placing it in the child environment.
+    if not 20 <= len(token) <= 16384 or any(not 33 <= ord(char) <= 126 for char in token):
         raise SourceError('HERMES_SOURCE_AUTH_REQUIRED')
     environment = clean_environment()
     authorization = base64.b64encode(('x-access-token:' + token).encode()).decode()
