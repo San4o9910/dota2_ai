@@ -53,7 +53,7 @@ async function session() {
   $('loading').hidden=true; $('workspace').hidden=!state.user; $('auth').hidden=!!state.user; $('logout').hidden=!state.user;
   if(!state.user) {
     state.pool=null; state.poolRequest++; state.poolDrafts.clear(); state.poolJournalOpen.clear(); state.poolSignature=''; state.poolVisible=20;
-    state.profile=null; state.selected=null; state.detail=null; state.showArchived=false; $('result').hidden=true; $('pool-content').hidden=true; $('pool-hermes').replaceChildren();
+    state.profile=null; state.selected=null; state.detail=null; state.showArchived=false; $('result').hidden=true; $('pool-content').hidden=true;
     $('pool-hero').replaceChildren(new Option('Все герои','')); $('pool-position').value=''; $('pool-period').value='all'; $('pool-favorites-only').checked=false; $('pool-refresh').disabled=false;
     $('pool-status').textContent=''; $('pool-content').setAttribute('aria-busy','false');
     $('auth-title').textContent=state.setup?'Создай свой аккаунт':'Вход в NARMA VISION';
@@ -189,7 +189,6 @@ function updateMoment() {
   const sources=new Map((data.gold?.sources??[]).map(source=>[source.key,source.label]));
   if(bin) { const parts=Object.entries(bin.by_source??{}).filter(([,amount])=>finite(amount)&&amount>0).map(([key,amount])=>`${sources.get(key)??key}: ${num(amount)}`); target.append(node('p',parts.length?parts.join(' · '):'Дохода в журнале за эту минуту нет.','help')); }
   if(!pace&&!bin) target.append(node('p','Для этой минуты подробных счётчиков нет. Снимок общей статистики указан под шкалой времени.','help'));
-  for(const card of $('item-cards').children) card.classList.toggle('item-selected',finite(Number(card.dataset.time))&&Math.abs(Number(card.dataset.time)-state.time)<1);
 }
 function itemGoalKey(item) { const player=displayedReport()?.player??{}; return `narma.item-goal.v1:${player.account_id??'unknown'}:${player.hero??'unknown'}:${item.item}`; }
 function readGoal(item) { try { const value=localStorage.getItem(itemGoalKey(item)); return value&&/^\d{1,3}:[0-5]\d$/.test(value)?value:''; } catch { return ''; } }
@@ -210,12 +209,19 @@ function itemIcon(value) {
 }
 function renderItems() {
   const report=displayedReport(), data=insight(), provided=Array.isArray(data.items), items=provided?data.items:(report.inventory??[]).filter(entry=>finite(entry.time)).map((entry,index)=>({id:`legacy-${index}`,item:entry.item,label:itemName(entry.item),time:entry.time,event_id:entry.event_id,acquisition:'purchase',timing:{label:'Без эталона',basis:'Нет сопоставимого ориентира по герою, роли и рейтингу.'},realization:{note:'В этом отчёте нет данных о доставке и применении предмета.'}}));
-  const rail=$('item-rail'), cards=$('item-cards'); rail.replaceChildren(); cards.replaceChildren(); $('item-count').textContent=`${items.length} предметов`;
+  const rail=$('item-rail'), cards=$('item-cards'); rail.replaceChildren(); cards.replaceChildren(); rail.setAttribute('role','group'); rail.setAttribute('aria-label','Выбрать предмет'); $('item-count').textContent=`${items.length} предметов`;
   if(!items.length) { cards.append(node('p','В этом отчёте нет подтверждённых покупок ключевых предметов.','muted')); return; }
+  // Keep each card's draft and expanded details while switching items. Selection
+  // belongs to this render only, so another replay or archive starts at its first item.
+  const selectItem=index=>{
+    for(const [position,card] of Array.from(cards.children).entries()) card.hidden=position!==index;
+    for(const [position,chip] of Array.from(rail.children).entries()) chip.setAttribute('aria-pressed',String(position===index));
+  };
   for(const [index,item] of items.entries()) {
-    const label=item.label??itemName(item.item), card=node('article',undefined,'item-card'); card.dataset.time=String(item.time);
-    const chip=timeButton(item.time,label,'item-chip'); chip.prepend(itemIcon(item.item)); rail.append(chip);
-    const heading=node('div',undefined,'item-heading'), identity=node('div',undefined,'item-identity'); identity.append(itemIcon(item.item),node('h4',label)); heading.append(identity); card.append(heading);
+    const label=item.label??itemName(item.item), card=node('article',undefined,'item-card'); card.dataset.time=String(item.time); card.id=`item-card-${index}`; card.hidden=index!==0;
+    const chip=node('button',`${stamp(item.time)} · ${label}`,'item-chip'); chip.type='button'; chip.setAttribute('aria-pressed',String(index===0)); chip.setAttribute('aria-controls',card.id);
+    chip.addEventListener('click',()=>{selectItem(index);if(finite(item.time)) seekTime(item.time);}); chip.prepend(itemIcon(item.item)); rail.append(chip);
+    const heading=node('div',undefined,'item-heading'), identity=node('div',undefined,'item-identity'), title=node('h4',label); title.id=`item-title-${index}`; card.setAttribute('aria-labelledby',title.id); identity.append(itemIcon(item.item),title); heading.append(identity); card.append(heading);
     const milestones=node('dl',undefined,'item-milestones');
     for(const [title,value] of [[item.acquisition==='inventory'?'Первое появление':'Покупка',item.time],['Первое применение',item.realization?.first_use_time]]) {
       const row=node('div'), amount=node('dd');
@@ -341,13 +347,28 @@ function renderEvents() {
   }
   if(!list.childElementCount) list.append(node('p','Таких событий в журнале нет.','empty'));
 }
+function renderHeroHeader(report) {
+  const target=$('report-hero'); target.replaceChildren(); target.hidden=!report;
+  if(!report) return;
+  const hero=report.player?.hero, match=typeof hero==='string'&&/^npc_dota_hero_([a-z0-9_]{1,80})$/.exec(hero);
+  const label=match?heroName(hero):'Герой не определён', portrait=node('span',undefined,'report-portrait'), fallback=node('span',match?label.slice(0,2).toUpperCase():'—','report-portrait-fallback');
+  portrait.setAttribute('aria-hidden','true'); portrait.append(fallback);
+  if(match) {
+    const picture=node('img'); picture.alt=''; picture.width=256; picture.height=144; picture.decoding='async'; picture.referrerPolicy='no-referrer'; picture.hidden=true;
+    picture.addEventListener('load',()=>{picture.hidden=false;fallback.hidden=true;});
+    picture.addEventListener('error',()=>{picture.hidden=true;fallback.hidden=false;});
+    picture.src=`https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/${match[1]}.png`; portrait.append(picture);
+  }
+  target.append(portrait,node('h3',label,'report-hero-name'));
+}
 function renderDetail() {
   const detail=state.detail; if(!detail) return; const job=detail.replay, report=state.showArchived&&detail.archived_report?.report?detail.archived_report.report:detail.report;
   $('result').hidden=false; $('result-title').textContent=job.match_id?`Матч ${job.match_id}`:job.filename; $('result-state').textContent=labels[job.state]??job.state;
-  $('result-player').textContent=report?`${report.player.nickname} · ${heroName(report.player.hero)} · ${report.player.team==='radiant'?'Radiant':'Dire'}${report.outcome==='win'?' · Победа':report.outcome==='loss'?' · Поражение':''}`:job.nickname;
+  $('result-player').textContent=report?`${report.player.nickname} · ${report.player.team==='radiant'?'Radiant':'Dire'}${report.outcome==='win'?' · Победа':report.outcome==='loss'?' · Поражение':''}`:job.nickname;
   $('analysis-progress').hidden=job.state!=='processing'; $('analysis-progress').value=job.progress??0;
   $('result-status').textContent=job.state==='failed'?(failures[job.failure_code]??'Не удалось завершить разбор этого реплея. Повтори загрузку полного файла .dem.'):job.state==='queued'?'Реплей загружен. Ожидаем начало разбора.':job.state==='processing'?`Читаем события матча и готовим разбор · ${num(job.progress)}%`:job.state==='uploading'?'Реплей ещё загружается.':report?`Полный матч · ${stamp(report.metrics?.duration_seconds)} · Разбор закреплённого игрока`:'Результат ещё не получен.';
   $('report-body').hidden=!report;
+  renderHeroHeader(report);
   const archive=$('previous-report-toggle'); archive.hidden=!detail.archived_report?.report||detail.report_is_previous===true; archive.textContent=state.showArchived?'Вернуться к текущему разбору':'Предыдущий тренерский разбор'; archive.setAttribute('aria-pressed',String(state.showArchived));
   $('previous-report-note').hidden=!(state.showArchived||detail.report_is_previous||report?.coaching?.origin==='previous_report');
   $('previous-report-note').textContent=state.showArchived||detail.report_is_previous?'Показан сохранённый предыдущий разбор целиком, с его исходными событиями и таймкодами.':report?.coaching?.origin==='previous_report'?'Сохранён предыдущий тренерский комментарий: обновить его в этом запуске не удалось.':'';
@@ -403,7 +424,6 @@ async function loadPool() {
     const data=await api('/api/hero-pool?'+poolQuery());
     if(request!==state.poolRequest||!state.user) return;
     state.pool=data; renderPool(); $('pool-status').textContent='';
-    void api('/api/hermes').then(hermes=>{ if(request===state.poolRequest) renderPoolHermes(hermes); }).catch(()=>{ if(request===state.poolRequest) { $('pool-hermes').hidden=false; $('pool-hermes').replaceChildren(node('h3','Hermes'),node('p','Статус подключения сейчас недоступен.','help')); } });
   } catch(error) {
     if(request!==state.poolRequest) return;
     state.pool=null; $('pool-content').hidden=true; $('pool-status').textContent=`Не удалось открыть пул героев. ${error.message} Нажми «Обновить пул», чтобы повторить.`;
@@ -446,7 +466,6 @@ function renderPool() {
   const reflections=(data.history??[]).filter(match=>match.reflection), reflectionCounts=Object.keys(poolReflectionLabels).map(key=>`${reflections.filter(match=>match.reflection===key).length} · ${poolReflectionLabels[key].toLowerCase()}`);
   $('pool-practice-summary').textContent=reflections.length?`Личные проверки: ${reflectionCounts.join(' · ')}. Это твоя самооценка по выбранному фокусу, отдельно от показателей реплея.`:'Выбери фокус и отметь после игры, получилось ли его выполнить. Личная проверка помогает связать решения с практикой.';
   renderPoolRoster(); renderPoolTrend(); renderPoolPatterns(); renderPoolGoals(); renderPoolMatches();
-  if(data.hermes) renderPoolHermes(data.hermes);
 }
 function renderPoolRoster() {
   const target=$('pool-roster'); target.replaceChildren(); const heroes=state.pool.heroes??[];
@@ -591,14 +610,6 @@ function renderPoolJournal(row,match) {
     finally {for(const control of [focus,reflection,note,save])if(control.isConnected)control.disabled=readOnly;}
   });
   form.append(fields,noteLabel,note,help,save,status);details.append(summary,form);row.append(details);
-}
-function renderPoolHermes(data) {
-  const target=$('pool-hermes'); target.hidden=false; target.replaceChildren(node('h3',data.runtime_connected?'Hermes':'Hermes не подключён'));
-  target.append(node('p',data.runtime_connected?'Статус подключения подтверждён сервером.':'Автоматическое наблюдение Hermes пока не запущено. Паттерны выше рассчитаны по сохранённым реплеям.','help'));
-  if(data.stage==='offline_bridge') {
-    const exportButton=node('button','Скачать пакет для Hermes','quiet'); exportButton.type='button'; exportButton.addEventListener('click',async()=>{ exportButton.disabled=true; try { const result=await api('/api/hermes/exports','POST',{}), blob=new Blob([JSON.stringify(result.packet,null,2)],{type:'application/json'}), url=URL.createObjectURL(blob), link=node('a'); link.href=url; link.download='narma-hermes-'+result.export_id+'.json'; document.body.append(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); $('pool-status').textContent='Пакет для внешнего разбора подготовлен.'; } catch(error) { $('pool-status').textContent=error.message; } finally { exportButton.disabled=false; } }); target.append(exportButton);
-  }
-  if(data.last_review) target.append(node('p',`Последний импорт рекомендаций: ${poolDate(data.last_review.created_at)}. Источник: внешний разбор; запуск Hermes не подтверждён.`,'help'));
 }
 for(const id of ['pool-period','pool-hero','pool-position','pool-favorites-only']) $(id).addEventListener('change',()=>{state.poolVisible=20;void loadPool();});
 $('pool-refresh').addEventListener('click',()=>void loadPool());

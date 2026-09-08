@@ -41,6 +41,9 @@ const report={
 };
 const heroContext={hero:'npc_dota_hero_necrolyte',label:'Necrophos',position:2,position_label:'Позиция 2 · указана тобой',summary:'У Necrophos свой план на затяжной бой.',abilities:[{name:'necrolyte_death_pulse',label:'Death Pulse',casts:42,first_time:-5,last_time:4600}],focus:[{title:'Death Pulse в эпизоде',observation:'Способность записана в журнале.',advice:'Проверь, кому помогло применение.',evidence_ids:['death-1']}],training_plan:[{id:'hero-next',title:'План за Necrophos',action:'Проверь применение Death Pulse в одном эпизоде.',measure:'Найди эпизод и оцени результат.',evidence_ids:['death-1']}],limits:['Число применений не доказывает качество решения.'],sources:[{title:'Necrophos · Dota 2',url:'https://www.dota2.com/hero/necrophos'},{title:'Unsafe link',url:'javascript:alert(1)'}]};
 const itemImageUrl='https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/radiance.png';
+const blinkImageUrl='https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/blink.png';
+const heroImageUrl='https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/necrolyte.png';
+report.insights.items.push({id:'key-2',item:'item_blink',label:'Blink',time:1300,acquisition:'purchase',timing:{label:'Без эталона'},first_hero_inventory_time:1310,first_active_inventory_time:1310,realization:{status:'used_soon',observed_seconds:120,first_use_time:1330,delay_seconds:30,casts:2,kills:1,assists:0,deaths:0,evidence_ids:[]}});
 const itemImage=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
 // Synthetic dense timeline: enough distinct minutes to exercise full match visuals.
 const syntheticDuration=report.metrics.duration_seconds;
@@ -76,7 +79,7 @@ try {
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/*',async route=>{
       const url=route.request().url();
-      if(url===itemImageUrl) { if(width===1440) await route.fulfill({contentType:'image/png',body:itemImage}); else await route.abort(); }
+      if(url===itemImageUrl||url===blinkImageUrl||url===heroImageUrl) { if(width===1440) await route.fulfill({contentType:'image/png',body:itemImage}); else await route.abort(); }
       else if(new URL(url).origin!==origin) {externalRequests.push(url);await route.abort();}
       else await route.fallback();
     });
@@ -120,6 +123,7 @@ try {
     await page.getByRole('button',{name:'Загрузить и разобрать'}).click();
     await page.getByRole('heading',{name:'Матч 8984479726',exact:true}).waitFor();
     await page.getByText('17 / 16 / 20',{exact:true}).waitFor();
+    if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-hero-header.png`)});
     assert.equal(await page.locator('#nickname-field').isHidden(),true);
     assert.equal(await page.locator('#timeline-value').textContent(),'78:41');
     await page.locator('#economy-heading').scrollIntoViewIfNeeded();
@@ -153,7 +157,9 @@ try {
     assert.equal(await page.locator('#farm-chart .chart-cursor').getAttribute('x1'),await page.locator('#xp-chart .chart-cursor').getAttribute('x1'));
     if(screenshotDir) await page.locator('[aria-labelledby="income-heading"]').screenshot({path:path.join(screenshotDir,`portal-${width}-income.png`)});
     assert.equal(await page.locator('#next-game-plan .training-card').count(),1);
-    assert.equal(await page.locator('#item-cards .item-card').count(),1);
+    assert.equal(await page.locator('#item-cards .item-card:visible').count(),1);
+    assert.equal(await page.locator('#item-rail .item-chip').count(),2);
+    assert.equal(await page.locator('#item-rail .item-chip[aria-pressed=true]').textContent(),'11:40 · Radiance');
     await page.getByRole('heading',{name:'Разбор за Necrophos',exact:true}).waitFor();
     assert.match(await page.locator('#hero-context').textContent(),/Позиция 2 · указана тобой/);
     assert.match(await page.locator('#hero-context').textContent(),/Death Pulse42 применений−0:05 — 76:40/);
@@ -173,14 +179,31 @@ try {
     await page.locator('.item-chip').first().click();
     assert.equal(await page.locator('#timeline-value').textContent(),'11:40');
     assert.match(await page.locator('#income-value').textContent(),/1\s?000/);
-    await page.getByText('Сравнить со своей целью',{exact:true}).click();
-    await page.getByLabel('Личная цель, мин:сек',{exact:true}).fill('10:00');
+    await itemCard.getByText('Сравнить со своей целью',{exact:true}).click();
+    await itemCard.getByLabel('Личная цель, мин:сек',{exact:true}).fill('10:00');
+    const blinkChip=page.locator('#item-rail .item-chip').nth(1);
+    await blinkChip.focus(); await blinkChip.press('Enter');
+    assert.equal(await blinkChip.getAttribute('aria-pressed'),'true');
+    assert.equal(await page.locator('#item-rail .item-chip[aria-pressed=true]').count(),1);
+    assert.equal(await page.locator('#item-cards .item-card:visible').count(),1);
+    const selectedCard=page.locator('#item-cards .item-card:visible');
+    assert.equal(await selectedCard.locator('h4').textContent(),'Blink');
+    assert.equal(await page.locator('#timeline-value').textContent(),'21:40');
+    const blinkTop=await blinkChip.boundingBox(); assert.ok(blinkTop&&blinkTop.y>=0&&blinkTop.y<1000,'Selecting an item keeps the item rail in view.');
+    assert.equal(await selectedCard.getByRole('button',{name:'Первое применение: 22:10',exact:true}).textContent(),'22:10');
+    const singleCardLayout=await page.locator('#item-cards').evaluate(element=>({width:element.getBoundingClientRect().width,card:element.querySelector('.item-card:not([hidden])').getBoundingClientRect().width}));
+    assert.ok(Math.abs(singleCardLayout.width-singleCardLayout.card)<1,'The selected item fills the available row.');
+    await page.getByRole('button',{name:'10:00 · Смерть',exact:true}).first().click();
+    assert.equal(await selectedCard.locator('h4').textContent(),'Blink','Seeking another event does not replace the chosen item.');
+    await page.locator('#item-rail .item-chip').first().click();
+    assert.equal(await itemCard.getByLabel('Личная цель, мин:сек',{exact:true}).inputValue(),'10:00','Unsaved goals survive switching items.');
+    assert.equal(await itemCard.locator('.item-goal').getAttribute('open'),'');
     await page.getByRole('button',{name:'Применить',exact:true}).click();
     await page.getByText('Поздний · личная цель',{exact:true}).waitFor();
-    assert.match(await page.locator('.item-timing').textContent(),/не с другими игроками/);
+    assert.match(await itemCard.locator('.item-timing').textContent(),/не с другими игроками/);
     if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-items.png`)});
     await page.getByRole('button',{name:'Убрать цель',exact:true}).click();
-    await page.getByText('Без эталона',{exact:true}).waitFor();
+    await itemCard.getByText('Без эталона',{exact:true}).waitFor();
     assert.equal(await page.locator('#income-chart .chart-cursor').getAttribute('x1'),await page.locator('#xp-chart .chart-cursor').getAttribute('x1'));
     const axe=dependency('axe-core'); await page.addScriptTag({content:axe.source});
     const accessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
@@ -189,20 +212,24 @@ try {
     const originalItemId=report.insights.items[0].item;
     report.insights.items[0].item='item_../../foreign';
     await page.getByRole('button',{name:'Обновить',exact:true}).click();
-    await page.waitForFunction(()=>document.querySelectorAll('#item-cards .item-image').length===0);
-    assert.equal(await page.locator('#item-rail .item-image').count(),0,'Malformed item identifiers cannot create external image URLs.');
+    await page.waitForFunction(()=>document.querySelector('#item-cards .item-card:not([hidden]) .item-image')===null);
+    assert.equal(await page.locator('#item-rail .item-chip').first().locator('.item-image').count(),0,'Malformed item identifiers cannot create external image URLs.');
     report.insights.items[0].item=originalItemId;
     await page.getByRole('button',{name:'Обновить',exact:true}).click();
-    await page.waitForFunction(()=>document.querySelectorAll('#item-cards .item-image').length===1);
+    await page.waitForFunction(()=>document.querySelectorAll('#item-cards .item-image').length===2);
+    await page.locator('#item-rail .item-chip').nth(1).click();
     await page.getByRole('button',{name:'Предыдущий тренерский разбор',exact:true}).click();
     await page.getByRole('heading',{name:'Сохранённый эпизод',exact:true}).waitFor();
+    assert.equal(await page.locator('#item-cards .item-card:visible h4').textContent(),'Radiance','An archived report starts with its own first item.');
     assert.match(await page.locator('#hero-context').textContent(),/Контекст сохранённого разбора/);
     assert.match(await page.locator('#hero-context .hero-abilities').textContent(),/7 применений/);
     assert.match(await page.locator('#metrics').textContent(),/9 \/ 16 \/ 20/);
     await page.getByRole('button',{name:'8:20 · Смерть',exact:true}).click();
     assert.equal(await page.locator('#timeline-value').textContent(),'8:20');
     assert.equal(await page.locator('#events [data-evidence-id=old-death]').count(),1);
+    await page.locator('#item-rail .item-chip').nth(1).click();
     await page.getByRole('button',{name:'Вернуться к текущему разбору',exact:true}).click();
+    assert.equal(await page.locator('#item-cards .item-card:visible h4').textContent(),'Radiance','Current-report selection never inherits the archived selection.');
     assert.equal(await page.locator('#events [data-evidence-id=old-death]').count(),0);
     legacy=true; await page.getByRole('button',{name:'Обновить',exact:true}).click();
     await page.getByText('В этом отчёте нет разбивки золота по источникам. Изменение ценности предметов показано выше.',{exact:true}).waitFor();
@@ -219,7 +246,8 @@ try {
     assert.match(await page.locator('#pool-coverage').textContent(),/нет даты игры/);
     assert.equal(await page.locator('#pool-trend-chart .pool-chart-line').count(),0);
     assert.equal(await page.locator('#pool-patterns img').count(),0);
-    await page.getByRole('heading',{name:'Hermes не подключён',exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:'Скачать пакет для Hermes',exact:true}).count(),0);
+    assert.equal(await page.getByRole('heading',{name:'Hermes не подключён',exact:true}).count(),0);
     await page.getByRole('button',{name:'Избранное: Necrophos, 2 · Мидер',exact:true}).click();
     await page.locator('#pool-status').filter({hasText:'добавлены в избранное'}).waitFor();
     await page.getByLabel('Только избранные герой и позиция',{exact:true}).check();

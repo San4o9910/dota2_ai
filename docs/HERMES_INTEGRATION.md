@@ -28,7 +28,11 @@ Valid references establish **where an interpretation points**, not whether its p
 
 ## Operator workflow with the real Hermes runtime
 
-1. Sign in to Narma Vision and download a packet from the pool's Hermes panel. The resulting file is the full `/exports` response, including `export_id` and `packet`.
+1. Sign in to Narma Vision and create a packet through the authenticated
+   `POST /api/hermes/exports` API. Save its full response, including `export_id`
+   and `packet`. The customer-facing pool no longer displays runtime status or
+   an export button; this is an operator integration contract, not a customer
+   workflow. Creating a packet does not run Hermes.
 2. On an independently operated Hermes installation, pin an inspected upstream revision. Use a disposable isolated execution environment and a separate profile; it must have no Narma credentials, database access, production mount or messaging integrations. Give it only the exported packet and its configured model provider.
 3. Invoke the real upstream library using its supported checkout environment. The following example is an operator-run integration recipe, not code called by the site. It has not been exercised against a live provider in this release. It incurs the operator's separately configured inference cost; run it only under a provider-enforced spend cap. Do not give Hermes the current Narma Gemini key, bypass its ledger or reset its cap.
 
