@@ -1,0 +1,24 @@
+name: Hermes runtime read-only diagnostic
+on:
+  push:
+    branches: [codex/replay-map-hardening-8ea829a]
+    paths: [.github/workflows/hermes-support.yml, ops/hermes_inspect.py]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: timeweb-pilot-deployment
+  cancel-in-progress: false
+jobs:
+  inspect:
+    if: github.repository == 'San4o9910/dota2_ai' && github.ref == 'refs/heads/codex/replay-map-hardening-8ea829a'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Read stopped runtime diagnostics and existing provider accounting
+        env:
+          TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+        run: python3 ops/hermes_inspect.py
