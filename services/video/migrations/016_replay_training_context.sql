@@ -37,9 +37,13 @@ BEGIN
         -- bidirectional position triggers intentionally stop when nested, so
         -- seed the legacy projection explicitly from the resulting role.
         -- Existing manual notes, including a cleared role, remain untouched.
-        INSERT INTO hero_pool_match_notes(owner_id,account_id,match_id,position)
-        VALUES (NEW.owner_id,NEW.account_id,NEW.match_id,captured_position)
-        ON CONFLICT(owner_id,account_id,match_id) DO NOTHING;
+        -- Unknown roles need no reflection row: completed replay facts alone
+        -- must not manufacture a player note (including legacy uploads).
+        IF captured_position IS NOT NULL THEN
+            INSERT INTO hero_pool_match_notes(owner_id,account_id,match_id,position)
+            VALUES (NEW.owner_id,NEW.account_id,NEW.match_id,captured_position)
+            ON CONFLICT(owner_id,account_id,match_id) DO NOTHING;
+        END IF;
     END IF;
     RETURN NEW;
 END $$;

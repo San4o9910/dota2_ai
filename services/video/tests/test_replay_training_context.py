@@ -8,6 +8,7 @@ import time
 from uuid import uuid4
 
 import psycopg
+from psycopg.types.json import Jsonb
 import pytest
 from pydantic import ValidationError
 
@@ -147,6 +148,43 @@ def test_existing_manual_match_role_wins_over_upload_even_when_cleared(browser, 
         assert connection.execute('SELECT position FROM hero_pool_matches WHERE owner_id=%s', (OWNER,)).fetchone()['position'] == manual_position
         assert connection.execute('SELECT position,note FROM hero_pool_match_notes WHERE owner_id=%s', (OWNER,)).fetchone() == {
             'position': manual_position, 'note': 'Keep my reflection'}
+
+
+def test_unselected_role_does_not_manufacture_a_player_reflection(browser):
+    command, _ = queued(browser, mmr=1000, training_level='foundations')
+    job = replay.claim_replay('synthetic-context-worker', command['id'])
+    assert replay.finish_replay(job['id'], job['lease_token'], _facts(job))
+    with database() as connection:
+        assert connection.execute('SELECT position FROM hero_pool_matches WHERE owner_id=%s', (OWNER,)).fetchone()['position'] is None
+        assert connection.execute('SELECT count(*) AS n FROM hero_pool_match_notes WHERE owner_id=%s', (OWNER,)).fetchone()['n'] == 0
+
+
+def test_foreign_stored_role_is_isolated_from_pinned_player_pool(browser):
+    from narma_video import hero_pool, hero_pool_legacy
+    command, _ = queued(browser, position=3)
+    job = replay.claim_replay('synthetic-context-worker', command['id'])
+    facts = _facts(job)
+    facts['player']['team'] = 'radiant'
+    assert replay.finish_replay(job['id'], job['lease_token'], facts)
+    # Storage can contain another account's historical report. Its same match
+    # ID and non-null role must not affect the pinned player's projections.
+    foreign_id = uuid4()
+    foreign = {**deepcopy(facts), 'player': {**facts['player'], 'account_id': 2000}}
+    with database() as connection:
+        connection.execute('''INSERT INTO replay_jobs(id,owner_id,filename,size_bytes,requested_nickname,nickname,
+            match_id,account_id,source_sha256,state,progress,result_payload,requested_position)
+            VALUES (%s,%s,'foreign-synthetic.dem',100,'Other','Other',%s,2000,%s,'ready',100,%s,4)''',
+            (foreign_id, OWNER, job['match_id'], job['source_sha256'], Jsonb(foreign)))
+        connection.execute("UPDATE hero_pool_match_notes SET note='Own reflection' WHERE owner_id=%s AND account_id=%s", (OWNER, job['account_id']))
+        connection.execute("UPDATE hero_pool_match_notes SET note='Foreign reflection' WHERE owner_id=%s AND account_id=2000", (OWNER,))
+    for rows in (hero_pool.get_pool(OWNER, include_coaching=False)['history'],
+                 hero_pool_legacy.get_pool(OWNER)['matches']):
+        assert len(rows) == 1
+        assert rows[0]['job_id'] == str(job['id'])
+        assert rows[0]['position'] == 3 and rows[0]['note'] == 'Own reflection'
+    with database() as connection:
+        assert connection.execute('SELECT account_id FROM portal_dota_profiles WHERE owner_id=%s', (OWNER,)).fetchone()['account_id'] == job['account_id']
+        assert connection.execute('SELECT position FROM hero_pool_match_notes WHERE owner_id=%s AND account_id=2000', (OWNER,)).fetchone()['position'] == 4
 
 
 @pytest.mark.parametrize('expire_lease', [False, True])
