@@ -146,7 +146,8 @@ def report_coaching_view(report, hero_context):
     if not isinstance(report, dict):
         return report
     coaching = report.get('coaching')
-    if not isinstance(coaching, dict) or not isinstance(coaching.get('context'), dict):
+    if (not isinstance(coaching, dict) or coaching.get('status') != 'ready'
+            or not isinstance(coaching.get('context'), dict)):
         return report
     recorded = coaching['context']
     if (isinstance(hero_context, dict)

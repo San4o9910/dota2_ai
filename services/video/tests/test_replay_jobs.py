@@ -44,6 +44,9 @@ def test_saved_coaching_uses_current_manual_role_without_rewriting_source():
     assert report['coaching']['summary'] == 'Original' and report['coaching']['status'] == 'ready'
     legacy = {'coaching': {'status': 'ready', 'summary': 'Before curriculum'}}
     assert replay.report_coaching_view(legacy, {'position': 3}) is legacy
+    unavailable = {**report, 'coaching': {**report['coaching'], 'status': 'unavailable',
+                                        'summary': '', 'points': [], 'next_game': []}}
+    assert replay.report_coaching_view(unavailable, {'position': 2}) is unavailable
 
 
 @pytest.fixture
