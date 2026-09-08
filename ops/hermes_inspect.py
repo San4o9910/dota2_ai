@@ -2,7 +2,8 @@
 
 Only allowlisted status fields leave the host. No worker is started, task
 requeued, generation called or allowance changed. Provider metadata access has
-already been checked; subsequent status checks make no provider requests.
+already been checked. This diagnostic includes at most two free countTokens
+requests with synthetic text and the frozen v2 schema; it never generates content.
 """
 import json
 from pathlib import Path
@@ -73,12 +74,98 @@ print(json.dumps({'tasks':tasks,'provider_calls':calls,'budget':budget,'unknown_
  'unknown_calls':unknown_calls,'replay_coaching':coaching,'worker':worker,'public_runtime':public},default=str))
 '''
 
+
+# Frozen diagnostic copy of the corrected v2 schema, not a task or model request.
+COUNT_SCHEMA = json.loads('{"$defs":{"EvidenceRef":{"additionalProperties":false,"properties":{"match_id":{"title":"Match Id","type":"string"},"evidence_id":{"title":"Evidence Id","type":"string"}},"required":["match_id","evidence_id"],"title":"EvidenceRef","type":"object"},"Goal":{"additionalProperties":false,"properties":{"id":{"title":"Id","type":"string"},"pattern_id":{"title":"Pattern Id","type":"string"},"action":{"title":"Action","type":"string"},"success_criterion":{"title":"Success Criterion","type":"string"},"evaluate_after_matches":{"maximum":20,"minimum":3,"title":"Evaluate After Matches","type":"integer"},"evidence":{"items":{"$ref":"#/$defs/EvidenceRef"},"maxItems":12,"minItems":1,"title":"Evidence","type":"array"}},"required":["id","pattern_id","action","success_criterion","evaluate_after_matches","evidence"],"title":"Goal","type":"object"},"Pattern":{"additionalProperties":false,"properties":{"id":{"title":"Id","type":"string"},"title":{"title":"Title","type":"string"},"observation":{"title":"Observation","type":"string"},"confidence":{"enum":["low","medium","high"],"title":"Confidence","type":"string"},"evidence":{"items":{"$ref":"#/$defs/EvidenceRef"},"maxItems":12,"minItems":2,"title":"Evidence","type":"array"}},"required":["id","title","observation","confidence","evidence"],"title":"Pattern","type":"object"},"Producer":{"additionalProperties":false,"properties":{"name":{"enum":["NousResearch/hermes-agent"],"title":"Name","type":"string"},"version":{"title":"Version","type":"string"},"model":{"title":"Model","type":"string"}},"required":["name","version","model"],"title":"Producer","type":"object"}},"additionalProperties":false,"properties":{"schema_version":{"enum":[1],"title":"Schema Version","type":"integer"},"snapshot_sha256":{"title":"Snapshot Sha256","type":"string"},"producer":{"$ref":"#/$defs/Producer"},"patterns":{"items":{"$ref":"#/$defs/Pattern"},"maxItems":5,"title":"Patterns","type":"array"},"goals":{"items":{"$ref":"#/$defs/Goal"},"maxItems":3,"title":"Goals","type":"array"}},"required":["schema_version","snapshot_sha256","producer","patterns","goals"],"title":"Review","type":"object"}')
+
+COUNT_PROBE = r'''
+import copy,importlib.metadata,json,os,urllib.error,urllib.request
+import httpx
+from google import genai
+from google.genai import types
+MODEL='gemini-3.8-flash'
+captured=[]
+def capture(request):
+ assert request.url.path=='/v1beta/models/'+MODEL+':generateContent'
+ captured.append(json.loads(request.content))
+ return httpx.Response(200,json={'candidates':[{'content':{'role':'model','parts':[{'text':'{}'}]},'finishReason':'STOP'}]},request=request)
+transport=httpx.MockTransport(capture)
+client=genai.Client(api_key='synthetic-not-a-real-key',http_options=types.HttpOptions(
+ retry_options=types.HttpRetryOptions(attempts=1),
+ client_args={'transport':transport,'trust_env':False},async_client_args={'transport':transport,'trust_env':False}))
+try:
+ client.models.generate_content(model=MODEL,contents=[types.Content(role='user',parts=[types.Part.from_text(text='Synthetic schema validation only.')])],
+  config=types.GenerateContentConfig(system_instruction='Return JSON only.',max_output_tokens=4096,
+   candidate_count=1,service_tier='standard',temperature=.2,top_p=1,
+   thinking_config=types.ThinkingConfig(thinking_level='low'),
+   automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+   response_mime_type='application/json',response_json_schema=SCHEMA_INPUT,should_return_http_response=True))
+finally:
+ client.close()
+assert len(captured)==1
+exact={**captured[0],'model':'models/'+MODEL}
+baseline={key:exact[key] for key in ('model','contents','systemInstruction')}
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self,*args,**kwargs):return None
+opener=urllib.request.build_opener(NoRedirect())
+results=[]
+for label,body in (('v2_config',exact),('baseline',baseline)):
+ request=urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/'+MODEL+':countTokens',
+  method='POST',data=json.dumps({'generateContentRequest':body}).encode(),
+  headers={'Content-Type':'application/json','x-goog-api-key':os.environ['GEMINI_API_KEY']})
+ item={'configuration':label,'generation_requests':0}
+ try:
+  with opener.open(request,timeout=20) as response:
+   status=response.status
+   raw=response.read(65537)
+ except urllib.error.HTTPError as error:
+  status=error.code
+  raw=error.read(65537)
+  error.close()
+ except (OSError,TimeoutError):
+  results.append({**item,'http_status':None,'error_flags':['transport']})
+  continue
+ item['http_status']=status
+ if len(raw)>65536:
+  results.append({**item,'error_flags':['response_too_large']})
+  continue
+ try:data=json.loads(raw)
+ except ValueError:
+  results.append({**item,'error_flags':['invalid_json']})
+  continue
+ error=data.get('error',{}) if isinstance(data,dict) else {}
+ allowed={'INVALID_ARGUMENT','FAILED_PRECONDITION','OUT_OF_RANGE','UNAUTHENTICATED','PERMISSION_DENIED','NOT_FOUND','RESOURCE_EXHAUSTED','UNKNOWN','INTERNAL','UNIMPLEMENTED','UNAVAILABLE','DEADLINE_EXCEEDED'}
+ rpc=error.get('status') if isinstance(error,dict) else None
+ item['provider_status']=rpc if isinstance(rpc,str) and rpc in allowed else 'OK' if status==200 else None
+ private=json.dumps(error,ensure_ascii=True).lower()[:16384]
+ flags={
+  'invalid_schema':('responsejsonschema','response_json_schema','response_schema','invalid schema'),
+  'enum':('enum',), 'unknown_field':('unknown field','unknown name','cannot find field'),
+  'unsupported_location':('location is not supported','unsupported location','not available in your country'),
+  'unsupported_thinking':('thinkingconfig','thinking_config','thinkinglevel','thinking_level','thinking budget'),
+  'service_tier':('servicetier','service_tier','service tier'),
+  'max_output_tokens':('maxoutputtokens','max_output_tokens'),
+  'response_mime_type':('responsemimetype','response_mime_type'),
+  'invalid_argument':('invalid_argument',), 'permission':('permission_denied','api key not valid'),
+  'rate_limit':('resource_exhausted','rate limit','quota exceeded'),
+ }
+ item['error_flags']=[name for name,needles in flags.items() if any(needle in private for needle in needles)]
+ if 'schema' in private and any(word in private for word in ('complex','too many states','too large','nested')):
+  item['error_flags'].append('schema_complexity')
+ tokens=data.get('totalTokens') if isinstance(data,dict) else None
+ item['total_tokens']=tokens if type(tokens) is int and 0<=tokens<=1000000 else None
+ results.append(item)
+print(json.dumps({'operation':'models.countTokens','provider_requests':len(results),'generation_requests':0,
+ 'synthetic_input_only':True,'sdk_version':importlib.metadata.version('google-genai'),'results':results,
+ 'limitation':'Token counting does not prove generation configuration acceptance.'}))
+'''
+
 def host_probe():
     # The complete code runs remotely from stdin/argv. It writes no project files.
     return r'''
 import json,pathlib,re,subprocess
-def run(args):
- p=subprocess.run(args,stdin=subprocess.DEVNULL,capture_output=True,timeout=30)
+def run(args,timeout=30):
+ p=subprocess.run(args,stdin=subprocess.DEVNULL,capture_output=True,timeout=timeout)
  if p.returncode:
   raise RuntimeError('hermes_diagnostic_command_failed')
  return p.stdout
@@ -140,7 +227,11 @@ for service in ('hermes-broker','hermes-runner','replay-worker','api'):
 api=containers('api')
 assert len(api)==1
 result['database']=json.loads(run(['docker','exec',api[0],'python','-c',DATABASE_CODE]))
-result['provider_requests']=0
+replay=containers('replay-worker')
+assert len(replay)==1
+result['count_tokens']=json.loads(run(['docker','exec',replay[0],'python','-c',COUNT_CODE],timeout=60))
+result['provider_requests']=result['count_tokens']['provider_requests']
+result['generation_requests']=0
 memory={}
 for line in pathlib.Path('/proc/meminfo').read_text().splitlines():
  key,value=line.split(':',1)
@@ -148,7 +239,7 @@ for line in pathlib.Path('/proc/meminfo').read_text().splitlines():
   memory[key]=int(value.strip().split()[0])*1024
 result['memory_bytes']=memory
 print(json.dumps(result))
-'''.replace('DATABASE_CODE', repr(DATABASE_PROBE))
+'''.replace('DATABASE_CODE', repr(DATABASE_PROBE)).replace('COUNT_CODE',repr(COUNT_PROBE.replace('SCHEMA_INPUT',repr(COUNT_SCHEMA))))
 
 
 def main():
