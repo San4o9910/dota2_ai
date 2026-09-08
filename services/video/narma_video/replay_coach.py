@@ -18,7 +18,10 @@ from . import budget as ai_budget
 from .db import database
 from .gemini import generate_usage
 from .replay_hero_context import build_hero_context
+from .curriculum import VERSION as CURRICULUM_VERSION, get_exercise
+from .learning import resolve_active_exercise
 
+METHOD_VERSION = 'narma-coach.v3'
 
 class CoachingPoint(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
@@ -73,7 +76,16 @@ insights.items, если они предоставлены. Покупка, по
 особенно для пассивного предмета. Не называй покупку ранней, нормальной или поздней без
 подтверждённого ориентира. Не приписывай пассивный доход убийствам и не складывай пересекающиеся
 счётчики золота. Не называй доход перед покупкой точной оплатой этого предмета.
-Добавь next_game: от одного до трёх конкретных упражнений на следующую игру, каждое с
+Следуй учебному циклу Narma: подтверждённый эпизод, вопрос о выборе игрока,
+понятная причина, условное действие, исключение и проверка в следующих играх.
+Выбирай первый доступный для изменения момент, а не объявляй каждую смерть ошибкой.
+При неизвестной информации задай вопрос: сам исход не доказывает неверное решение.
+learning_context содержит выбранное учебное упражнение, а не дополнительные факты матча.
+Если оно передано, сохрани этот фокус и объясни его применимость к имеющимся эпизодам.
+Если подходящей ситуации не видно, прямо укажи это; не создавай её ради упражнения.
+Успешный исход не доказывает освоение навыка. Не оценивай поддержку нормами фарма керри.
+Не обещай рост рейтинга или срок освоения. Не приписывай ученику намерение или понимание.
+Добавь next_game: ровно одно главное упражнение на следующую серию игр, с
 title, action (что сделать в игре), measure (как проверить выполнение после игры) и
 evidence_ids исходных эпизодов, из которых вытекает упражнение. Это план будущих действий,
 не выдуманные факты прошедшего матча. Выбирай небольшой приоритетный набор. Действие должно
@@ -99,7 +111,7 @@ _SAFE_FAILURES = frozenset({
 })
 
 
-def prepare_evidence(report):
+def prepare_evidence(report, *, position=None, exercise_id=None):
     """Project the factual report onto the only fields the coach is allowed to use."""
     if not isinstance(report, dict):
         raise ValueError('REPLAY_COACH_INPUT_INVALID')
@@ -121,11 +133,21 @@ def prepare_evidence(report):
     payload['player'] = {key: report['player'][key] for key in ('hero', 'team') if key in report['player']}
     for key in ('ability_usage', 'item_usage'):
         payload[key] = usage_facts(report.get(key))
-    context = build_hero_context(report)
+    context = build_hero_context(report, position=position)
     if context:
         # Generated review prompts are not evidence for another generated claim.
         payload['hero_context'] = {key: context[key] for key in
             ('hero', 'label', 'position', 'position_label', 'abilities', 'limits') if key in context}
+    exercise = get_exercise(exercise_id, position=position) if exercise_id else None
+    if exercise:
+        # Trusted catalog text is practice context, never match evidence. Free
+        # player notes and old model interpretations do not enter this projection.
+        payload['learning_context'] = {
+            'classification': 'practice_instruction_not_match_evidence',
+            'curriculum_version': CURRICULUM_VERSION,
+            'exercise': {key: exercise[key] for key in
+                         ('id', 'title', 'decision_question', 'action', 'why', 'exception', 'measurement')},
+        }
     insights = report.get('insights')
     if isinstance(insights, dict):
         # These are deterministic, selected-player facts produced by the report
@@ -237,6 +259,10 @@ def carry_forward_coaching(previous, current, source_report_id=None):
     old_coaching = previous.get('coaching')
     if not isinstance(old_coaching, dict) or old_coaching.get('status') != 'ready':
         return False
+    old_context = old_coaching.get('context') or {}
+    new_context = (current.get('coaching') or {}).get('context') or {}
+    if any(old_context.get(key) != new_context.get(key) for key in ('position', 'exercise_id')):
+        return False
     try:
         _, old_ids = prepare_evidence(previous)
         _, new_ids = prepare_evidence(current)
@@ -274,7 +300,48 @@ def carry_forward_coaching(previous, current, source_report_id=None):
         'source_report_id': source_report_id, 'refresh_failure_code': failed.get('failure_code'),
         'refresh_failure_category': failed.get('failure_category'), **validated,
     }
+    if old_context:
+        current['coaching']['context'] = deepcopy(old_context)
     return True
+
+
+def resolve_learning_context(job, report):
+    """Read the bound match's manual role and active plan before inference.
+
+    Worker jobs are trusted server records, but identity and the live lease are
+    checked again. No profile nickname, user answer or prior model text is sent.
+    Minimal synthetic/offline callers intentionally have no personal context.
+    """
+    player = report.get('player') or {}
+    context = {'method_version': METHOD_VERSION, 'curriculum_version': CURRICULUM_VERSION, 'hero': player.get('hero'),
+               'position': None, 'position_source': 'unknown', 'exercise_id': None}
+    required = ('owner_id', 'account_id', 'match_id', 'source_sha256', 'lease_token')
+    if not all(job.get(key) is not None for key in required):
+        return context
+    if (player.get('account_id') != job['account_id']
+            or str(report.get('match_id')) != job['match_id']
+            or (report.get('coverage') or {}).get('source_sha256') != job['source_sha256']):
+        raise ValueError('REPLAY_COACH_INPUT_INVALID')
+    with database() as connection:
+        connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
+        row = connection.execute('''SELECT m.position FROM replay_jobs r
+            JOIN portal_dota_profiles p ON p.owner_id=r.owner_id AND p.account_id=r.account_id
+            LEFT JOIN hero_pool_matches m ON m.owner_id=r.owner_id
+                AND m.account_id=r.account_id AND m.match_id=r.match_id
+            WHERE r.id=%s AND r.owner_id=%s AND r.account_id=%s AND r.match_id=%s
+                AND r.source_sha256=%s AND r.state='processing'
+                AND r.lease_token=%s AND r.lease_expires_at>now()''',
+            (job['id'], job['owner_id'], job['account_id'], job['match_id'],
+             job['source_sha256'], job['lease_token'])).fetchone()
+        if row is None:
+            raise ValueError('REPLAY_COACH_LEASE_LOST')
+        position = row['position']
+        if type(position) is not int or not 1 <= position <= 5:
+            return context
+        context.update(position=position, position_source='player')
+        context['exercise_id'] = resolve_active_exercise(connection, job['owner_id'],
+            job['account_id'], player.get('hero'), position)
+    return context
 
 
 class GeminiReplayCoach:
@@ -358,8 +425,11 @@ def enrich_report(job, factual_report, coach=None):
     """
     report = deepcopy(factual_report)
     owned_coach = coach is None
+    context = None
     try:
-        encoded, ids = prepare_evidence(factual_report)
+        context = resolve_learning_context(job, factual_report)
+        encoded, ids = prepare_evidence(factual_report, position=context['position'],
+                                        exercise_id=context['exercise_id'])
         coach = coach if coach is not None else GeminiReplayCoach()
         call_id = reserve_replay(job, coach.model)
         coach.last_usage = None
@@ -368,13 +438,14 @@ def enrich_report(job, factual_report, coach=None):
         finally:
             # Accounting always commits, even if JSON validation or the lease fails.
             ai_budget.settle(call_id, coach.last_usage)
-        report['coaching'] = {'status': 'ready', 'model': coach.model, **result.model_dump()}
+        report['coaching'] = {'status': 'ready', 'model': coach.model, 'context': context,
+                              **result.model_dump()}
         print(json.dumps({'event': 'replay_coaching_ready', 'job_id': str(job['id']), 'call_id': call_id}), flush=True)
     except Exception as error:
         code = str(error) if isinstance(error, ValueError) and str(error) in _SAFE_FAILURES else 'REPLAY_COACH_UNAVAILABLE'
         category = failure_category(error, code)
         report['coaching'] = {'status': 'unavailable', 'failure_code': code, 'failure_category': category,
-                              'summary': '', 'points': [], 'next_game': []}
+                              'summary': '', 'points': [], 'next_game': [], 'context': context}
         restored = carry_forward_coaching(job.get('previous_report') or job.get('result_payload'),
                                          report, job.get('previous_report_id'))
         print(json.dumps({'event': 'replay_coaching_unavailable', 'job_id': str(job['id']),

@@ -29,7 +29,7 @@ class LocalHTTPS(http.client.HTTPSConnection):
 
 def anonymous_checks(hostname):
     checks = [('/livez', 200), ('/hero-pool', 200), ('/api/session', 200),
-              ('/api/replays', 401), ('/api/hero-pool', 401), ('/v1/videos', 401)]
+              ('/api/replays', 401), ('/api/hero-pool', 401), ('/api/learning', 401), ('/v1/videos', 401)]
     for path, expected in checks:
         connection = LocalHTTPS(hostname, timeout=10, context=ssl.create_default_context())
         try:
@@ -66,10 +66,11 @@ from narma_video.db import database
 with database() as c:
  names={r['name'] for r in c.execute('SELECT name FROM video_schema_migrations').fetchall()}
  assert {'005_replay_analysis.sql','006_replay_shared_ai_budget.sql','007_hero_pool.sql',
-         '008_replay_coaching_history.sql','009_hermes_reviews.sql','010_hero_pool_progress.sql'}<=names
+         '008_replay_coaching_history.sql','009_hermes_reviews.sql','010_hero_pool_progress.sql',
+         '011_hermes_runtime.sql','012_learning_curriculum.sql'}<=names
  for table in ('replay_jobs','replay_workers','hero_pool_match_notes','hero_pool_matches',
                'hero_pool_favorites','hero_pool_goals','hero_pool_goal_checks',
-               'replay_report_history','hermes_exports','hermes_reviews'):
+               'replay_report_history','hermes_exports','hermes_reviews','learning_plans','learning_checks'):
   assert c.execute("SELECT to_regclass(%s) AS r",('public.'+table,)).fetchone()['r']
  assert c.execute("SELECT 1 FROM pg_constraint WHERE conname='provider_call_exactly_one_job' AND conrelid='video_provider_calls'::regclass").fetchone()
  print('REPLAY_SCHEMA_OK')
@@ -112,6 +113,68 @@ with database() as c:
  assert c.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']==calls_before
 print(json.dumps({'verified':True,'owners':len(owners),'counts':counts,
                  'hero_context_reports':context_reports,'provider_calls_created':0}))
+'''
+
+
+LEARNING_CHECK = '''import json,os
+# Every connection opened by the real learning read functions is read-only.
+# No temporary owner, session, plan, answer or provider request is created.
+os.environ['PGOPTIONS']='-c default_transaction_read_only=on'
+from narma_video.db import database
+from narma_video.learning import get_learning,get_report_learning,_full_report
+from narma_video.curriculum import get_catalog
+with database() as c:
+ assert c.execute('SHOW transaction_read_only').fetchone()['transaction_read_only']=='on'
+ owners=c.execute('SELECT owner_id FROM portal_accounts ORDER BY owner_id').fetchall()
+ calls_before=c.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']
+for position in (None,1,2,3,4,5):
+ catalog=get_catalog(position)
+ assert catalog['schema_version']==catalog['version']=='narma.curriculum.v1'
+ assert [stage['id'] for stage in catalog['stages']]==['lane','map','risk','items','fights','decisions']
+ cards=catalog['exercises']
+ assert len(cards)==len({card['id'] for card in cards})==(10 if position is None else 12 if position in (4,5) else 11)
+ assert all(not card['roles'] or position in card['roles'] for card in cards)
+reports=0
+matches=0
+for owner in owners:
+ state=get_learning(owner['owner_id'])
+ assert state['schema_version']=='narma.learning.v1'
+ assert state['progress_source']=='player_self_report'
+ profile=state['profile']
+ history=state['history']
+ assert len({row['match_id'] for row in history})==len(history)
+ if profile is None:
+  assert not history and not state['plans']
+  continue
+ with database() as c:
+  binding=c.execute('SELECT account_id FROM portal_dota_profiles WHERE owner_id=%s',(owner['owner_id'],)).fetchone()
+  assert binding and binding['account_id']==profile['account_id']
+  owned={str(row['id']):row for row in c.execute("SELECT id,match_id,source_sha256 FROM replay_jobs WHERE owner_id=%s AND account_id=%s AND state<>'deleted'",(owner['owner_id'],profile['account_id'])).fetchall()}
+ assert all(row['job_id'] in owned and owned[row['job_id']]['match_id']==row['match_id'] and owned[row['job_id']]['source_sha256']==row['source_sha256'] for row in history)
+ matches+=len(history)
+ for fact in history[:3]:
+  detail=get_report_learning(owner['owner_id'],fact['job_id'])
+  assert detail['schema_version']=='narma.learning.v1'
+  assert (detail['job_id'],detail['match_id'],detail['hero'],detail['position'])==(fact['job_id'],fact['match_id'],fact['hero'],fact['position'])
+  with database() as c:
+   report=_full_report(c,owner['owner_id'],profile['account_id'],fact['job_id'])
+  assert report and report['coverage']['source_sha256']==fact['source_sha256']
+  events={event['id']:event for event in (report.get('evidence') or []) if isinstance(event,dict) and isinstance(event.get('id'),str)}
+  for group in [detail['review_candidates'],*detail['exercise_candidates'].values()]:
+   assert len(group)==len({item['evidence_id'] for item in group})
+   for item in group:
+    event=events[item['evidence_id']]
+    assert (item['time'],item['type'])==(event['time'],event['type'])
+  allowed={item['evidence_id'] for item in detail['review_candidates']}
+  for suggestion in detail['suggestions']:
+   assert suggestion['hero']==fact['hero'] and suggestion['position']==fact['position']
+   assert set(suggestion['evidence_ids'])<=allowed
+  reports+=1
+with database() as c:
+ assert c.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']==calls_before
+print(json.dumps({'verified':True,'curriculum_version':'narma.curriculum.v1',
+ 'stages':6,'role_variants':6,'owners':len(owners),'owned_matches':matches,
+ 'evidence_reports':reports,'database_read_only':True,'provider_calls_created':0}))
 '''
 
 
@@ -188,6 +251,11 @@ def activate(sha, hostname):
         pool_status = json.loads(run(compose(config) + ['exec', '-T', 'api', 'python', '-c', POOL_CHECK]))
         if pool_status.get('verified') is not True:
             raise RuntimeError('replay_hero_pool_check_failed')
+        learning_status = json.loads(run(compose(config) + ['exec', '-T', 'api', 'python', '-c', LEARNING_CHECK], timeout=60))
+        if (learning_status.get('verified') is not True
+                or learning_status.get('database_read_only') is not True
+                or learning_status.get('provider_calls_created') != 0):
+            raise RuntimeError('replay_learning_check_failed')
         after = json.loads(run(compose(config) + ['exec', '-T', 'api', 'python', '-c', DATABASE_STATE]))
         verify_preserved(snapshot.get('before'), after)
         # Compose's default image name is project-service. Confirm it exists so
@@ -218,6 +286,7 @@ with database() as c:
                         'video_worker_stopped': True, 'schema_verified': True, 'parser_runtime_verified': True,
                         'existing_account_and_budget_preserved': snapshot.get('before') is not None,
                         'hero_pool': pool_status,
+                        'learning': learning_status,
                         'synthetic_paid_calls': 0, 'anonymous_replays_status': 401}
             time.sleep(2)
         raise RuntimeError('replay_worker_heartbeat_timeout')

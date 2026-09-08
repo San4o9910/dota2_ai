@@ -126,6 +126,60 @@ def test_usage_projection_keeps_unknown_and_invalid_telemetry_out_of_prompt():
     assert coach.usage_facts({'name': 'not-a-list'}) == []
 
 
+def test_manual_position_and_catalog_are_separate_from_match_evidence():
+    facts = {**deepcopy(FACTS), 'player': {**FACTS['player'], 'hero': 'npc_dota_hero_viper'}}
+    encoded, ids = coach.prepare_evidence(facts, position=3)
+    assert json.loads(encoded)['hero_context']['position'] == 3
+    for invalid in (True, '3', 0, 6):
+        encoded, _ = coach.prepare_evidence(facts, position=invalid)
+        assert json.loads(encoded)['hero_context']['position'] is None
+    encoded, _ = coach.prepare_evidence({**facts, 'learning_context': {'note': 'never send'}},
+                                        position=3, exercise_id='unrecognized')
+    assert 'learning_context' not in json.loads(encoded)
+    assert ids == {'death.1', 'buyback.1'}
+
+
+def test_learning_context_requires_bound_identity_and_live_lease(monkeypatch):
+    job = {'id': 'job', 'owner_id': 'owner', 'account_id': 123, 'match_id': '8984479726',
+           'source_sha256': 'a' * 64, 'lease_token': 'lease'}
+    facts = {**deepcopy(FACTS), 'match_id': job['match_id'],
+             'player': {**FACTS['player'], 'hero': 'npc_dota_hero_viper'},
+             'coverage': {'source_sha256': 'a' * 64}}
+    queries = []
+    class Connection:
+        def execute(self, sql, params=None):
+            queries.append((sql, params))
+            return SimpleNamespace(fetchone=lambda: {'position': 3} if 'FROM replay_jobs' in sql else None)
+    @contextmanager
+    def db():
+        yield Connection()
+    monkeypatch.setattr(coach, 'database', db)
+    scopes = []
+    def active(connection, owner, account, hero, position):
+        scopes.append((owner, account, hero, position))
+        return 'r1'
+    monkeypatch.setattr(coach, 'resolve_active_exercise', active)
+    result = coach.resolve_learning_context(job, facts)
+    assert result['position'] == 3 and result['position_source'] == 'player'
+    assert result['hero'] == 'npc_dota_hero_viper'
+    assert 'REPEATABLE READ, READ ONLY' in queries[0][0]
+    assert 'r.owner_id=%s' in queries[1][0] and 'p.account_id=r.account_id' in queries[1][0]
+    assert 'lease_expires_at>now()' in queries[1][0]
+    assert scopes == [('owner', 123, 'npc_dota_hero_viper', 3)]
+    assert result['exercise_id'] == 'r1'
+    with pytest.raises(ValueError, match='INPUT_INVALID'):
+        coach.resolve_learning_context(job, {**facts, 'match_id': '8984479727'})
+    assert len(queries) == 2
+
+
+def test_changed_role_cannot_carry_old_coaching_forward():
+    previous, current = prior_report(), refreshed_facts()
+    previous['coaching']['context'] = {'position': 3, 'exercise_id': None}
+    current['coaching'] = {'status': 'unavailable', 'context': {'position': 2, 'exercise_id': None}}
+    assert not coach.carry_forward_coaching(previous, current)
+    assert current['coaching']['status'] == 'unavailable'
+
+
 def response(value=RESULT, **changes):
     body = {
         'usageMetadata': {'promptTokenCount': 100, 'candidatesTokenCount': 20, 'totalTokenCount': 120},

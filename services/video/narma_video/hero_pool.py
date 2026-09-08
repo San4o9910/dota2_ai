@@ -221,7 +221,7 @@ def patterns_for(matches):
     return result
 
 
-def _load_history(connection, owner_id):
+def _load_history(connection, owner_id, *, persist=True):
     profile = connection.execute("SELECT account_id,nickname FROM portal_dota_profiles WHERE owner_id=%s", (owner_id,)).fetchone()
     if profile is None:
         return None, []
@@ -255,7 +255,7 @@ def _load_history(connection, owner_id):
             canonical.setdefault(row["match_id"], row)
             first_dates[row["match_id"]] = min(first_dates.get(row["match_id"], row["updated_at"]), row["updated_at"])
     # Stable lock order across simultaneous reads and metadata mutations.
-    for match_id, when in sorted(first_dates.items()):
+    for match_id, when in sorted(first_dates.items()) if persist else []:
         connection.execute("""INSERT INTO hero_pool_matches(owner_id,account_id,match_id,first_analyzed_at)
             VALUES (%s,%s,%s,%s) ON CONFLICT(owner_id,account_id,match_id) DO UPDATE
             SET first_analyzed_at=excluded.first_analyzed_at
@@ -265,7 +265,8 @@ def _load_history(connection, owner_id):
         FROM hero_pool_matches m LEFT JOIN hero_pool_match_notes n ON n.owner_id=m.owner_id
             AND n.account_id=m.account_id AND n.match_id=m.match_id
         WHERE m.owner_id=%s AND m.account_id=%s""", (owner_id, profile["account_id"])).fetchall()}
-    history = [match_facts(row, metadata[match_id]) for match_id, row in canonical.items()]
+    history = [match_facts(row, metadata.get(match_id, {"first_analyzed_at": first_dates[match_id]}))
+               for match_id, row in canonical.items()]
     return profile, sorted(history, key=lambda r: (r["chronology_at"], r["match_id"]), reverse=True)
 
 

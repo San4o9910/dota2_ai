@@ -1,0 +1,360 @@
+"""Original Narma practice cards, with deterministic replay anchors.
+
+An anchor locates something to review. It never proves a mistake, an eligible
+opportunity, player knowledge, or mastery. The caller must authorize the report
+and supply the position from that same player's manual match metadata.
+"""
+from __future__ import annotations
+
+from collections import Counter
+from copy import deepcopy
+import math
+import re
+
+
+VERSION = "narma.curriculum.v1"
+MODEL_INSTRUCTION = """Методика Narma: объясняй простыми словами и выбирай один учебный фокус.
+Сначала отдели записанный факт от гипотезы, затем задай вопрос о решении игрока.
+Дай условие, одно действие, его смысл, исключение и способ проверки в похожем эпизоде.
+Учитывай подтверждённого героя и только вручную указанную позицию; не угадывай роль.
+Без контекста предложи просмотр, а не диагноз. Смерть не доказывает плохое решение,
+покупка не доказывает доступность предмета, отсутствие применения не доказывает
+бесполезность. Пассивному предмету не требуется отдельное нажатие. Не назначай
+универсальные нормы добиваний и тайминга, не обещай MMR. Не повышай учебную ступень
+по победе или самооценке. Числа и времена матча бери только из проверенных полей.
+"""
+
+_HERO = re.compile(r"^npc_dota_hero_[a-z0-9_]{1,80}$")
+_ITEM = re.compile(r"^item_[a-z0-9_]{1,100}$")
+_IDENT = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_DIGEST = re.compile(r"^[a-f0-9]{64}$")
+_MATCH = re.compile(r"^[0-9]{1,20}$")
+_EVENT_TITLES = {
+    "death": "Смерть", "kill": "Убийство", "assist": "Участие в убийстве",
+    "purchase": "Приобретение предмета", "item_observed": "Предмет в инвентаре",
+    "item_used": "Записанное применение предмета", "tower": "Добивание башни",
+    "buyback": "Выкуп", "ward_destroyed": "Уничтожение варда",
+}
+_COMBAT = ("death", "kill", "assist")
+_ITEM_EVENTS = ("purchase", "item_observed", "item_used")
+
+_STAGES = (
+    {"id": "lane", "order": 1, "title": "Линия и ресурсы",
+     "description": "Разберись в одном действии на линии и потренируй его в понятных условиях.", "exercise_ids": ["l1", "l2"]},
+    {"id": "map", "order": 2, "title": "Две следующие задачи",
+     "description": "Перед перемещением выбери цель и признак, по которому поменяешь план.", "exercise_ids": ["m1", "v1"]},
+    {"id": "risk", "order": 3, "title": "Риск и возвращение в игру",
+     "description": "Проверяй решение до опасного эпизода и цену доступной альтернативы.", "exercise_ids": ["r1", "r2"]},
+    {"id": "items", "order": 4, "title": "Задача предмета",
+     "description": "Свяжи покупку с задачей героя и подходящей возможностью её выполнить.", "exercise_ids": ["i1", "i2"]},
+    {"id": "fights", "order": 5, "title": "Своя работа в бою",
+     "description": "Выбери полезное действие в бою и доступную цель после него.", "exercise_ids": ["f1", "f2"]},
+    {"id": "decisions", "order": 6, "title": "Самостоятельный разбор",
+     "description": "Объясняй выбор заранее, сравнивай варианты и меняй план по новой информации.", "exercise_ids": ["a1", "a2", "a3"]},
+)
+
+_SOURCES = (
+    ("S1", "BSJ · Процесс индивидуального обучения", "https://bsjdota.com/dota-2-coaching/"),
+    ("S3", "BalloonDota · Тренировка добиваний", "https://prosettings.net/blog/how-to-last-hit-dota-2/"),
+    ("S4", "BalloonDota · Ресурсы и маршруты", "https://prosettings.net/blog/dota-2-farming/"),
+    ("S5", "BalloonDota · Решения на линии", "https://prosettings.net/blog/dota-2-laning-tips/"),
+    ("S6", "BalloonDota · Выбор предмета под задачу", "https://prosettings.net/blog/dota-2-itemization/"),
+    ("S7", "ZQuixotix · Действие и задача отвода", "https://www.reddit.com/r/learndota2/comments/m6j283/how_to_half_pull/"),
+    ("S8", "ZQuixotix · Объяснение решений на герое", "https://www.reddit.com/r/learndota2/comments/ky4hie/how_to_play_jakiro_from_an_immortal_spammer/"),
+    ("S9", "ZQuixotix · Перенос чужой игры в свою практику", "https://www.reddit.com/r/learndota2/comments/1p1coqt/how_smurfs_win_all_their_games_an_mmr_gaining/"),
+    ("S10", "Support Heaven · Ответы о задачах поддержки", "https://www.reddit.com/r/learndota2/comments/1ldq7a7/10k_mmr_support_offering_to_answer_all_your/"),
+    ("S11", "Sbdush · Диалог и закрепление навыка", "https://www.cybersport.ru/tags/dota-2/neozhidannoe-interviu-s-trenerom-odium-vsia-pravda-pro-lil-sovremennykh-doterov-i-tir-2-stsenu"),
+    ("S12", "BalloonDota · Объяснение собственных решений", "https://www.reddit.com/r/DotA2/comments/1lghgvk/how_i_coached_50_players_to_immortal_just_copy/"),
+    ("S13", "ZQuixotix · Задачи предметов в авторском гайде", "https://steamcommunity.com/sharedfiles/filedetails/?id=2362025832"),
+)
+
+
+def _card(ident, stage, title, *, roles=(), question, signal, action, why,
+          exception, drill, measurement, lesson, sources, events=(), mode="manual_context"):
+    return {"id": ident, "stage_id": stage, "title": title, "roles": list(roles),
+            "decision_question": question, "signal": signal, "action": action,
+            "why": why, "exception": exception, "drill": drill,
+            "measurement": measurement, "mini_lesson": lesson,
+            "focus_window_matches": 3,
+            "focus_window_note": "Начни с трёх подходящих матчей. Это размер учебного блока Narma, не норма навыка. Если ситуаций мало, продолжи до пяти и пересмотри задание.",
+            "source_refs": list(sources), "evidence_types": list(events), "review_mode": mode}
+
+
+_EXERCISES = (
+    _card("l1", "lane", "Сначала точно, потом под давлением", roles=(1, 2, 3),
+        question="Почему был пропущен этот доступный крип: момент удара, расстояние или отвлечение?",
+        signal="В безопасной тренировке удар приходит раньше или позже нужного момента.",
+        action="На том же герое поправь одну причину пропуска, затем добавь давление соперника.",
+        why="Одна понятная причина позволяет тренировать действие, а не гнаться за итоговым числом.",
+        exception="Не забирай опасного крипа любой ценой. Если нужно продвинуть волну, ранние удары могут быть частью плана.",
+        drill="Две короткие серии в одинаковом лобби. Запиши причину пропусков, поправь одну и повтори под башней или с соперником.",
+        measurement="В каждой серии запиши удачные добивания из доступных. В матче отдельно проверь, был ли крип доступен без несоразмерного риска.",
+        lesson="Если лишняя атака начинается слишком рано, попробуй Stop в лобби и подстрой начало следующей атаки под замах героя. Потом проверь навык под давлением.",
+        sources=("S3", "S5")),
+    _card("l2", "lane", "Одно полезное действие саппорта", roles=(4, 5),
+        question="Что этой волне и союзнику нужнее сейчас, и что изменится, если я уйду?",
+        signal="Ты выбираешь между помощью на линии, восстановлением, разменом и отводом.",
+        action="Выбери одно действие по состоянию союзника, врагов и волны; назови цену ухода.",
+        why="Полезность действия зависит от задачи линии. Сам по себе привычный таймер её не определяет.",
+        exception="Если удерживать линию опасно для обоих, отступление и другая задача могут быть разумнее помощи на месте.",
+        drill="Перед одной волной назови задачу. После игры посмотри, что получилось и что было потеряно из-за выбранного действия.",
+        measurement="Запиши выбранное действие, доступную альтернативу и результат. Одна смерть союзника не доказывает, что твой выбор был ошибкой.",
+        lesson="Отвод направляет свою волну к нейтралам. Если союзник под давлением, сначала оцени цену ухода; механику отвода отрабатывай на текущей карте.",
+        sources=("S7", "S8", "S10")),
+    _card("m1", "map", "Две следующие задачи",
+        question="Куда я иду, что хочу получить и из-за какого сигнала изменю следующий шаг?",
+        signal="Текущая задача закончилась, и нужно выбрать следующее перемещение.",
+        action="Назови ближайшую задачу, следующую за ней и условие отмены второй.",
+        why="У движения есть цена. Короткий план помогает замечать переходы без результата и вовремя менять направление.",
+        exception="Помощь, обзор и подготовка боя могут быть ценнее фарма. Отсутствие заработка во время перехода не делает его ошибкой.",
+        drill="Пересмотри три перехода: цель, полученная польза, пропущенная возможность и информация до выбора.",
+        measurement="Отмечай только просмотренные лишние переходы. Разумную смену плана из-за новой угрозы не считай потерей времени.",
+        lesson="Если рядом доступная задача, а у дальнего перехода нет ясной пользы, сравни их цену. Начавшаяся драка или опасная область могут сразу изменить выбор.",
+        sources=("S4", "S10")),
+    _card("v1", "map", "Вард отвечает на вопрос", roles=(4, 5),
+        question="Какой вопрос должен помочь решить этот вард и кому будет полезен ответ?",
+        signal="Ты выбираешь место обзора для ближайшей задачи команды.",
+        action="Сначала назови нужную информацию: подход врагов или возможность играть в области. Затем оцени доступность места установки.",
+        why="У обзора есть задача. Число поставленных вардов и время их жизни не показывают, помогла ли информация команде.",
+        exception="Не иди в опасную область только ради задания. Если место недоступно, подожди помощи или выбери другой способ получить информацию.",
+        drill="Перед одним вардом запиши вопрос. После эпизода проверь с перспективы своей команды, какую информацию получили и какое решение она позволяла принять.",
+        measurement="Запиши вопрос, полученную информацию и решение. Если перспектива или условия неизвестны, отметь необходимость просмотра; парсер не подтверждает качество обзора.",
+        lesson="Вард может заранее показать подход к нужной области. Но запись установки не доказывает, что враг был виден или что ты заметил его на карте.",
+        sources=("S10",)),
+    _card("r1", "risk", "Решение до смерти",
+        question="Какую пользу я ожидал, что знал об угрозе и какая альтернатива была доступна?",
+        signal="В реплее есть смерть, которую ты готов пересмотреть с доступной игроку информацией.",
+        action="Отмотай к первому изменяемому решению и сравни его с одним другим действием.",
+        why="Последняя секунда показывает исход. Более ранний выбор часто лучше подходит для тренировки.",
+        exception="Смерть могла быть ценой полезного обмена или защиты. Не требуй знаний о врагах из режима полного обзора.",
+        drill="Начни просмотр до смерти, найди момент выбора, назови альтернативу и её цену. При необходимости отмотай дальше.",
+        measurement="Для просмотренного решения выбери: более разумная альтернатива была; риск обоснован; данных недостаточно. Это твоя проверка, не вывод парсера.",
+        lesson="Если после просмотра враг кажется очевидным, проверь, была ли эта информация доступна во время игры. Иначе причина решения пока неизвестна.",
+        sources=("S1", "S11"), events=("death",), mode="episode_review"),
+    _card("r2", "risk", "Новый план после возвращения",
+        question="После возвращения изменились союзники, ресурсы, информация или доступная задача?",
+        signal="Ты возвращаешься в игру после смерти и собираешься идти в прежнюю область.",
+        action="Проверь, что изменилось, и заново обоснуй маршрут или выбери другую задачу.",
+        why="Возрождение само по себе не убирает прежнюю угрозу. Новый выбор требует новых оснований.",
+        exception="Защита базы или выгодный обмен могут оправдывать повторный риск. Любая повторная смерть не равна повторной ошибке.",
+        drill="Открой возвращение после выбранной смерти. Запиши новый план и признак, который мог его отменить.",
+        measurement="Проверь решение после возвращения: какие условия изменились и чем объяснялся маршрут. Счётчик смертей не заменяет этот ответ.",
+        lesson="Если состав рядом и угроза не изменились, поход тем же путём требует объяснения. Иногда им будет срочная защита, иногда лучше другая область.",
+        sources=("S1", "S11"), events=("death",), mode="episode_review"),
+    _card("i1", "items", "Задача покупки",
+        question="Что мне мешало, какую задачу решает предмет и чем я пожертвовал ради него?",
+        signal="Ты планируешь важный предмет для своего героя в этом матче.",
+        action="Закончи три фразы: мне мешает; предмет поможет; после получения я смогу. Назови одну альтернативу.",
+        why="Понятная задача покупки связывает золото с конкретным действием героя.",
+        exception="Новая информация может изменить покупку. Название героя и одна минута приобретения не определяют правильность выбора.",
+        drill="Выбери один предмет. Сопоставь план до покупки с тем, что стало доступно после получения.",
+        measurement="Запиши задачу, альтернативу и эпизод для проверки. Покупка, получение и применение — разные события; неизвестное оставь неизвестным.",
+        lesson="Предмет может помочь пережить угрозу, добраться до цели или сохранить союзника. После покупки сначала проверь, появилась ли возможность решить именно эту задачу.",
+        sources=("S6", "S13"), events=_ITEM_EVENTS, mode="episode_review"),
+    _card("i2", "items", "Первая подходящая возможность",
+        question="Когда после получения предмета действительно возникла его задача и что мешало её выполнить?",
+        signal="Предмет получен; ты проверяешь ближайший подходящий эпизод, а не только первое нажатие.",
+        action="Для активного предмета проверь условия применения. Для пассивного — выполненную работу и другие причины результата.",
+        why="Быстрее нажать не всегда полезнее. Важнее выбрать момент, в котором предмет решает нужную задачу.",
+        exception="Пассивному предмету не нужно отдельное нажатие. Нет записи применения — ещё не значит, что предмет не работал или возможность была упущена.",
+        drill="Сопоставь получение предмета с одним просмотренным эпизодом. Проверь ресурсы, цель, союзников и ограничения; не создавай драку ради задания.",
+        measurement="Отметь, была ли подходящая возможность, какое действие выбрано и что подтверждено. Если возможности не было, не считай это провалом.",
+        lesson="Убийство после покупки само по себе не показывает её влияние. Если подходящих условий нет, подготовить следующую задачу может быть разумнее немедленного боя.",
+        sources=("S6", "S13"), events=_ITEM_EVENTS, mode="episode_review"),
+    _card("f1", "fights", "Одна работа в бою",
+        question="Какую одну работу мой герой должен выполнить в этом бою и кто может помешать?",
+        signal="До важного действия в бою ещё есть возможность выбрать задачу.",
+        action="Выбери работу: урон по доступной цели, начало боя, защита, прерывание или контроль подхода.",
+        why="Одна задача помогает сохранить нужную позицию и ресурс вместо попытки сделать всё сразу.",
+        exception="Задача меняется вместе с боем. Номер позиции не обязывает начинать каждый бой или спасать недоступного союзника.",
+        drill="Останови реплей до своего важного действия. Назови два варианта и только затем посмотри продолжение.",
+        measurement="Запиши задачу, возможность её выполнить и помехи. Сначала оцени выбор, затем исход; KDA не подтверждает выполнение задачи.",
+        lesson="Удержать способность для опасного действия врага иногда полезнее немедленного нажатия. Но это нужно проверить по готовности, цели и ситуации.",
+        sources=("S10", "S12"), events=_COMBAT, mode="episode_review"),
+    _card("f2", "fights", "Что делать после боя",
+        question="Какая следующая цель доступна с оставшимися героями и ресурсами?",
+        signal="Эпизод боя закончился, и команда может продолжить действие или восстановиться.",
+        action="Проверь живых героев, ресурсы и путь отхода; выбери объект, волны, территорию или восстановление.",
+        why="Польза боя зависит и от того, что удаётся получить или сохранить после него.",
+        exception="Убийство не обязывает идти на башню или Рошана. После неудачи новая драка может только увеличить потери.",
+        drill="После одного боя сравни продолжение и восстановление. Назови цену каждого и условие отмены выбранного пути.",
+        measurement="Запиши выбранную цель и подтверждённый результат. Один журнал убийств не доказывает готовность команды брать объект.",
+        lesson="Если здоровья, ключевой способности или пути отхода не хватает, восстановление может лучше сохранить преимущество, чем попытка взять ещё один объект.",
+        sources=("S10", "S12"), events=(*_COMBAT, "tower"), mode="episode_review"),
+    _card("a1", "decisions", "План и поправка по ходу",
+        question="Что составу проще сделать, где возникнет трудность и какой у меня запасной план?",
+        signal="Герои выбраны, а исход матча ещё неизвестен.",
+        action="Запиши одну сильную сторону состава, вероятную трудность и условие перехода к запасному плану.",
+        why="План до результата помогает отличить обоснованный прогноз от объяснения задним числом.",
+        exception="Неизвестные механики или патч нужно проверить. Слово «драфт» само по себе не объясняет ошибку.",
+        drill="До игры запиши план, после — одно событие, которое его изменило, и своё новое действие.",
+        measurement="Сравни исходную запись с решением по ходу матча. Победа не подтверждает весь план, поражение не опровергает каждую его часть.",
+        lesson="Драфт — сочетание возможностей и ограничений выбранных героев. Начни с вопроса, что этому составу легче делать и что требует подготовки.",
+        sources=("S1", "S12")),
+    _card("a2", "decisions", "Сначала предскажи, потом смотри",
+        question="Какое действие я выбрал бы здесь и какие условия объясняют другой выбор?",
+        signal="Есть свежий реплей сильного игрока на знакомом герое и той же указанной позиции.",
+        action="Останови просмотр до выбора, предложи своё действие и затем сравни с продолжением.",
+        why="Предсказание тренирует собственное объяснение вместо копирования красивого результата.",
+        exception="Одна чужая игра не даёт правила для всех матчей. Сравни патч, предметы и информацию; полный обзор может скрыть сложность выбора.",
+        drill="Разбери один сравнимый эпизод: своё решение, выбор игрока, различия условий и вывод для следующей игры.",
+        measurement="Запиши объяснение до просмотра продолжения и одно условие, при котором чужое действие не подходит тебе.",
+        lesson="Если сильный игрок ушёл с линии, ищи, что он получил и что оставил. Сам факт его высокого рейтинга не делает такой уход полезным в твоём матче.",
+        sources=("S9", "S12")),
+    _card("a3", "decisions", "План в сложной игре",
+        question="Какие два действия доступны сейчас, какова их цена и что заставит меня отказаться от выбранного?",
+        signal="Нужно выбрать между защитой, обменом, восстановлением или важной тратой ресурсов.",
+        action="Сравни два варианта по доступной информации и сохрани условие отмены плана.",
+        why="Сложная игра проверяет, умеешь ли ты менять привычное правило, когда условия изменились.",
+        exception="Правила выкупа и механики проверяй для текущего матча. Отставание и готовность команды нельзя угадывать по одному KDA.",
+        drill="Выбери один сложный момент, опиши два варианта и цену каждого, затем проверь продолжение.",
+        measurement="Сохрани объяснение выбора и информацию, которая могла его опровергнуть. Если контекста не хватает, отметь необходимость просмотра.",
+        lesson="Защищать всё сразу не всегда возможно. Иногда обмен сохраняет больше ресурсов, иногда доступная защита важнее — решение требует условий конкретного эпизода.",
+        sources=("S1", "S11", "S12")),
+)
+
+
+def _position(value):
+    return value if type(value) is int and 1 <= value <= 5 else None
+
+
+def get_exercise(ident, position=None):
+    """Get a fresh card; role-specific choices require an explicit valid role."""
+    position = _position(position)
+    return next((deepcopy(row) for row in _EXERCISES if row["id"] == ident
+                 and (not row["roles"] or position in row["roles"])), None)
+
+
+def get_catalog(position=None):
+    position = _position(position)
+    exercises = [deepcopy(row) for row in _EXERCISES
+                 if not row["roles"] or position in row["roles"]]
+    available = {row["id"] for row in exercises}
+    stages = deepcopy(list(_STAGES))
+    for stage in stages:
+        stage["exercise_ids"] = [ident for ident in stage["exercise_ids"] if ident in available]
+    return {"schema_version": VERSION, "version": VERSION, "position": position,
+            "position_required": position is None, "stages": stages, "exercises": exercises,
+            "sources": [{"id": ident, "title": title, "url": url} for ident, title, url in _SOURCES],
+            "source_note": "Карточки — собственная методика Narma на основе доступных авторских текстов. Старые билды, минуты и координаты не используются как актуальные правила."}
+
+
+def _finite(value):
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def _report_hero(report):
+    player = report.get("player") if isinstance(report, dict) else None
+    hero = player.get("hero") if isinstance(player, dict) else None
+    return hero if isinstance(hero, str) and _HERO.fullmatch(hero) else None
+
+
+def _events(report):
+    """Reject malformed provenance locally; owner checks belong to the caller."""
+    if not isinstance(report, dict) or not _report_hero(report):
+        return []
+    coverage = report.get("coverage")
+    if (report.get("schema_version") != "narma.replay-report.v1"
+            or not isinstance(coverage, dict) or coverage.get("complete") is not True
+            or not isinstance(coverage.get("source_sha256"), str)
+            or not _DIGEST.fullmatch(coverage["source_sha256"])
+            or not isinstance(report.get("match_id"), str) or not _MATCH.fullmatch(report["match_id"])):
+        return []
+    raw = report.get("evidence")
+    if not isinstance(raw, list) or len(raw) > 4000:
+        return []
+    counts = Counter(row.get("id") for row in raw if isinstance(row, dict) and isinstance(row.get("id"), str))
+    metrics = report.get("metrics")
+    duration = metrics.get("duration_seconds") if isinstance(metrics, dict) else None
+    limit = min(duration, 86400) if _finite(duration) and duration >= 0 else 86400
+    events = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        ident, time, kind = row.get("id"), row.get("time"), row.get("type")
+        if (not isinstance(ident, str) or not _IDENT.fullmatch(ident) or counts[ident] != 1
+                or not _finite(time) or not 0 <= time <= limit
+                or not isinstance(kind, str) or kind not in _EVENT_TITLES):
+            continue
+        events.append({"id": ident, "type": kind, "time": time,
+                       "data": row["data"] if isinstance(row.get("data"), dict) else {}})
+    return sorted(events, key=lambda event: (event["time"], event["id"]))
+
+
+def _item_anchors(report, events):
+    insights = report.get("insights") if isinstance(report, dict) else None
+    items = insights.get("items") if isinstance(insights, dict) else None
+    if not isinstance(items, list) or len(items) > 40:
+        return set()
+    by_id = {event["id"]: event for event in events}
+    anchors = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name, ident, time = item.get("item"), item.get("event_id"), item.get("time")
+        if (not isinstance(name, str) or not _ITEM.fullmatch(name) or not isinstance(ident, str)
+                or not _finite(time) or ident not in by_id):
+            continue
+        event = by_id[ident]
+        data = event["data"]
+        observed = data.get("items")
+        # Insight times are rounded by the factual report builder to 3 decimals.
+        if abs(event["time"] - time) > .001:
+            continue
+        acquisition = ((event["type"] == "purchase" and data.get("item") == name)
+                       or (event["type"] == "item_observed" and isinstance(observed, list) and name in observed))
+        if not acquisition:
+            continue
+        anchors.add(ident)
+        realization = item.get("realization")
+        if not isinstance(realization, dict):
+            continue
+        use_id, use_time = realization.get("first_use_event_id"), realization.get("first_use_time")
+        use = by_id.get(use_id) if isinstance(use_id, str) else None
+        if (use and use["type"] == "item_used" and use["data"].get("item") == name
+                and _finite(use_time) and abs(use["time"] - use_time) <= .001
+                and use["time"] >= event["time"]):
+            anchors.add(use_id)
+    return anchors
+
+
+def evidence_candidates(report, exercise_id=None, position=None):
+    """Return contextual anchors, not automatically verified opportunities."""
+    exercise = get_exercise(exercise_id, position) if exercise_id is not None else None
+    if exercise_id is not None and exercise is None:
+        return []
+    events = _events(report)
+    allowed = set(exercise["evidence_types"]) if exercise else set(_EVENT_TITLES)
+    item_ids = _item_anchors(report, events)
+    return [{"evidence_id": event["id"], "type": event["type"], "time": event["time"],
+             "title": _EVENT_TITLES[event["type"]]}
+            for event in events if event["type"] in allowed
+            and (event["type"] not in _ITEM_EVENTS or event["id"] in item_ids)][:80]
+
+
+def suggest_exercises(report, position=None):
+    """Offer at most three review choices; selection is always the player's.
+
+    No score/rank is computed and missing events never mean zero opportunities.
+    Generic templates remain available when an episode cannot be validated.
+    """
+    position, hero = _position(position), _report_hero(report)
+    candidates = []
+    for ident in ("r1", "i1", "f1"):
+        anchors = evidence_candidates(report, ident, position)
+        if not anchors:
+            continue
+        anchor = anchors[0]
+        time = int(anchor["time"])
+        candidates.append({"exercise_id": ident, "hero": hero, "position": position,
+            "kind": "episode_review", "episode_time": anchor["time"],
+            "evidence_ids": [anchor["evidence_id"]],
+            "observation": f"В реплее на {time // 60}:{time % 60:02d} записано: {anchor['title'].lower()}.",
+            "limitation": "Это место для просмотра, а не установленная ошибка. Подходящую возможность и качество решения нужно проверить."})
+    if candidates:
+        return candidates
+    ident = ("l1" if position in (1, 2, 3) else "l2") if hero and position else "a1"
+    return [{"exercise_id": ident, "hero": hero, "position": position,
+        "kind": "manual_choice", "episode_time": None, "evidence_ids": [],
+        "observation": "Можно выбрать это упражнение для самостоятельной практики.",
+        "limitation": "Это учебный шаблон. Подходящий эпизод и результат практики пока не подтверждены."}]

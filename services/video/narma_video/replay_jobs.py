@@ -126,11 +126,36 @@ def get_replay(job_id, owner_id):
         current = row["state"] == "ready"
         report = row["result_payload"] if current else (archive["report"] if archive else None)
         context = report_hero_context(connection, row, report)
+        report = report_coaching_view(report, context)
         if archive:
-            archive = {**archive, "hero_context": report_hero_context(connection, row, archive["report"])}
+            archived_context = report_hero_context(connection, row, archive["report"])
+            archive = {**archive, "hero_context": archived_context,
+                       "report": report_coaching_view(archive["report"], archived_context)}
     return {"replay": public(row), "parts": [part["part_number"] for part in parts],
             "report": report, "hero_context": context,
             "report_is_previous": bool(not current and archive), "archived_report": archive}
+
+
+def report_coaching_view(report, hero_context):
+    """Suppress outdated role-specific prose in the response, not in storage.
+
+    Pre-curriculum reports have no role provenance and retain their original
+    presentation. A new report records its input role; changing that role must
+    not silently display the old assessment as a current-role recommendation.
+    """
+    if not isinstance(report, dict):
+        return report
+    coaching = report.get('coaching')
+    if not isinstance(coaching, dict) or not isinstance(coaching.get('context'), dict):
+        return report
+    recorded = coaching['context']
+    if (isinstance(hero_context, dict)
+            and recorded.get('hero') == hero_context.get('hero')
+            and recorded.get('position') == hero_context.get('position')):
+        return report
+    return {**report, 'coaching': {**coaching, 'status': 'context_changed',
+            'summary': 'Позиция или контекст изменились. Выбери учебную задачу для текущей позиции.',
+            'points': [], 'next_game': []}}
 
 
 def report_hero_context(connection, row, report):

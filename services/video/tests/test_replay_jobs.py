@@ -31,6 +31,21 @@ OWNER = "portal_synthetic_replay_owner"
 TOKEN = "Z" * 43
 
 
+def test_saved_coaching_uses_current_manual_role_without_rewriting_source():
+    report = {'coaching': {'status': 'ready', 'summary': 'Original', 'points': [{'title': 'Old'}],
+                          'next_game': [{'title': 'Old task'}],
+                          'context': {'hero': 'npc_dota_hero_viper', 'position': 3}},
+              'metrics': {'kills': 4}}
+    assert replay.report_coaching_view(report, {'hero': 'npc_dota_hero_viper', 'position': 3}) is report
+    changed = replay.report_coaching_view(report, {'hero': 'npc_dota_hero_viper', 'position': 2})
+    assert changed['coaching']['status'] == 'context_changed'
+    assert not changed['coaching']['points'] and not changed['coaching']['next_game']
+    assert changed['metrics'] == report['metrics']
+    assert report['coaching']['summary'] == 'Original' and report['coaching']['status'] == 'ready'
+    legacy = {'coaching': {'status': 'ready', 'summary': 'Before curriculum'}}
+    assert replay.report_coaching_view(legacy, {'position': 3}) is legacy
+
+
 @pytest.fixture
 def browser(monkeypatch, tmp_path):
     url = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")

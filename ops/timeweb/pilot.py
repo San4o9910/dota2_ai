@@ -328,7 +328,37 @@ def ensure_public_ip(cloud, server):
     event("public_ip_binding_requested", ip_id=ip_id, server_id=server["id"])
 
 
-def main():
+def deploy_hermes(ssh, release, sha, *, activate=False):
+    """Product updates preserve a disabled runtime; activation is explicit."""
+    if not activate:
+        output = command(ssh + ['python3 ' + release + '/ops/timeweb/check_hermes_disabled.py ' + sha], timeout=60)
+        state = json.loads(output)
+        if (state.get('event') != 'hermes_runtime_preserved'
+                or state.get('automatic_tracking') is not False
+                or state.get('previous_runtime_disabled') is not True
+                or state.get('services_stopped') is not True
+                or state.get('provider_calls_created') != 0):
+            raise CheckError('hermes_disabled_state_unverified')
+        event('hermes_runtime_preserved', automatic_tracking=False,
+            previous_runtime_disabled=True, services_stopped=True, provider_calls_created=0)
+        return state
+    output = command(ssh + ['python3 ' + release + '/ops/timeweb/activate_hermes.py ' + sha], timeout=660)
+    state = json.loads(output)
+    if (state.get('event') != 'hermes_runtime_ready'
+            or state.get('runtime_revision') != '9fd44b4dfc44138b9e5d5689acb56c438364ff7b'
+            or state.get('automatic_tracking') is not True
+            or state.get('network_isolation_verified') is not True
+            or state.get('provider_calls_created') not in (0, 1)
+            or state.get('review', {}).get('verified') is not True):
+        raise CheckError('hermes_runtime_not_ready')
+    event('hermes_runtime_ready', runtime_revision=state['runtime_revision'],
+        automatic_tracking=True, network_isolation_verified=True,
+        provider_calls_created=state['provider_calls_created'], resources=state['resources'],
+        review=state['review'], budget_before=state['budget_before'], budget_after=state['budget_after'])
+    return state
+
+
+def main(*, activate_hermes=False):
     cloud = Cloud()
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     sha = os.environ.get("GITHUB_SHA", "")
@@ -476,6 +506,10 @@ runcmd:
             command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
             event("installing_private_services", server_id=server_id, release=sha)
             command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
+            if not activate_hermes:
+                # Fail before stopping/changing services if this update would
+                # silently disable a previously active Hermes runtime.
+                deploy_hermes(ssh, release, sha)
             try:
                 transfer_image_archive(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py receive " + sha], image_archive)
                 command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py install " + sha], timeout=1000)
@@ -502,38 +536,26 @@ runcmd:
             event("global_video_allowance", enabled=state.get("enabled"),
                 limit_microusd=state.get("limit_microusd"),spent_microusd=state.get("spent_microusd"),
                 reserved_microusd=state.get("reserved_microusd"))
-            # Start only the verified local replay worker. No synthetic paid job.
-            output=command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname],timeout=360)
-            activated=json.loads(output)
-            if (activated.get('event')!='replay_pipeline_ready'
-                    or activated.get('fresh_worker_heartbeat') is not True
-                    or activated.get('synthetic_paid_calls')!=0):
-                raise CheckError('replay_pipeline_not_ready')
-            event('replay_pipeline_ready',worker_enabled=True,fresh_worker_heartbeat=True,
-                video_worker_stopped=True,synthetic_paid_calls=0,
-                hero_pool=activated.get('hero_pool'))
             try:
-                output=command(ssh+['python3 '+release+'/ops/timeweb/activate_hermes.py '+sha],timeout=660)
-                hermes=json.loads(output)
-                if (hermes.get('event')!='hermes_runtime_ready'
-                        or hermes.get('runtime_revision')!='9fd44b4dfc44138b9e5d5689acb56c438364ff7b'
-                        or hermes.get('automatic_tracking') is not True
-                        or hermes.get('network_isolation_verified') is not True
-                        or hermes.get('provider_calls_created') not in (0,1)
-                        or hermes.get('review',{}).get('verified') is not True):
-                    raise CheckError('hermes_runtime_not_ready')
-                event('hermes_runtime_ready',runtime_revision=hermes['runtime_revision'],
-                    automatic_tracking=True,network_isolation_verified=True,
-                    provider_calls_created=hermes['provider_calls_created'],
-                    resources=hermes['resources'],review=hermes['review'],
-                    budget_before=hermes['budget_before'],budget_after=hermes['budget_after'])
+                # Learning/schema/owner checks run before starting the replay
+                # worker. Their failure restores the API as well as workers.
+                output=command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname],timeout=360)
+                activated=json.loads(output)
+                if (activated.get('event')!='replay_pipeline_ready'
+                        or activated.get('fresh_worker_heartbeat') is not True
+                        or activated.get('synthetic_paid_calls')!=0):
+                    raise CheckError('replay_pipeline_not_ready')
+                event('replay_pipeline_ready',worker_enabled=True,fresh_worker_heartbeat=True,
+                    video_worker_stopped=True,synthetic_paid_calls=0,
+                    hero_pool=activated.get('hero_pool'), learning=activated.get('learning'))
+                deploy_hermes(ssh, release, sha, activate=activate_hermes)
             except Exception:
                 # Preserve the old working portal/worker release. Rollback only
                 # runtime containers/images; paid ledger entries remain durable.
                 try:
                     command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py rollback " + sha], timeout=150)
                     command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+' --rollback-only'],timeout=180)
-                    event('previous_services_restored_after_hermes_failure')
+                    event('previous_services_restored_after_activation_failure')
                 except Exception:
                     event('previous_services_restore_unconfirmed')
                 raise
@@ -571,6 +593,8 @@ if __name__ == "__main__":
             target_preflight()
         elif not sys.argv[1:]:
             main()
+        elif sys.argv[1:] == ['--activate-hermes']:
+            main(activate_hermes=True)
         else:
             raise CheckError("invalid_pilot_arguments")
     except CheckError as error:

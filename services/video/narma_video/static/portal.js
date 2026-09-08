@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20};
+const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set()};
 if (state.token) history.replaceState(null, '', location.pathname);
 const labels = {uploading:'Загружается', queued:'В очереди', processing:'Разбираем матч', ready:'Разбор готов', failed:'Разбор остановлен'};
 const failures = {
@@ -54,6 +54,7 @@ async function session() {
   if(!state.user) {
     state.pool=null; state.poolRequest++; state.poolDrafts.clear(); state.poolJournalOpen.clear(); state.poolSignature=''; state.poolVisible=20;
     state.profile=null; state.selected=null; state.detail=null; state.showArchived=false; $('result').hidden=true; $('pool-content').hidden=true;
+    state.learning=null;state.reportLearning=null;state.learningRequest++;state.reportLearningRequest++;state.learningDrafts.clear();state.learningMatches.clear();state.learningStage=null;state.learningExercise=null;state.reportExercise=null;$('report-learning').replaceChildren();$('pool-learning').replaceChildren();
     $('pool-hero').replaceChildren(new Option('Все герои','')); $('pool-position').value=''; $('pool-period').value='all'; $('pool-favorites-only').checked=false; $('pool-refresh').disabled=false;
     $('pool-status').textContent=''; $('pool-content').setAttribute('aria-busy','false');
     $('auth-title').textContent=state.setup?'Создай свой аккаунт':'Вход в NARMA VISION';
@@ -378,21 +379,22 @@ function renderDetail() {
   for(const [label,value] of [['Убийства / смерти / помощи',`${num(m.kills)} / ${num(m.deaths)} / ${num(m.assists)}`],['Добивания / денаи',`${num(m.last_hits)} / ${num(m.denies)}`],['Ценность предметов и золота',num(m.net_worth)],['Всего заработано золота',num(m.total_earned_gold)],['Полученный опыт',num(m.xp)],['Время вне игры',stamp(m.confirmed_dead_seconds)]]) { const metric=node('div',undefined,'metric'); metric.append(node('dt',label),node('dd',value)); metrics.append(metric); }
   const duration=Math.max(1,m.duration_seconds??0), samples=(report.economy??[]).filter(sample=>Number.isFinite(sample.time)&&sample.time>=0&&sample.time<=duration);
   $('timeline').max=String(Math.ceil(duration)); state.graphs=[]; drawGraph('gold-chart',samples,'net_worth',duration); drawGraph('xp-chart',samples,'xp',duration);
-  drawBars('income-chart',insight().gold?.bins??[],'income',duration); drawBars('farm-chart',insight().pace??[],'last_hits',duration); drawCombat(duration); renderSources(); renderItems(); renderHeroContext(); renderTraining();
+  drawBars('income-chart',insight().gold?.bins??[],'income',duration); drawBars('farm-chart',insight().pace??[],'last_hits',duration); drawCombat(duration); renderSources(); renderItems(); renderHeroContext(); renderTraining(); renderReportLearning();
   renderPoints($('findings'),report.findings); renderEvents();
   const coach=report.coaching; $('coaching-section').hidden=false;
   if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points); }
-  else { $('coaching-summary').textContent='Тренерский комментарий временно недоступен. Статистика и эпизоды из реплея доступны.'; $('coaching').replaceChildren(); }
+  else { $('coaching-summary').textContent=coach?.status==='context_changed'?'Позиция изменилась. Упражнение выше учитывает текущую позицию; прежний тренерский комментарий к ней не применяется.':'Тренерский комментарий временно недоступен. Статистика и эпизоды из реплея доступны.'; $('coaching').replaceChildren(); }
   const coverage=report.coverage??{}; $('coverage-summary').textContent=coverage.complete?'Реплей прочитан полностью. Статистика и события относятся к закреплённому игроку.':'Полнота данных не подтверждена.';
   $('coverage-limits').replaceChildren(...(coverage.limits??[]).map(limit=>node('li',limit)));
   seekTime(state.time);
 }
-async function openReplay(id, scroll=false) {
+async function openReplay(id, scroll=false, canonicalRedirect=false) {
+  if(!canonicalRedirect)state.learningCanonicalTrail.clear();
   const changed=state.selected!==id; if(changed) state.showArchived=false; state.selected=id; const detail=await api('/api/replays/'+id); if(state.selected!==id) return;
   if(changed||(!state.detail?.report&&detail.report)) { state.time=detail.report?.metrics?.duration_seconds??0; $('event-filter').value='all'; }
-  state.detail=detail; renderDetail(); if(scroll) $('result').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+  state.detail=detail; if(changed) {state.reportLearning=null;state.reportExercise=null;} renderDetail(); if(detail.report&&!state.showArchived&&!detail.report_is_previous) void loadReportLearning(); if(scroll) $('result').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
 }
-$('previous-report-toggle').addEventListener('click',()=>{ state.showArchived=!state.showArchived; state.time=displayedReport()?.metrics?.duration_seconds??0; renderDetail(); });
+$('previous-report-toggle').addEventListener('click',()=>{ state.showArchived=!state.showArchived; state.time=displayedReport()?.metrics?.duration_seconds??0; renderDetail(); if(!state.showArchived) void loadReportLearning(); });
 $('timeline').addEventListener('input',()=>seekTime(Number($('timeline').value)));
 $('event-filter').addEventListener('change',renderEvents);
 for(const id of ['gold-chart','xp-chart','income-chart','farm-chart']) $(id).addEventListener('click',event=>{ const duration=displayedReport()?.metrics?.duration_seconds; if(!duration) return; const box=$(id).getBoundingClientRect(), relative=(event.clientX-box.left)/box.width*520; seekTime((relative-20)/480*duration); });
@@ -423,7 +425,7 @@ async function loadPool() {
   try {
     const data=await api('/api/hero-pool?'+poolQuery());
     if(request!==state.poolRequest||!state.user) return;
-    state.pool=data; renderPool(); $('pool-status').textContent='';
+    state.pool=data; renderPool(); $('pool-status').textContent=''; void loadLearning();
   } catch(error) {
     if(request!==state.poolRequest) return;
     state.pool=null; $('pool-content').hidden=true; $('pool-status').textContent=`Не удалось открыть пул героев. ${error.message} Нажми «Обновить пул», чтобы повторить.`;
@@ -629,8 +631,170 @@ function renderPoolJournal(row,match) {
   });
   form.append(fields,noteLabel,note,help,save,status);details.append(summary,form);row.append(details);
 }
-for(const id of ['pool-period','pool-hero','pool-position','pool-favorites-only']) $(id).addEventListener('change',()=>{state.poolVisible=20;void loadPool();});
+for(const id of ['pool-period','pool-hero','pool-position','pool-favorites-only']) $(id).addEventListener('change',()=>{state.poolVisible=20;if(['pool-hero','pool-position'].includes(id)){state.learningRequest++;state.learning=null;$('pool-learning').replaceChildren(node('p','Открываем практику для выбранных героя и позиции…','help'));}void loadPool();});
 $('pool-refresh').addEventListener('click',()=>void loadPool());
 $('pool-metric').addEventListener('change',()=>{ if(state.pool) renderPoolTrend(); });
 
 matchMedia('(max-width:680px)').addEventListener('change',()=>{ if(state.pool) renderPoolTrend(); });
+
+// Curriculum is a saved-report projection; player reflections remain self-reports.
+const learningAssessmentLabels={applied:'Выполнил',partial:'Частично',not_applied:'Не выполнил',no_opportunity:'Подходящей ситуации не было',uncertain:'Нужно посмотреть'};
+function learningError(target,error,retry) {
+  target.replaceChildren(node('p',`Не удалось открыть практику. ${error.message}`,'help'));
+  const button=node('button','Повторить загрузку практики','quiet');button.type='button';button.addEventListener('click',retry);target.append(button);
+}
+async function loadReportLearning() {
+  if(!state.user||!state.selected||state.showArchived||state.detail?.report_is_previous)return;
+  const jobId=state.selected,request=++state.reportLearningRequest;
+  if(!state.reportLearning)$('report-learning').replaceChildren(node('p','Подбираем упражнение по сохранённому разбору…','help'));
+  try {
+    const data=await api(`/api/learning/reports/${encodeURIComponent(jobId)}`);
+    if(request!==state.reportLearningRequest||state.selected!==jobId||!state.user||state.showArchived)return;
+    if(data.job_id!==jobId){
+      if(!data.job_id||state.learningCanonicalTrail.has(data.job_id))throw Error('Не удалось определить актуальный разбор этого матча. Обнови страницу.');
+      state.learningCanonicalTrail.add(jobId);state.reportLearning=null;
+      $('report-learning').replaceChildren(node('p','Открываем актуальный разбор и его эпизоды…','help'));
+      try{await openReplay(data.job_id,false,true);if(state.selected===data.job_id)notice('Открыт актуальный сохранённый разбор этого матча. Практика и таймкоды относятся к нему.');}catch(error){if(state.selected===data.job_id){state.selected=jobId;learningError($('report-learning'),error,()=>void loadReportLearning());}}return;
+    }
+    state.reportLearning=data;renderReportLearning();
+  } catch(error) {if(request===state.reportLearningRequest&&state.selected===jobId&&!state.showArchived)learningError($('report-learning'),error,()=>void loadReportLearning());}
+}
+async function loadLearning() {
+  if(!state.user)return;
+  const request=++state.learningRequest,query=new URLSearchParams();
+  if($('pool-hero').value)query.set('hero',$('pool-hero').value);
+  if($('pool-position').value)query.set('position',$('pool-position').value);
+  const scope=query.toString();
+  if(state.learningScope!==scope){state.learning=null;state.learningStage=null;state.learningExercise=null;state.learningScope=scope;}
+  if(!state.learning)$('pool-learning').replaceChildren(node('p','Открываем упражнения и сохранённую практику…','help'));
+  try {
+    const data=await api(`/api/learning?${query}`);
+    if(request!==state.learningRequest||!state.user)return;
+    state.learning=data;renderLearning();
+  } catch(error) {if(request===state.learningRequest)learningError($('pool-learning'),error,()=>void loadLearning());}
+}
+function learningStatus(text) {const status=node('p',text,'help learning-status');status.setAttribute('role','status');return status;}
+function learningDetails(title,text) {const details=node('details',undefined,'learning-details');details.append(node('summary',title),node('p',text,'help'));return details;}
+function learningContext(hero,position) {return `${heroName(hero)||'Герой не выбран'} · ${positionName(position)}`;}
+function validLearningPlan(plan) {return plan.status==='active'&&plan.validity==='current';}
+function learningPlanText(plan) {
+  if(plan.validity==='source_unavailable')return 'Исходный разбор недоступен. Выбери упражнение в доступном матче.';
+  if(plan.validity==='source_changed')return 'Исходный разбор обновился. Выбери фокус по его новым данным.';
+  if(plan.validity==='scope_changed')return 'Позиция исходного матча изменена. Выбери фокус для подтверждённой позиции.';
+  return plan.status==='completed'?'Практика завершена тобой':plan.status==='paused'?'Практика на паузе':'Текущий фокус';
+}
+async function learningMutation(button,path,method,body,scope) {
+  button.disabled=true;const status=scope.querySelector('.learning-status')??scope.appendChild(learningStatus(''));status.textContent='Сохраняем…';
+  try {
+    await api(path,method,body);
+    if(scope.isConnected)status.textContent='Сохранено в аккаунте.';
+    await Promise.all([loadReportLearning(),loadLearning()]);
+  }catch(error){if(scope.isConnected)status.textContent=error.message;}
+  finally{if(button.isConnected)button.disabled=false;}
+}
+function learningStartButton(card,exercise,jobId,currentPlan) {
+  if(currentPlan?.exercise_id===exercise.id&&validLearningPlan(currentPlan))return;
+  if(currentPlan&&validLearningPlan(currentPlan)){card.append(node('p','Сейчас в работе другой фокус. Приостанови или заверши его ниже, чтобы начать это упражнение.','help'));return;}
+  const button=node('button','Начать практику · 3–5 игр','secondary learning-start');button.type='button';button.disabled=!jobId;
+  button.addEventListener('click',()=>void learningMutation(button,'/api/learning/plans','POST',{job_id:jobId,exercise_id:exercise.id},card));card.append(button,learningStatus(''));
+}
+function learningExerciseCard(exercise,{hero,position,jobId,suggestion,currentPlan}={}) {
+  const card=node('article',undefined,'learning-exercise');card.dataset.exerciseId=exercise.id;
+  card.append(node('p',hero?learningContext(hero,position):'Упражнение по методике Narma','eyebrow'),node('h4',exercise.title));
+  if(suggestion?.observation){const observed=node('div',undefined,'learning-observation');observed.append(node('p',suggestion.kind==='episode_review'?'Эпизод для проверки':'Выбрано для самостоятельной проверки','eyebrow'),node('p',suggestion.observation,'help'));if(suggestion.limitation)observed.append(node('p',suggestion.limitation,'help'));card.append(observed);}
+  card.append(node('p',exercise.decision_question,'learning-question'),node('p',exercise.action,'learning-action'));
+  const rationale=node('div',undefined,'learning-rationale');rationale.append(node('strong','Почему это помогает'),node('p',exercise.why,'help'));card.append(rationale);
+  if(exercise.exception){const exception=node('div',undefined,'learning-instruction');exception.append(node('strong','Когда выбрать другое действие'),node('p',exercise.exception,'help'));card.append(exception);}
+  const details=node('details',undefined,'learning-details');details.append(node('summary','Когда применять и как тренировать'));
+  for(const [label,value] of [['Сигнал',exercise.signal],['Упражнение',exercise.drill],['Как проверить',exercise.measurement],['Пример',exercise.mini_lesson]])if(value){const part=node('div',undefined,'learning-instruction');part.append(node('strong',label),node('p',value,'help'));details.append(part);}
+  card.append(details);
+  if(suggestion?.evidence_ids?.length&&jobId===state.selected){const links=node('div',undefined,'evidence-links');for(const id of suggestion.evidence_ids.slice(0,2)){const ref=state.evidence.get(id);if(!ref)continue;const button=node('button',`${stamp(ref.time)} · ${eventLabels[ref.type]??'Эпизод'}`,'quiet');button.type='button';button.addEventListener('click',()=>focusEvidence(id));links.append(button);}card.append(links);}
+  if(hero&&position&&jobId)learningStartButton(card,exercise,jobId,currentPlan);
+  else card.append(node('p',hero?'Укажи позицию в матче, чтобы сохранить практику.':'Для практики выбери героя и позицию в фильтрах.','help'));
+  return card;
+}
+function renderReportLearning() {
+  const target=$('report-learning');target.replaceChildren();
+  if(state.showArchived||state.detail?.report_is_previous){target.append(node('p','Для практики открой текущий разбор: упражнение привязывается к его событиям.','help'));return;}
+  const data=state.reportLearning;if(!data){target.append(node('p','Подбираем упражнение по сохранённому разбору…','help'));return;}
+  const role=node('div',undefined,'learning-role'),label=node('label','Моя позиция в этом матче'),select=node('select');select.id='learning-report-position';label.htmlFor=select.id;select.append(new Option('Подтверди позицию',''));for(const [value,text]of Object.entries(positionLabels))select.append(new Option(text,value));select.value=data.position??'';
+  select.addEventListener('change',async()=>{select.disabled=true;state.reportLearningRequest++;const status=learningStatus('Сохраняем позицию…');role.append(status);try{await api(`/api/hero-pool/matches/${encodeURIComponent(data.job_id)}`,'PUT',{position:select.value?Number(select.value):null});state.reportLearning=null;state.reportExercise=null;await openReplay(state.selected);if(state.pool)await loadPool();}catch(error){status.textContent=error.message;select.disabled=false;}});
+  role.append(label,select,node('p',data.position_required?'Позиция не определяется по имени героя. Подтверди, какую работу ты выполнял.':'Позиция указана тобой. Упражнения учитывают героя и эту позицию.','help'));target.append(role);
+  const exercises=data.catalog?.exercises??[],active=(data.plans??[]).find(validLearningPlan);
+  let exercise=exercises.find(item=>item.id===state.reportExercise)??exercises.find(item=>item.id===active?.exercise_id)??exercises.find(item=>item.id===data.suggestions?.[0]?.exercise_id)??exercises[0];
+  if(!exercise){target.append(node('p','Выбери позицию, чтобы открыть подходящее упражнение.','help'));return;}
+  state.reportExercise=exercise.id;
+  const choice=node('select'),choiceLabel=node('label','Фокус следующей игры');choice.id='learning-report-exercise';choiceLabel.htmlFor=choice.id;for(const item of exercises)choice.append(new Option(item.title,item.id));choice.value=exercise.id;choice.addEventListener('change',()=>{state.reportExercise=choice.value;renderReportLearning();$('learning-report-exercise')?.focus({preventScroll:true});});target.append(choiceLabel,choice);
+  target.append(learningExerciseCard(exercise,{hero:data.hero,position:data.position,jobId:data.position?data.job_id:null,suggestion:data.suggestions?.find(item=>item.exercise_id===exercise.id),currentPlan:active}));
+  if(active)target.append(learningPlanCard(active,[{job_id:data.job_id,match_id:data.match_id,hero:data.hero,position:data.position}],data));
+  else if(data.plans?.length)target.append(learningPlanCard(data.plans[0],[],data));
+}
+function renderLearning() {
+  const target=$('pool-learning'),data=state.learning;target.replaceChildren();if(!data)return;
+  const stages=data.catalog?.stages??[],exercises=data.catalog?.exercises??[],plans=data.plans??[];
+  const hero=$('pool-hero').value,position=Number($('pool-position').value)||null,scopeReady=!!hero&&!!position;
+  const current=scopeReady?plans.find(plan=>validLearningPlan(plan)&&plan.hero===hero&&plan.position===position):null;
+  const preferred=exercises.find(item=>item.id===current?.exercise_id);if(!stages.some(stage=>stage.id===state.learningStage))state.learningStage=preferred?.stage_id??stages[0]?.id;
+  const rail=node('div',undefined,'learning-stages');rail.setAttribute('role','group');rail.setAttribute('aria-label','Ступени обучения');
+  for(const stage of stages){const button=node('button',`${stage.order} · ${stage.title}`,'quiet');button.type='button';button.setAttribute('aria-pressed',String(stage.id===state.learningStage));button.addEventListener('click',()=>{state.learningStage=stage.id;state.learningExercise=null;renderLearning();Array.from($('pool-learning').querySelectorAll('.learning-stages button')).find(item=>item.getAttribute('aria-pressed')==='true')?.focus({preventScroll:true});});rail.append(button);}target.append(rail);
+  const stage=stages.find(item=>item.id===state.learningStage);if(stage?.description)target.append(node('p',stage.description,'help'));
+  const available=exercises.filter(item=>item.stage_id===state.learningStage),exercise=available.find(item=>item.id===state.learningExercise)??available.find(item=>item.id===current?.exercise_id)??available[0];
+  if(exercise){state.learningExercise=exercise.id;if(available.length>1){const label=node('label','Упражнение ступени'),select=node('select');select.id='learning-pool-exercise';label.htmlFor=select.id;for(const item of available)select.append(new Option(item.title,item.id));select.value=exercise.id;select.addEventListener('change',()=>{state.learningExercise=select.value;renderLearning();$('learning-pool-exercise')?.focus({preventScroll:true});});target.append(label,select);}
+    const match=(data.history??[]).find(item=>item.hero===hero&&item.position===position&&(!item.report_state||item.report_state==='ready'));
+    target.append(learningExerciseCard(exercise,{hero:scopeReady?hero:null,position,jobId:scopeReady?match?.job_id:null,currentPlan:current}));
+  }else target.append(node('p','Для упражнений линии выбери позицию: задачи коров и поддержки различаются.','help'));
+  if(current)target.append(learningPlanCard(current,data.history??[]));
+  const other=plans.filter(plan=>plan.id!==current?.id);if(other.length){const details=node('details',undefined,'learning-details learning-plan-history');details.append(node('summary',scopeReady?'Другие сохранённые фокусы':'Сохранённые фокусы по героям и позициям'));let loaded=false;details.addEventListener('toggle',()=>{if(details.open&&!loaded){loaded=true;for(const plan of other)details.append(learningPlanCard(plan,data.history??[]));}});target.append(details);}
+  target.append(node('p','Личные отметки помогают разбирать решения. Они не подтверждают освоение ступени автоматически; винрейт оценивай вместе с числом матчей.','help'));
+}
+function learningPlanCard(plan,history,reportData=null) {
+  const card=node('article',undefined,'learning-plan');card.dataset.planId=plan.id;
+  card.append(node('p',learningPlanText(plan),'eyebrow'),node('h4',`${plan.exercise?.title??'Практика'} · ${learningContext(plan.hero,plan.position)}`));
+  const counts=node('p',`Матчей практики: ${num(plan.training_matches??0)} · личных проверок: ${num(plan.reviewed_matches??0)}`,'help');card.append(counts);
+  if(plan.comparison_note)card.append(node('p',plan.comparison_note,'help'));
+  if(plan.training_matches>0){const results=Object.entries(learningAssessmentLabels).map(([key,label])=>`${label.toLowerCase()}: ${num(plan.self_report_counts?.[key]??0)}`);card.append(node('p',`Твои отметки в новых матчах: ${results.join(' · ')}. Это не автоматическая оценка навыка.`,'help'));}
+  if(plan.stale_checks>0)card.append(node('p',`Проверок с изменёнными или недоступными данными: ${num(plan.stale_checks)}. Они не входят в прогресс практики.`,'help'));
+  if(!(plan.training_matches>0))card.append(node('p','Новых отмеченных матчей практики пока нет. Исходный матч и матчи без подтверждённой даты не показывают прогресс после начала задания.','help learning-no-matches'));
+  const actions=node('div',undefined,'learning-actions');
+  const transitions=plan.status==='active'?[['paused','Пауза'],['completed','Завершить практику']]:plan.status==='paused'?[...(plan.validity==='current'?[['active','Продолжить практику']]:[]),['completed','Завершить практику']]:plan.validity==='current'?[['active','Вернуть в практику']]:[];
+  for(const [status,label]of transitions){const button=node('button',label,'quiet');button.type='button';button.addEventListener('click',()=>void learningMutation(button,`/api/learning/plans/${encodeURIComponent(plan.id)}`,'PATCH',{status},card));actions.append(button);}card.append(actions);
+  if(plan.can_check&&plan.validity==='current') {
+    const comparable=history.filter(match=>match.hero===plan.hero&&match.position===plan.position&&(!match.report_state||match.report_state==='ready'));
+    if(comparable.length){const form=learningCheckForm(plan,comparable,reportData);if(reportData)card.append(form);else{const check=node('details',undefined,'learning-details learning-check-toggle');check.append(node('summary','Проверить матч по этому фокусу'),form);card.append(check);}}
+    else card.append(node('p','Открой или загрузи матч этого героя на этой позиции для личной проверки.','help'));
+  }
+  const checks=plan.checks??[];if(checks.length){const details=node('details',undefined,'learning-details learning-check-history');details.append(node('summary',`История личных проверок · ${checks.length}`));for(const check of checks){const row=node('div',undefined,'learning-check-row');row.append(poolMatchButton(check,`Матч ${check.match_id}`),node('p',`Твоя оценка: ${learningAssessmentLabels[check.self_assessment]??'Нужно посмотреть'}`,'help'),node('p',check.answer,'learning-answer'));if(check.validity!=='current')row.append(node('p','Данные матча изменились или недоступны. Эта отметка требует повторной проверки.','help'));else if(!check.is_training)row.append(node('p',check.chronology_status==='baseline'?'Исходный матч · точка отсчёта':check.chronology_status==='date_unknown'?'Дата игры не подтверждена · вне счётчика практики':check.build_status==='different_build'?'Другая версия игры · вне серии практики':'Матч до начала практики · вне счётчика практики','help'));details.append(row);}card.append(details);}
+  card.append(learningStatus(''));return card;
+}
+function learningCheckForm(plan,matches,reportData) {
+  const instance=reportData?'report':'pool',prefix=`learning-${instance}-${plan.id}`,form=node('form',undefined,'learning-check-form');form.append(node('h5','Личная проверка'),node('p','Это твоя оценка решения, а не подтверждённый вывод по реплею. Ответ и отметка сохранятся в аккаунте.','help'));
+  const matchLabel=node('label','Матч для проверки'),matchSelect=node('select');matchSelect.id=`${prefix}-match`;matchLabel.htmlFor=matchSelect.id;for(const match of matches)matchSelect.append(new Option(`#${match.match_id}`,match.job_id));const selected=state.learningMatches.get(prefix);if(matches.some(match=>match.job_id===selected))matchSelect.value=selected;
+  const episodeLabel=node('label','Эпизод из разбора'),episodeSelect=node('select');episodeSelect.id=`${prefix}-episode`;episodeLabel.htmlFor=episodeSelect.id;episodeSelect.append(new Option('Весь контекст матча / подходящей ситуации нет',''));
+  const question=node('label',plan.exercise?.decision_question??'Чего ты хотел добиться и что получилось?'),answer=node('textarea',undefined,'pool-note');answer.id=`${prefix}-answer`;question.htmlFor=answer.id;answer.maxLength=1500;answer.required=true;answer.rows=3;answer.placeholder='Что я знал до решения, чего хотел и что попробую иначе';
+  const assessmentLabel=node('label','Твоя оценка выполнения'),assessment=node('select');assessment.id=`${prefix}-assessment`;assessmentLabel.htmlFor=assessment.id;assessment.append(new Option('Выбери свою оценку',''));assessment.required=true;for(const [value,label]of Object.entries(learningAssessmentLabels))assessment.append(new Option(label,value));
+  const help=node('p','Для оценки конкретного эпизода выбери событие. Если ситуации не было или данных недостаточно, отметь это явно.','help'),save=node('button','Сохранить личную проверку','secondary');save.type='submit';const status=learningStatus('');
+  form.append(matchLabel,matchSelect,episodeLabel,episodeSelect,question,answer,assessmentLabel,assessment,help,save,status);
+  let request=0,currentJob=matchSelect.value;
+  const key=()=>`${plan.id}:${currentJob}`;
+  const values=()=>({evidence_id:episodeSelect.value||null,answer:answer.value,self_assessment:assessment.value});
+  const remember=()=>{state.learningDrafts.set(key(),values());status.textContent='Есть несохранённые изменения.';};
+  const populate=async()=>{
+    currentJob=matchSelect.value;state.learningMatches.set(prefix,currentJob);const requestId=++request;
+    const stored=state.learningDrafts.get(key())??(plan.checks??[]).find(check=>check.job_id===currentJob)??{};answer.value=stored.answer??'';assessment.value=stored.self_assessment??'';
+    episodeSelect.replaceChildren(new Option('Весь контекст матча / подходящей ситуации нет',''));episodeSelect.disabled=true;save.disabled=true;status.textContent='Загружаем эпизоды…';
+    try{const data=reportData?.job_id===currentJob?reportData:await api(`/api/learning/reports/${encodeURIComponent(currentJob)}`);if(requestId!==request||!form.isConnected)return;
+      const types=plan.exercise?.evidence_types??[],candidates=data.exercise_candidates?.[plan.exercise_id]??data.review_candidates??[];for(const ref of candidates)if(!types.length||types.includes(ref.type))episodeSelect.append(new Option(`${stamp(ref.time)} · ${ref.title??eventLabels[ref.type]??'Эпизод'}`,ref.evidence_id));
+      if(Array.from(episodeSelect.options).some(option=>option.value===stored.evidence_id))episodeSelect.value=stored.evidence_id;
+      episodeSelect.disabled=false;save.disabled=false;status.textContent=state.learningDrafts.has(key())?'Есть несохранённые изменения.':'';
+    }catch(error){if(requestId===request)status.textContent=`Не удалось загрузить эпизоды. ${error.message}`;}
+  };
+  for(const control of [episodeSelect,answer,assessment])control.addEventListener('input',remember);
+  matchSelect.addEventListener('change',()=>void populate());
+  form.addEventListener('submit',async event=>{event.preventDefault();const submitted={job_id:currentJob,...values()};if(!submitted.answer.trim()){answer.focus();return;}if(!submitted.evidence_id&&plan.exercise?.review_mode==='episode_review'&&!['no_opportunity','uncertain'].includes(submitted.self_assessment)){status.textContent='Выбери эпизод, к которому относится оценка, или отметь, что подходящей ситуации не было.';episodeSelect.focus();return;}
+    const draftKey=key();state.learningDrafts.set(draftKey,values());const controls=[matchSelect,episodeSelect,answer,assessment,save];for(const control of controls)control.disabled=true;status.textContent='Сохраняем личную проверку…';
+    try{await api(`/api/learning/plans/${encodeURIComponent(plan.id)}/checks`,'PUT',submitted);state.learningDrafts.delete(draftKey);await Promise.all([loadReportLearning(),loadLearning()]);const replacement=$(`${prefix}-answer`);replacement?.closest('form')?.querySelector('.learning-status')?.replaceChildren(document.createTextNode('Личная проверка сохранена в аккаунте.'));replacement?.focus({preventScroll:true});}
+    catch(error){status.textContent=error.message;for(const control of controls)control.disabled=false;}
+  });
+  // The form must be connected before an immediately available report is applied.
+  queueMicrotask(()=>void populate());return form;
+}

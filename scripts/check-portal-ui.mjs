@@ -67,6 +67,15 @@ try {
     let authenticated=false, bound=false, job=null, uploaded=false, legacy=false, poolFailed=false, poolSaveFailed=false;
     const poolMatches=Array.from({length:8},(_,index)=>({job_id:'pool-'+index,match_id:String(8984000000+index),hero:index===7?'npc_dota_hero_lion':'npc_dota_hero_necrolyte',label:index===7?'Lion':'Necrophos',position:index===7?5:index===6?null:2,outcome:index===6?null:index%2?'loss':'win',played_at:index===6?null:new Date(Date.now()-(50-index*7)*86400000).toISOString(),date_source:index===6?'analysis':'user',chronology_at:new Date(Date.now()-(50-index*7)*86400000).toISOString(),metrics:{deaths_per_30:10-index,gpm:400+index*20,xpm:500+index*20,last_hits_10:30+index,net_worth_10:4000+index*100,item_delay_seconds:index===3?null:120-index*10}}));
     const favorites=new Set(), goals=[], poolWrites=[], externalRequests=[];
+    let learningPosition=null, learningAlias=false;
+    const learningPlans=[], learningWrites=[];
+    const learningStages=[['lane','Линия и ресурсы'],['map','Две следующие задачи'],['risk','Риск и возвращение в игру'],['items','Задача предмета'],['fights','Своя работа в бою'],['decisions','Самостоятельный разбор']].map(([id,title],index)=>({id,title,order:index+1,description:'Один навык — одна проверка.',exercise_ids:[]}));
+    const learningExercises=learningStages.map((stage,index)=>({id:stage.id==='risk'?'r1':`fixture-${stage.id}`,stage_id:stage.id,title:stage.id==='risk'?'Проверить риск перед выходом':stage.title,roles:stage.id==='lane'?[1,2,3]:[],decision_question:'Чего я хотел добиться и что знал до решения?',signal:'Перед переходом на следующую задачу.',action:'Назови цель и условие отмены действия.',why:'Так можно заранее заметить опасность.',exception:'Срочная помощь может изменить план.',drill:'Выбери три похожих эпизода.',measurement:'Объясни выбор по информации до действия.',focus_window_matches:3,mini_lesson:'Это учебный пример, не факт о твоём матче.',source_refs:[],review_mode:stage.id==='risk'?'episode_review':'manual_context',evidence_types:stage.id==='risk'?['death']:[]}));
+    const learningCatalog=position=>({schema_version:'narma.curriculum.v1',version:'narma.curriculum.v1',stages:learningStages,exercises:learningExercises.filter(exercise=>!exercise.roles.length||exercise.roles.includes(position)),position,position_required:!position,sources:[]});
+    const learningMatch=id=>poolMatches.find(match=>match.job_id===id)??{job_id:job?.id,match_id:'8984479726',hero:report.player.hero,position:learningPosition};
+    const projectPlan=plan=>({...plan,validity:learningMatch(plan.source_job_id).position===plan.position?'current':'scope_changed',can_check:true,training_matches:0,reviewed_matches:plan.checks.length,self_report_counts:{applied:0,partial:0,not_applied:0,no_opportunity:plan.checks.filter(check=>check.self_assessment==='no_opportunity').length,uncertain:0}});
+    function learningReport(id) {if(learningAlias&&id===job?.id)return {...learningReport('pool-1'),requested_job_id:id};const match=learningMatch(id);return {schema_version:'narma.learning.v1',job_id:id,requested_job_id:id,match_id:match.match_id,hero:match.hero,hero_label:'Necrophos',position:match.position,position_required:!match.position,catalog:learningCatalog(match.position),suggestions:[{exercise_id:'r1',kind:'episode_review',observation:'В реплее записана смерть; причина требует проверки.',evidence_ids:['death-1'],episode_time:600,limitation:'Факт смерти не доказывает ошибку.'}],review_candidates:[{evidence_id:'death-1',type:'death',time:id.startsWith('pool-')?600+Number(id.slice(5))*120:600,title:'Смерть героя'}],plans:learningPlans.filter(plan=>plan.hero===match.hero&&plan.position===match.position).map(projectPlan)};}
+
     const coachReference=index=>({job_id:'pool-'+index,match_id:String(8984000000+index),evidence_id:'death-1',time:600+index*120,type:'death'});
     const coachPatterns=[
       {id:'coach-return',title:'Возвращение на линию',observation:malicious,confidence:'medium',heroes:[{hero:'npc_dota_hero_necrolyte',label:'Necrophos',position:2}],evidence:[coachReference(0),coachReference(1)],goals:[{id:'coach-goal',action:'Перед возвращением проверь предмет.',success_criterion:malicious,evaluate_after_matches:2}]},
@@ -94,6 +103,12 @@ try {
       let body, status=200;
       if(endpoint==='/api/auth/login') { authenticated=true; body={authenticated:true}; }
       else if(endpoint==='/api/session') body={authenticated,setup_required:false,user:authenticated?{email:'fixture@example.test'}:null};
+      else if(endpoint==='/api/learning') {const hero=url.searchParams.get('hero'),position=Number(url.searchParams.get('position'))||null;body={schema_version:'narma.learning.v1',catalog:learningCatalog(position),profile,scope:{hero,position},plans:learningPlans.filter(plan=>(!hero||plan.hero===hero)&&(!position||plan.position===position)).map(projectPlan),history:[...poolMatches,...(job?[learningMatch(job.id)]:[])].filter(match=>(!hero||match.hero===hero)&&(!position||match.position===position))};}
+      else if(endpoint.startsWith('/api/learning/reports/')) body=learningReport(endpoint.split('/').at(-1));
+      else if(endpoint==='/api/learning/plans'&&method==='POST') {const command=request.postDataJSON(),match=learningMatch(command.job_id);assert.ok(match.position);for(const plan of learningPlans)if(plan.hero===match.hero&&plan.position===match.position)plan.status='paused';const plan={id:`practice-${learningPlans.length+1}`,exercise_id:command.exercise_id,exercise:learningExercises.find(item=>item.id===command.exercise_id),hero:match.hero,hero_label:'Necrophos',position:match.position,status:'active',created_at:new Date().toISOString(),source_job_id:match.job_id,source_match_id:match.match_id,checks:[]};learningPlans.push(plan);body={saved:true,plan:projectPlan(plan)};}
+      else if(/^\/api\/learning\/plans\/[^/]+\/checks$/.test(endpoint)&&method==='PUT') {const plan=learningPlans.find(item=>item.id===endpoint.split('/').at(-2)),command=request.postDataJSON();assert.ok(plan);learningWrites.push(command);const match=learningMatch(command.job_id);plan.checks=plan.checks.filter(check=>check.job_id!==command.job_id);plan.checks.push({...command,match_id:match.match_id,source:'player_self_report',validity:'current',chronology_status:command.job_id===plan.source_job_id?'baseline':'predates_plan',is_training:false,checked_at:new Date().toISOString()});body={saved:true,plan:projectPlan(plan)};}
+      else if(endpoint.startsWith('/api/learning/plans/')&&method==='PATCH') {const plan=learningPlans.find(item=>item.id===endpoint.split('/').at(-1));plan.status=request.postDataJSON().status;body={saved:true,plan:projectPlan(plan)};}
+      else if(job&&endpoint===`/api/hero-pool/matches/${job.id}`&&method==='PUT') {learningPosition=request.postDataJSON().position;body={saved:true};}
       else if(endpoint==='/api/hero-pool') {status=poolFailed?503:200;body=poolFailed?{detail:'Проверка восстановления после ошибки.'}:poolResponse(url);}
       else if(endpoint==='/api/hero-pool/favorites'&&method==='PUT') {const value=request.postDataJSON();favorites.add(value.hero+':'+value.position);body={saved:true};}
       else if(endpoint.startsWith('/api/hero-pool/favorites/')&&method==='DELETE') {const parts=endpoint.split('/');favorites.delete(parts[4]+':'+parts[5]);body={deleted:true};}
@@ -166,6 +181,7 @@ try {
     assert.equal(await page.locator('#farm-chart .chart-cursor').getAttribute('x1'),await page.locator('#income-chart .chart-cursor').getAttribute('x1'));
     assert.equal(await page.locator('#farm-chart .chart-cursor').getAttribute('x1'),await page.locator('#xp-chart .chart-cursor').getAttribute('x1'));
     if(screenshotDir) await page.locator('[aria-labelledby="income-heading"]').screenshot({path:path.join(screenshotDir,`portal-${width}-income.png`)});
+    await page.locator('.legacy-training > summary').click();
     assert.equal(await page.locator('#next-game-plan .training-card').count(),1);
     assert.equal(await page.locator('#item-cards .item-card:visible').count(),1);
     assert.equal(await page.locator('#item-rail .item-chip').count(),2);
@@ -369,6 +385,71 @@ try {
     await page.getByText('Исходный реплей удалён. Разбор и статистика сохранены.',{exact:true}).waitFor();
     assert.equal(await page.getByRole('button',{name:'Освободить место',exact:true}).count(),0);
     assert.equal(await page.locator('#history .history-row').count(),1);
+    // Learning remains available for existing saved reports, even after releasing .dem.
+    await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
+    const learning=page.locator('#report-learning');
+    await learning.getByLabel('Моя позиция в этом матче',{exact:true}).waitFor();
+    assert.equal(await learning.locator('.learning-start').count(),0,'Unknown roles cannot start a hero/position plan.');
+    await learning.getByLabel('Моя позиция в этом матче',{exact:true}).selectOption('2');
+    await learning.getByRole('button',{name:'Начать практику · 3–5 игр',exact:true}).waitFor();
+    assert.equal(await learning.locator('.learning-exercise').count(),1);
+    await learning.getByRole('button',{name:'Начать практику · 3–5 игр',exact:true}).click();
+    await learning.locator('.learning-check-form').waitFor();
+    assert.match(await learning.locator('.learning-plan').textContent(),/Новых отмеченных матчей практики пока нет/);
+    assert.match(await learning.locator('.learning-check-form').textContent(),/Это твоя оценка решения/);
+    await learning.locator('.learning-check-form textarea').fill(malicious);
+    await learning.getByLabel('Твоя оценка выполнения',{exact:true}).selectOption('no_opportunity');
+    await learning.getByRole('button',{name:'Сохранить личную проверку',exact:true}).click();
+    await learning.getByText('Личная проверка сохранена в аккаунте.',{exact:true}).waitFor();
+    assert.deepEqual(learningWrites.at(-1),{job_id:job.id,evidence_id:null,answer:malicious,self_assessment:'no_opportunity'});
+    await learning.locator('.learning-check-history > summary').click();
+    assert.match(await learning.locator('.learning-check-history').textContent(),/Твоя оценка: Подходящей ситуации не было/);
+    assert.match(await learning.locator('.learning-check-history').textContent(),/Исходный матч · точка отсчёта/);
+    assert.equal(await learning.locator('img,script').count(),0,'Personal answers are rendered as text.');
+    assert.equal(learningPlans[0].checks.length,1);
+    // A full reload must restore both the selected focus and saved answer from API data.
+    await page.reload();
+    await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
+    await learning.locator('.learning-check-form textarea').waitFor();
+    await page.waitForFunction(value=>document.querySelector('#report-learning .learning-check-form textarea')?.value===value,malicious);
+    assert.equal(await learning.getByLabel('Твоя оценка выполнения',{exact:true}).inputValue(),'no_opportunity');
+    await learning.getByLabel('Моя позиция в этом матче',{exact:true}).selectOption('5');
+    await page.waitForFunction(()=>document.querySelector('#learning-report-position')?.value==='5'&&!document.querySelector('#report-learning .learning-plan'));
+    assert.equal(await learning.locator('.learning-exercise').count(),1,'A role change cannot retain the previous role’s active plan.');
+    await learning.getByLabel('Моя позиция в этом матче',{exact:true}).selectOption('2');
+    await learning.locator('.learning-plan').waitFor();
+    await page.getByRole('button',{name:'Пул героев',exact:true}).click();
+    await page.getByLabel('Герой',{exact:true}).selectOption('npc_dota_hero_necrolyte');
+    await page.getByLabel('Позиция',{exact:true}).selectOption('2');
+    const practice=page.locator('#pool-learning');
+    await practice.locator('.learning-plan').waitFor();
+    assert.equal(await practice.locator('.learning-stages button').count(),6);
+    assert.equal(await practice.locator('.learning-stages button[aria-pressed=true]').count(),1);
+    const stage=practice.getByRole('button',{name:'4 · Задача предмета',exact:true});await stage.focus();await stage.press('Enter');
+    assert.equal(await stage.getAttribute('aria-pressed'),'true');
+    assert.equal(await practice.locator('.learning-exercise').count(),1,'Only the selected lesson is expanded.');
+    assert.equal(await practice.locator('.learning-plan').count(),1,'One active focus is shown for this hero and position.');
+    assert.equal(await practice.locator('.learning-check-form').isHidden(),true,'The pool keeps the personal-check form compact until requested.');
+    const checkToggle=practice.getByText('Проверить матч по этому фокусу',{exact:true});await checkToggle.focus();await checkToggle.press('Enter');
+    assert.equal(await practice.locator('.learning-check-form').isVisible(),true,'The personal check opens with the keyboard.');
+    assert.match(await practice.locator('.learning-check-form').textContent(),/Это твоя оценка решения/);
+    await checkToggle.press('Enter');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    if(screenshotDir)await practice.screenshot({path:path.join(screenshotDir,`portal-${width}-learning.png`)});
+    await page.addScriptTag({content:axe.source});
+    const learningAccessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+    assert.deepEqual(learningAccessibility.violations.map(violation=>({id:violation.id,nodes:violation.nodes.map(item=>item.target)})),[]);
+    // A duplicate upload must navigate to the canonical report before exposing practice.
+    learningAlias=true;
+    await page.getByRole('button',{name:'Разбор матча',exact:true}).click();
+    await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
+    await page.getByRole('heading',{name:'Матч 8984000001',exact:true}).waitFor();
+    await page.waitForFunction(()=>document.querySelector('#report-learning .learning-check-form select')?.value==='pool-1');
+    assert.match(await learning.getByLabel('Эпизод из разбора',{exact:true}).textContent(),/12:00/);
+    await learning.getByLabel('Эпизод из разбора',{exact:true}).selectOption('death-1');
+    const canonicalEvent=page.locator('#events [data-evidence-id="death-1"]');
+    assert.match(await canonicalEvent.textContent(),/12:00/,'Practice anchors and the visible replay share canonical timestamps.');
+    assert.match(await page.locator('#notice').textContent(),/Открыт актуальный сохранённый разбор/);
     await page.getByRole('button',{name:'Мой игрок',exact:true}).click();
     await page.getByRole('heading',{name:'Мой игрок',exact:true}).waitFor();
     assert.match(await page.locator('#player-summary').textContent(),/Steam ID: 123/);

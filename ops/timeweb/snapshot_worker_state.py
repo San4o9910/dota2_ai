@@ -78,8 +78,9 @@ with database() as c:
  unknown=c.execute("SELECT id,reserved_microusd FROM video_provider_calls WHERE billing_status='unknown' ORDER BY id").fetchall()
  owners=c.execute("SELECT owner_id FROM portal_accounts ORDER BY owner_id").fetchall()
  bindings=c.execute("SELECT owner_id,account_id FROM portal_dota_profiles ORDER BY owner_id").fetchall()
+ hermes_calls=c.execute("SELECT count(*) AS n FROM video_provider_calls WHERE call_kind='hermes'").fetchone()['n']
  identity=hashlib.sha256(json.dumps({'owners':owners,'bindings':bindings},sort_keys=True).encode()).hexdigest()
- print(json.dumps({'budget':b,'unknown':unknown,'owner_identity':identity}))
+ print(json.dumps({'budget':b,'unknown':unknown,'owner_identity':identity,'hermes_calls':hermes_calls}))
 '''
 
 

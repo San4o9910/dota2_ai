@@ -12,6 +12,12 @@ on:
       - scripts/check-portal-ui.mjs
       - .dockerignore
   workflow_dispatch:
+    inputs:
+      activate_hermes:
+        description: Explicitly activate Hermes using the existing allowance and all review/network gates
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -102,4 +108,10 @@ jobs:
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python3 ops/timeweb/pilot.py
+          ACTIVATE_HERMES: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_hermes && 'true' || 'false' }}
+        run: |
+          pilot_args=()
+          if [[ "$ACTIVATE_HERMES" == "true" ]]; then
+            pilot_args+=(--activate-hermes)
+          fi
+          python3 ops/timeweb/pilot.py "${pilot_args[@]}"
