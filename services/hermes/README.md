@@ -8,12 +8,32 @@ uv 0.11.33 and the upstream dependency lock are used by the image build.
 Build from the repository root:
 
 ```sh
-docker build -f services/hermes/Dockerfile -t narma-hermes-runtime .
+docker build --secret id=github_token,env=GITHUB_TOKEN -f services/hermes/Dockerfile -t narma-hermes-runtime .
 docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=256m \
   --memory=1g --cpus=1 --pids-limit=128 --cap-drop=ALL \
   --security-opt=no-new-privileges narma-hermes-runtime \
   /opt/hermes-venv/bin/python /app/smoke.py
 ```
+
+Source builds use a read-only GitHub token supplied through a temporary BuildKit
+secret. The deployment workflow uses its built-in `github.token`; no server or
+model credential is involved. `fetch_source.py` authenticates only the fixed
+official repository, disables redirects and tracing, and never puts the token in
+Git arguments, persistent configuration, image environment or output. Its cache
+is accepted only after exact commit, tree (`69a0ed6baa95d4e6af7b3c8c6147f193d29d48f7`)
+and Git object integrity checks. Verified cache hits make no network request.
+Git replacement objects and cache-local configuration/attribute overrides are
+disabled. The exported source was checked against the trusted pinned checkout:
+all 12,195 tracked files matched in bytes and executable modes, including the
+upstream's declared line-ending conversion for PowerShell files.
+
+An unsuccessful transient read may be retried once, after at least 60 seconds;
+an exposed `Retry-After` is respected or the build fails if it exceeds the
+240-second fetch budget. Each fetch is bounded to 90 seconds. There is no
+anonymous request, alternate archive endpoint or URL rotation after throttling.
+The frozen upstream dependency lock and actual-agent/network smoke tests remain
+unchanged. This follows GitHub's guidance to authenticate requests and wait after
+[rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
 
 `GET /healthz` returns `{status: "ready", runtime_revision: "…"}` only after an
 actual upstream import and the immutable build revision check. `POST /run` accepts

@@ -6,15 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv==0.11.33
+COPY services/hermes/fetch_source.py /usr/local/lib/narma-fetch-hermes.py
 WORKDIR /opt/hermes
-# Official supported source installation, with both source and dependency lock pinned.
-RUN git init . && git remote add origin https://github.com/NousResearch/hermes-agent.git \
-    && git fetch --depth=1 origin 9fd44b4dfc44138b9e5d5689acb56c438364ff7b \
-    && git checkout --detach FETCH_HEAD \
-    && test "$(git rev-parse HEAD)" = 9fd44b4dfc44138b9e5d5689acb56c438364ff7b \
-    && git rev-parse HEAD > .narma-upstream-revision \
-    && uv sync --frozen --no-dev --no-default-groups --python /usr/local/bin/python \
-    && rm -rf .git /root/.cache/uv \
+# Exact official commit/tree and frozen dependency lock. Auth is a temporary
+# BuildKit mount, never an ARG, image ENV, repository config or logged command.
+RUN --mount=type=secret,id=github_token,required=true \
+    --mount=type=cache,id=narma-hermes-source-9fd44b4,target=/var/cache/narma-hermes-git,sharing=locked \
+    python /usr/local/lib/narma-fetch-hermes.py --cache /var/cache/narma-hermes-git --destination /opt/hermes
+RUN uv sync --frozen --no-dev --no-default-groups --python /usr/local/bin/python \
+    && rm -rf /root/.cache/uv \
     && useradd --uid 10002 --create-home narma-hermes
 WORKDIR /app
 COPY services/hermes/server.py services/hermes/agent_task.py services/hermes/smoke.py ./
