@@ -86,8 +86,42 @@ provider error message has been recovered. A real SDK interception gate checks
 that no provider schema fields are sent. Fixed error reason and field labels
 are retained without exposing provider text, credentials or match data.
 
-At most one new activation attempt is permitted within the remaining existing
+At most one new activation attempt was permitted within the remaining existing
 allowance. All old failed tasks, provider calls and unknown reservations remain
-unchanged, and successfully reviewed facts are reused across contracts. If this
-attempt fails, do not bump the contract or spend again without a concrete new
-diagnosis. Production activation of the final contract is not yet confirmed.
+unchanged, and successfully reviewed facts are reused across contracts.
+
+### Final verified state — 2026-09-08 07:50 UTC
+
+- Source `60ce729abcb58bdac41315e8a62ea36e8cf3b6c4`, workflow
+  `34200482332`, passed the browser, actual Hermes Docker/runtime/isolation,
+  25 deployment tests and 348 native PostgreSQL tests (one optional replay
+  test skipped). Local final broker suite: 65 passed; task suite: 20 passed.
+- The bounded live attempt reached Gemini and received HTTP **503 UNAVAILABLE**,
+  category `provider_unavailable`, field label `model`. This is the confirmed
+  reason for this final attempt's failure. It does not retrospectively establish
+  the reason for v1 or the exact invalid parameter in v2.
+- Final task `2af60635-a7b7-4d61-a044-cca4163e86ec` is terminally failed with
+  one attempt; call 11 has unknown usage and retains its reservation. No real
+  runtime review has succeeded or been published. Automatic tracking is off.
+- Independent read-only workflow `34200576476`, diagnostic source
+  `12ed8d1bf9ff43421d1498d6b677002aea3bb164`, confirmed rollback to live
+  `dddac362d404ec04bfc1a384e8ad6fbb0317b7ad`: API healthy, replay worker running,
+  both Hermes containers stopped, neither OOM-killed, zero provider requests
+  made by the diagnostic. Existing reports and prior customer UI fixes remain.
+- Existing allowance remains 10,000,000 micro-USD ($10); settled spend 124,938,
+  reserved 9,600,000, available **275,062**. Reservations are not confirmed
+  charges. Calls 9, 10 and 11 and all previous uncertain history remain intact.
+  Available allowance is below the existing 1,200,000 per-attempt reservation;
+  another activation must not proceed under the present ledger state.
+
+Do not report Hermes as connected. Further activation requires provider
+availability and an explicit, audited accounting/retry decision; never reset
+unknown reservations, increase the allowance or bump a contract merely to
+repeat a failed request. Google documents that failed HTTP 400/500 requests are
+not charged for tokens, but this release does not silently reconcile any prior
+ledger record from that general statement. Preserve the observed error evidence
+for a separate accounting review.
+
+References: [final deployment](https://github.com/San4o9910/dota2_ai/actions/runs/34200482332),
+[independent diagnostic](https://github.com/San4o9910/dota2_ai/actions/runs/34200576476),
+[Gemini billing](https://ai.google.dev/gemini-api/docs/billing#am-i-charged-for-failed-requests).
