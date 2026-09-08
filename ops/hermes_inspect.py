@@ -1,7 +1,8 @@
 """Read-only runtime and accounting diagnostic on the existing Narma server.
 
 Only allowlisted status fields leave the host. No worker is started, task
-requeued, model called, allowance changed or provider credential read.
+requeued, generation called or allowance changed. A single model metadata GET
+uses the running replay worker's existing SDK and credentials without printing them.
 """
 import json
 from pathlib import Path
@@ -15,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'timeweb'))
 from pilot import Cloud, CheckError, command, event, pinned_existing_server, address
 
 DATABASE_PROBE = r'''
-import json
+import json,re
 from narma_video.db import database
 with database() as c:
  c.execute('SET TRANSACTION READ ONLY')
@@ -34,8 +35,60 @@ with database() as c:
   FROM video_provider_calls WHERE call_kind='hermes' ORDER BY id DESC LIMIT 10""").fetchall()
  budget=c.execute("SELECT enabled,model,price_policy,limit_microusd,spent_microusd,reserved_microusd,frozen_reason FROM video_ai_budget WHERE id=1").fetchone()
  unknown=c.execute("SELECT count(*) AS count,coalesce(sum(reserved_microusd),0)::bigint AS reserved_microusd FROM video_provider_calls WHERE billing_status='unknown'").fetchone()
+ unknown_calls=c.execute("SELECT id,call_kind,billing_status,reserved_microusd,created_at::text,finished_at::text FROM video_provider_calls WHERE billing_status='unknown' ORDER BY id LIMIT 30").fetchall()
+ coaching=c.execute("""SELECT result_payload->'coaching'->>'status' AS status,
+  result_payload->'coaching'->>'failure_code' AS failure_code,
+  result_payload->'coaching'->>'failure_category' AS failure_category,
+  result_payload->'coaching'->>'refresh_failure_code' AS refresh_failure_code,
+  result_payload->'coaching'->>'refresh_failure_category' AS refresh_failure_category,
+  count(*) AS count FROM replay_jobs WHERE state='ready' GROUP BY 1,2,3,4,5""").fetchall()
+ categories={'timeout','transport','rate_limited','authentication','provider_unavailable','provider_rejected','budget','configuration','lease','validation','unknown'}
+ for row in coaching:
+  row['status']=row['status'] if row['status'] in ('ready','unavailable',None) else 'unclassified'
+  for field in ('failure_code','refresh_failure_code'):
+   value=row[field]
+   row[field]=value if value is None or re.fullmatch('(?:REPLAY|VIDEO|GEMINI)_[A-Z_]{1,100}',value) else 'unclassified'
+  for field in ('failure_category','refresh_failure_category'):
+   row[field]=row[field] if row[field] is None or row[field] in categories else 'unclassified'
  worker=c.execute("SELECT runtime_revision,automatic_tracking,last_seen::text FROM hermes_workers WHERE id='scheduler'").fetchone()
- print(json.dumps({'tasks':tasks,'provider_calls':calls,'budget':budget,'unknown_reservations':unknown,'worker':worker},default=str))
+ print(json.dumps({'tasks':tasks,'provider_calls':calls,'budget':budget,'unknown_reservations':unknown,
+  'unknown_calls':unknown_calls,'replay_coaching':coaching,'worker':worker},default=str))
+'''
+
+MODEL_PROBE = r'''
+import importlib.metadata,json,os
+from google import genai
+from google.genai import errors,types
+result={'operation':'models.get','model':'gemini-3.8-flash','generation_requests':0,
+ 'sdk_version':importlib.metadata.version('google-genai')}
+client=None
+try:
+ client=genai.Client(api_key=os.environ['GEMINI_API_KEY'],http_options=types.HttpOptions(
+  timeout=20000,retry_options=types.HttpRetryOptions(attempts=1)))
+ model=client.models.get(model='gemini-3.8-flash')
+ result.update(http_status=200,provider_status='OK',
+  supports_generate_content='generateContent' in (model.supported_actions or []),error_flags=[])
+except Exception as error:
+ status=error.code if isinstance(error,errors.APIError) else None
+ status=status if type(status) is int and 100<=status<=599 else None
+ rpc=error.status if isinstance(error,errors.APIError) else None
+ allowed={'CANCELLED','UNKNOWN','INVALID_ARGUMENT','DEADLINE_EXCEEDED','NOT_FOUND','ALREADY_EXISTS',
+  'PERMISSION_DENIED','RESOURCE_EXHAUSTED','FAILED_PRECONDITION','ABORTED','OUT_OF_RANGE',
+  'UNIMPLEMENTED','INTERNAL','UNAVAILABLE','DATA_LOSS','UNAUTHENTICATED'}
+ private=str(error).lower()
+ flags={
+  'unsupported_location':('location is not supported','location not supported','unsupported location','not available in your country','not available in your region'),
+  'invalid_schema':('invalid schema','unsupported schema','response_schema','responsejsonschema'),
+  'invalid_argument':('invalid argument','invalid_argument'),
+  'permission':('permission denied','permission_denied','api key not valid'),
+  'rate_limit':('rate limit','quota exceeded','resource_exhausted'),
+ }
+ result.update(http_status=status,provider_status=rpc if rpc in allowed else None,
+  supports_generate_content=None,error_flags=[name for name,needles in flags.items() if any(needle in private for needle in needles)])
+finally:
+ if client is not None:
+  client.close()
+print(json.dumps(result))
 '''
 
 
@@ -86,6 +139,9 @@ for service in ('hermes-broker','hermes-runner','replay-worker','api'):
 api=containers('api')
 assert len(api)==1
 result['database']=json.loads(run(['docker','exec',api[0],'python','-c',DATABASE_CODE]))
+replay=containers('replay-worker')
+assert len(replay)==1
+result['model_metadata']=json.loads(run(['docker','exec',replay[0],'python','-c',MODEL_CODE]))
 memory={}
 for line in pathlib.Path('/proc/meminfo').read_text().splitlines():
  key,value=line.split(':',1)
@@ -93,7 +149,7 @@ for line in pathlib.Path('/proc/meminfo').read_text().splitlines():
   memory[key]=int(value.strip().split()[0])*1024
 result['memory_bytes']=memory
 print(json.dumps(result))
-'''.replace('DATABASE_CODE', repr(DATABASE_PROBE))
+'''.replace('DATABASE_CODE', repr(DATABASE_PROBE)).replace('MODEL_CODE',repr(MODEL_PROBE))
 
 
 def main():
