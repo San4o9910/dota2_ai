@@ -42,7 +42,7 @@ def graphql(token: str, query: str) -> dict:
         data=json.dumps({"query": query, "operationName": "NarmaSchemaInspection"}).encode(),
         method="POST",
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
-                 "Accept": "application/json", "User-Agent": "NarmaVision-SchemaCheck/1.0"},
+                 "Accept": "application/json", "User-Agent": "STRATZ_API"},
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import httpx
 import pytest
 
 from narma_video import build_meta, explore
@@ -93,3 +94,25 @@ def test_disabled_worker_has_no_network_side_effects(setup,monkeypatch):
     assert cache.thread is None
     assert not calls
     assert cache.get(*KEY)['status']=='unavailable'
+
+
+@pytest.mark.parametrize('status',[200,403])
+def test_documented_client_header_and_no_retry_on_access_denial(monkeypatch,status):
+    calls=[]
+    original=httpx.Client
+    def handler(request):
+        calls.append(request)
+        assert str(request.url)=='https://api.stratz.com/graphql'
+        assert request.headers['User-Agent']=='STRATZ_API'
+        assert request.headers['Authorization']=='Bearer synthetic.test'
+        return httpx.Response(status,json={'data':{'ok':True}})
+    def client(**kwargs):
+        assert kwargs['follow_redirects'] is False and kwargs['trust_env'] is False
+        return original(transport=httpx.MockTransport(handler),**kwargs)
+    monkeypatch.setattr(build_meta.httpx,'Client',client)
+    if status==200:
+        assert build_meta.graphql('synthetic.test','query NarmaTest { __typename }','NarmaTest')=={'ok':True}
+    else:
+        with pytest.raises(SourceError,match='^access_denied$'):
+            build_meta.graphql('synthetic.test','query NarmaTest { __typename }','NarmaTest')
+    assert len(calls)==1

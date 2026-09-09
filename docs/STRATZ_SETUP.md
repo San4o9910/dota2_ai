@@ -6,6 +6,12 @@ issues, commits, browser code or logs. Deployment transfers the validated token
 over SSH stdin into the existing server's mode-0600 environment file. Database
 identity and other provider credentials are preserved.
 
+Every request includes the documented `User-Agent: STRATZ_API` and bearer token.
+The production adapter initially returned HTTP 403 with a different client
+header; this was diagnosed separately from token validity. Requests are not
+retried after access denial. The required header is documented at
+<https://stratz.com/api> and covered by an offline transport regression test.
+
 ## Verified source and actual scope
 
 Authorized introspection and bounded public data checks succeeded on 2026-09-09.

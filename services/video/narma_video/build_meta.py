@@ -48,7 +48,8 @@ def graphql(token, query, operation, variables=None):
         with httpx.Client(timeout=12, follow_redirects=False, trust_env=False) as client:
             with client.stream("POST", ENDPOINT,
                     headers={"Authorization": "Bearer " + token, "Accept": "application/json",
-                             "User-Agent": "NarmaVision-Builds/1.0"},
+                             # Required API-client identification: https://stratz.com/api
+                             "User-Agent": "STRATZ_API"},
                     json={"query": query, "operationName": operation, "variables": variables or {}}) as response:
                 if response.status_code != 200:
                     raise SourceError({401:"authentication_failed",403:"access_denied",429:"rate_limited"}.get(response.status_code,"source_unavailable"))
