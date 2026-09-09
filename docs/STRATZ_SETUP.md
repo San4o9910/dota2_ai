@@ -10,6 +10,11 @@ The existing **Timeweb pilot deployment** workflow runs
 `python3 ops/timeweb/check_stratz.py` before server provisioning. The token is
 available only to that inspection step; it is not copied to the Timeweb server.
 
+The separate **STRATZ source verification** workflow runs the same inspection
+without deployment, server credentials or AI generation. It requires the secret
+to be present and runs when its workflow file changes on the pilot branch, or by
+manual dispatch. This isolates provider setup from the live application's rollout.
+
 - No secret: `source_not_configured`, exit 0. This does not block a UI release.
 - Authorized introspection: `stratz_schema_inspected`, exit 0. The output contains
   only validated schema names, argument types and enum names; omitted fields and
