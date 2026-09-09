@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/stratz-source-check.yml
       - scripts/inspect-stratz-builds.py
+      - scripts/check-stratz-build-data.py
   workflow_dispatch:
 
 permissions:
@@ -27,7 +28,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Verify authorized schema without deployment or match requests
+      - name: Verify authorized schema and public build aggregates without deployment
         env:
           STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
         run: |
@@ -36,3 +37,4 @@ jobs:
             exit 1
           fi
           python3 scripts/inspect-stratz-builds.py
+          python3 scripts/check-stratz-build-data.py
