@@ -1,27 +1,8 @@
-# Deep learning and Workshop builds — integration checkpoint
+# Deep learning integration checkpoint
 
-Status: INTEGRATED CANDIDATE. Not deployed. Full release verification is running on codex/deep-learning-workshop-builds.
+Status: RELEASED AND VERIFIED.
 
-The local execution environment disconnected with environment_offline / HTTP409 during development on 2026-09-09. This branch preserves integration code reconstructed against exact base525cd5e593c27cbdf1b10cc2597cdcdf033ce389 from the implementation contracts and recorded edits. It is not a byte-for-byte verified copy of the inaccessible workspace.
+The implementation formerly tracked here was published as code commit `d1d9d03a9cf844df169948699ce88049f3b880d4`.
+See [DEEP_LEARNING_WORKSHOP_RELEASE.md](DEEP_LEARNING_WORKSHOP_RELEASE.md) for the product changes, source meaning, test evidence and production receipt.
 
-User request: deepen learning beyond short three-question sessions and add builds for all current Dota2 heroes with honest patch freshness.
-
-Integration:
-- Role-specific reading modules API and escaped chapter UI with worked examples, changed conditions, mistakes, match practice, self-checks.
-- Private practice links back to the relevant public role/stage.
-- Workshop builds API and cache lifecycle.
-- Beginning of expanded Python/browser regression coverage.
-
-Dependencies to integrate before testing/deployment:
-- codex/learning-content-recovery-20260909:15reading modules and expanded practice bank.
-- codex/practice-builds-recovery-20260909:trainer and Workshop frontend.
-- codex/workshop-recovery-20260909:Steam adapter, tests, collection/seed tooling.
-
-Remaining gates:
-- Complete deterministic browser fixture for Workshop; verify 5/10/15 sessions and role/depth coverage.
-- Build an actual public-only Steam seed; verify hero coverage against current Valve hero list. Preserve source author, patch, author update date; do not present author guides as statistically highest-winrate builds.
-- Test adapter with real public Steam metadata/CDN (no key/model call); stale/withdrawn entries must stay honest.
-- Full native PostgreSQL, ops, public/private UI gates; only then update existing pilot branch.
-- Same existing Timeweb server only. Preserve Hermes preparation state; no paid model generations, no OpenDota.
-
-Last production code SHA:53fdf7de317ddad80f6cdc66e4a5ec520fca5ad1; pilot head525cd5e593c27cbdf1b10cc2597cdcdf033ce389.
+The local workspace became unavailable during development. Work was recovered through GitHub and verified through native CI; the GitHub release is authoritative. The disconnected local working tree must not overwrite it on reconnection.
