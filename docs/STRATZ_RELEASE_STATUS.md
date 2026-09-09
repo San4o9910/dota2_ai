@@ -10,10 +10,14 @@ diagnostics now require manual dispatch; enabled STRATZ deployment still require
 the real source-data gate below. The source blocker itself is unresolved.
 See `BUILD_SOURCE_REVIEW.md` for the distinct authored-content scope.
 
+The independent authored release `e9cbb2d288bde0e412fa12861b7ca7e2d1105dc5`
+was subsequently deployed successfully by workflow34392636625. The live site
+now serves authored variants; STRATZ remains disabled and unverified.
+
 The deployment receipts below describe the prior blocked STRATZ candidate,
 not a claim that a later authored release has failed or enabled statistics.
 
-**Blocked; not deployed.** The working site retains release
+**Historical STRATZ candidate: blocked; not deployed at that time.** The site retained release
 `c9632736dc0f18ce57b662490401e8edb6c074b4` with 12 authored six-slot guides.
 The integration candidate is `fdac732328ec50d7ad3526bfd124743ab304ce82` on
 `codex/replay-map-hardening-8ea829a`. This follow-up branch records the blocker

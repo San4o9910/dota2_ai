@@ -91,3 +91,14 @@ HTTP 403 and the rollout was blocked before deployment. See
 [STRATZ_RELEASE_STATUS.md](STRATZ_RELEASE_STATUS.md) for exact receipts, offline
 checks and the remaining cohort-validation question. Do not describe this
 candidate as an active source or a joint-build win-rate ranking.
+
+## Independent authored build release (2026-09-09)
+
+Release `e9cbb2d288bde0e412fa12861b7ca7e2d1105dc5` is live on the existing
+server: 12 original conditional six-slot alternatives, official7.41e change
+notes and a public review endpoint using the Valve feed. It explicitly selects
+authored mode, so missing or denied STRATZ access no longer blocks authored
+content delivery. Enabled statistics still require a successful real-source
+gate. See [BUILD_SOURCE_REVIEW.md](BUILD_SOURCE_REVIEW.md) for tested behavior,
+primary evidence, receipts and limits. No popular/high-win-rate combination
+claim is made, and no general ranked-match corpus has been activated.

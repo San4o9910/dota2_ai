@@ -1,5 +1,30 @@
 # Independent authored builds: source and review record
 
+## Verified deployment
+
+Published on the existing Timeweb server 9037783 on 2026-09-09:
+`e9cbb2d288bde0e412fa12861b7ca7e2d1105dc5`, tree
+`ef6b9e7050eace2e5a8f9551f93dc81e1e3d794b`.
+[Deployment workflow 34392636625](https://github.com/San4o9910/dota2_ai/actions/runs/34392636625)
+succeeded, job 102604483150. Native PostgreSQL/API suite: **640 passed, 1 skipped**.
+Local targeted checks: 30 passed; ops checks: 74 passed. Mobile390px and
+desktop1440px public interaction/accessibility checks passed with mocked feeds.
+
+The live readiness receipt confirmed `source=authored`, 12 six-slot guides,
+12 guide reviews, statistical feed disabled and zero generation calls from the
+checks. HTTPS and the existing replay-worker heartbeat passed; personal match
+and learning access checks passed. Existing Hermes remains prepared and
+`waiting_auth`; this release does not claim active ChatGPT coaching. Server
+identity and the existing budget were preserved.
+
+Live browser verification confirmed Viper's `team-magic` selection replaces
+Butterfly with Pipe, retains six slots and the selected-item explanation, and
+loads all six original item icons. The official7.41e note expands correctly.
+Verified public URL:
+<https://narma-72-56-98-68.sslip.io/builds?q=Viper&guide=viper-mid-pressure&variant=team-magic>.
+
+## Content scope
+
 Review date: 2026-09-09. Scope: one original situational six-slot variant for each
 of the 12 existing guides, plus six concise notes about relevant changes in
 Valve's 7.41e patch. This is a source-backed mechanics check and an authored
