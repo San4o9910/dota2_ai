@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 from chatgpt_secrets import prepare_settings
-from stratz_secrets import install_stratz
+from stratz_secrets import install_build_statistics
 
 os.umask(0o077)
 lock = open("/var/lock/narma-deploy.lock", "a")
@@ -43,7 +43,7 @@ else:
 values.update(GEMINI_API_KEY=key, GEMINI_MODEL="gemini-3.8-flash",
     VIDEO_FRAME_BUDGET="3600", VIDEO_REQUEST_BUDGET="250",
     VIDEO_OWNER_DAILY_REQUEST_BUDGET="250")
-install_stratz(values, incoming.get("stratz_token"))
+install_build_statistics(values, incoming)
 portal=json.loads((Path(__file__).parent/'portal-setup.json').read_text())
 if portal['server_id']!=9037783 or portal['project_id']!=2655641 or portal['origin']!='https://narma-72-56-98-68.sslip.io':
     raise SystemExit(5)

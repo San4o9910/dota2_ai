@@ -16,7 +16,7 @@ const {chromium}=dependency('playwright'),axe=dependency('axe-core');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
 const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
-for(const filename of ['explore.js','practice.js','builds.js','build-meta.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
+for(const filename of ['explore.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
 files.set('/assets/dota/items/hurricane_pike.png',['dota/items/hurricane_pike.png','image/png']);
 const server=createServer(async(request,response)=>{
   const file=files.get(new URL(request.url,'http://localhost').pathname);
@@ -39,6 +39,17 @@ for(const guide of buildCatalog.guides){
   assert.ok(guide.final_items.every(item=>/^[a-z0-9_]{1,80}$/.test(item.id)&&item.name&&item.why));
 }
 const {buildFreshness}=await import(pathToFileURL(path.join(root,'builds.js')));
+const {adaptationOptions,applyAdaptation}=await import(pathToFileURL(path.join(root,'build-adaptations.js')));
+for(const guide of buildCatalog.guides){
+  const alternatives=adaptationOptions(guide);
+  assert.ok(alternatives.length>0,`${guide.id}: an authored adaptation must be available.`);
+  for(const option of alternatives){
+    const result=applyAdaptation(guide,option.id);
+    assert.equal(result.rows.length,6);
+    assert.equal(new Set(result.rows.map(item=>item.id)).size,6);
+    assert.equal(result.rows.filter((item,index)=>item.id!==guide.final_items[index].id).length,1);
+  }
+}
 const freshnessNow=Date.parse('2026-09-09T12:00:00Z');
 const checkedGuide={verified_patch:'7.41e',checked_at:'2026-09-09'};
 const currentFeed={latest_patch:{version:'7.41e'},checked_at:'2026-09-09T11:59:00Z',stale:false,errors:[]};
@@ -75,7 +86,7 @@ try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
     const errors=[],unexpected=[],apiRequests=[];
-    let newsFailed=false,buildPatchOverride=null,metaStale=false;
+    let newsFailed=false,buildPatchOverride=null,metaStale=false,authoredMode=true,metaFailed=false;
     page.on('pageerror',error=>errors.push(error.message));
     page.on('console',message=>{if(/Content Security Policy|Refused to (?:execute|apply|load)/i.test(message.text()))errors.push(message.text());});
     page.on('dialog',async dialog=>{errors.push('Unexpected dialog: '+dialog.message());await dialog.dismiss();});
@@ -91,11 +102,13 @@ try {
       if(request.method()!=='GET'){unexpected.push(`${request.method()} ${url.pathname}`);status=405;body={};}
       else if(url.pathname==='/api/explore/heroes')body=heroes;
       else if(url.pathname==='/api/explore/updates'){status=newsFailed?503:200;body=newsFailed?{detail:'Synthetic unavailable news feed'}:buildPatchOverride||updates;}
+      else if(url.pathname==='/api/explore/build-reviews')body={schema_version:'narma.build-reviews.v1',guides:Object.fromEntries(buildCatalog.guides.map(g=>[g.id,{patch_notes:g.patch_notes||[]}]))};
       else if(url.pathname==='/api/explore/builds'){
+        if(metaFailed){await route.fulfill({status:503,json:{detail:'Synthetic outage'}});return;}
         const g=buildCatalog.guides.find(g=>g.id===url.searchParams.get('guide'));
         const evidence=Object.fromEntries((g?.final_items||[]).map(item=>[item.id,{id:item.id,matches:200,wins:120,winrate:60,average_minute:22.5}]));
         const plan=(g?.final_items||[]).map(item=>({...item,evidence:evidence[item.id]}));
-        body={schema_version:'narma.build-meta.v1',guide:g?.id,rank:url.searchParams.get('rank'),status:metaStale?'stale':'ready',stale:metaStale,checked_at:new Date().toISOString(),source_url:'https://stratz.com/heroes/47',patch_status:'after_patch_release',items:evidence,plans:metaStale?{}:{popular:plan,winrate:plan}};
+        body=authoredMode?{schema_version:'narma.build-meta.v1',source:'authored',guide:g?.id,rank:url.searchParams.get('rank'),status:'authored',items:{},plans:{},joint_build_winrate:null}:{schema_version:'narma.build-meta.v1',source:'STRATZ',guide:g?.id,rank:url.searchParams.get('rank'),status:metaStale?'stale':'ready',stale:metaStale,checked_at:new Date().toISOString(),source_url:'https://stratz.com/heroes/47',patch_status:'after_patch_release',items:evidence,plans:metaStale?{}:{popular:plan,winrate:plan}};
       }
       else if(url.pathname==='/api/explore/learning')body=catalog(Number(url.searchParams.get('position'))||null);
       else{unexpected.push(url.pathname);status=404;body={};}
@@ -174,6 +187,24 @@ try {
     const slotBoxes=await slots.evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect();return {x:Math.round(b.x),y:Math.round(b.y)};}));
     assert.equal(new Set(slotBoxes.map(b=>b.x)).size,3,'Inventory keeps three columns.');
     assert.equal(new Set(slotBoxes.map(b=>b.y)).size,2,'Inventory keeps two rows.');
+    assert.equal(await page.locator('#build-statistics').isVisible(),false,'Authored releases do not display provider setup or unavailable statistics controls.');
+    const alternative=adaptationOptions(initialGuide)[0];
+    await page.locator('#build-situation').selectOption(alternative.id);
+    assert.equal(await slots.count(),6);
+    assert.equal(await selectedGuide.locator('#build-slot-detail h4').count(),1);
+    assert.equal(await selectedGuide.locator('#build-slot-detail h4').textContent(),alternative.item.name);
+    assert.ok((await selectedGuide.locator('.build-adaptation-reason').textContent()).includes(alternative.when));
+    assert.equal(new URL(page.url()).searchParams.get('variant'),alternative.id);
+    await page.reload();await page.locator('#build-detail .build-guide').waitFor();
+    assert.equal(await page.locator('#build-situation').inputValue(),alternative.id,'A shared URL restores its authored scenario.');
+    await page.locator('#build-situation').selectOption('');
+    await page.locator('[data-build-slot]').nth(5).click();
+    metaFailed=true;
+    await page.reload();await page.locator('#build-detail .build-guide').waitFor();
+    await page.locator('[data-build-slot]').nth(5).click();
+    assert.equal(await page.locator('#build-statistics').isVisible(),false,'An authored API outage cannot expose provider setup or errors.');
+    assert.equal(await page.locator('[data-build-slot]').count(),6);
+    metaFailed=false;
     buildPatchOverride={...updates,stale:false,errors:[],checked_at:new Date().toISOString(),latest_patch:{version:'7.999'}};
     await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
     await page.waitForFunction(()=>document.querySelector('.build-patch')?.textContent.includes('7.999'));
@@ -214,6 +245,8 @@ try {
     await page.waitForFunction(()=>{const img=document.querySelector('.build-inventory img[src="/assets/dota/items/hurricane_pike.png"]');return img?.complete&&img.naturalWidth>0;});
     assert.equal(await page.locator('#build-slot-detail h4').textContent(),'Hurricane Pike','The bundled original loads without an external CDN request.');
 
+    authoredMode=false;
+    await page.reload();await page.locator('#build-basis').waitFor({state:'visible'});
     await page.locator('#build-basis').selectOption('popular');
     await page.waitForFunction(()=>document.querySelector('.build-inventory-heading p')?.textContent.includes('Подбор по частоте покупки'));
     assert.equal(await page.locator('[data-build-slot]').count(),6);

@@ -14,11 +14,17 @@ on:
       - .dockerignore
   workflow_dispatch:
     inputs:
+      build_stats_source:
+        description: Authored guides, or STRATZ statistics with mandatory live source verification
+        type: choice
+        options: [authored, stratz]
+        required: true
+        default: authored
       prepare_chatgpt_auth:
         description: Prepare owner ChatGPT authorization and Hermes, without a generation smoke
         type: boolean
         required: false
-        default: true
+        default: false
       activate_hermes:
         description: Explicitly activate Hermes using the existing allowance and all review/network gates
         type: boolean
@@ -39,6 +45,8 @@ jobs:
       github.ref == 'refs/heads/codex/replay-map-hardening-8ea829a'
     runs-on: ubuntu-24.04
     timeout-minutes: 50
+    env:
+      NARMA_BUILD_STATS_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_stats_source || 'authored' }}
     steps:
       - name: Check out exact release
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -48,10 +56,16 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python3 ops/timeweb/gemini_preflight.py
-      - name: Validate optional STRATZ credential format before the live adapter gate
+      - name: Validate explicitly selected build statistics source
+        run: |
+          python3 -c 'import os, sys; sys.path.insert(0, "ops/timeweb"); from stratz_secrets import build_stats_source; build_stats_source(os.environ["NARMA_BUILD_STATS_SOURCE"])'
+      - name: Validate enabled STRATZ credential before the mandatory live adapter gate
+        if: env.NARMA_BUILD_STATS_SOURCE == 'stratz'
         env:
           STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
-        run: python3 ops/timeweb/check_stratz.py --format-only
+        run: |
+          python3 -c 'import os, sys; sys.path.insert(0, "ops/timeweb"); from stratz_secrets import build_stats_payload; build_stats_payload(os.environ)'
+          python3 ops/timeweb/check_stratz.py --format-only
       - name: Verify pinned existing server before building
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
@@ -77,16 +91,12 @@ jobs:
       - name: Validate source and build Docker image before provisioning
         env:
           HERMES_SOURCE_GITHUB_TOKEN: ${{ github.token }}
-          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
         run: |
           python3 -m compileall -q services/video/narma_video ops/timeweb
           bash -n ops/timeweb/bootstrap.sh
           python3 -m unittest discover -s ops/timeweb/tests -p 'test_*.py' -v
           docker build --tag narma-video-check services/video
           docker run --rm narma-video-check python -c "import narma_video.api, narma_video.worker, narma_video.db; print('Runtime imports passed')"
-          if [[ -n "${STRATZ_API_TOKEN:-}" ]]; then
-            docker run --rm --env STRATZ_API_TOKEN narma-video-check python -m narma_video.build_meta --check
-          fi
           docker build --tag narma-replay-check --file services/replay/Dockerfile .
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
             --user 10001:10001 --memory 3g --cpus 2 --pids-limit 128 \
@@ -98,6 +108,13 @@ jobs:
             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777 \
             narma-hermes-check /opt/hermes-venv/bin/python /app/smoke.py
           python3 ops/timeweb/check_hermes_network.py
+      - name: Require live STRATZ data before deploying enabled statistics
+        if: env.NARMA_BUILD_STATS_SOURCE == 'stratz'
+        env:
+          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
+        run: |
+          docker run --rm --env STRATZ_API_TOKEN --env NARMA_BUILD_STATS_SOURCE \
+            narma-video-check python -m narma_video.build_meta --check
       - name: Start PostgreSQL and private API in an isolated local test
         env:
           POSTGRES_PASSWORD: narma_ci_only
@@ -126,9 +143,11 @@ jobs:
       - name: Create or reuse one hourly billed pilot and start private services
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
-          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
+          STRATZ_API_TOKEN: ${{ env.NARMA_BUILD_STATS_SOURCE == 'stratz' && secrets.STRATZ_API_TOKEN || '' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ACTIVATE_HERMES: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_hermes && 'true' || 'false' }}
+          # Preserve the already prepared live Hermes/ChatGPT state on ordinary
+          # releases. This existing preparation path performs no generation smoke.
           PREPARE_CHATGPT_AUTH: ${{ (github.event_name == 'push' || inputs.prepare_chatgpt_auth) && 'true' || 'false' }}
         run: |
           pilot_args=()

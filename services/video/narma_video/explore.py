@@ -307,6 +307,13 @@ def get_payload(kind):
 router = APIRouter(prefix="/api/explore")
 
 
+@router.get("/build-reviews")
+def build_reviews(response: Response):
+    from .build_reviews import review_payload
+    response.headers["Cache-Control"] = "public, max-age=30"
+    return review_payload(get_payload("updates"))
+
+
 @router.get("/heroes")
 def heroes(response: Response):
     response.headers["Cache-Control"] = "public, max-age=60"

@@ -34,6 +34,29 @@ def snapshot():
 
 
 class ProductDeploymentTest(unittest.TestCase):
+    def test_authored_review_gate_accepts_complete_catalog_with_honest_stale_states(self):
+        guides = [{'id': 'guide-' + str(index)} for index in range(12)]
+        for state in ('reviewed', 'review_due', 'patch_changed', 'unknown'):
+            reviews = {'schema_version': 'narma.build-reviews.v1', 'guides': {
+                guide['id']: {'state': state, 'adaptations': []} for guide in guides}}
+            with self.subTest(state=state):
+                pilot.validate_build_reviews(reviews, guides)
+
+    def test_authored_review_gate_rejects_wrong_schema_or_incomplete_catalog(self):
+        guides = [{'id': 'guide-' + str(index)} for index in range(12)]
+        reviews = {'schema_version': 'narma.build-reviews.v1', 'guides': {
+            guide['id']: {'state': 'unknown', 'adaptations': []} for guide in guides}}
+        wrong_schema = {**reviews, 'schema_version': 'unrecognized'}
+        missing = deepcopy(reviews)
+        missing['guides'].pop('guide-1')
+        unexpected = deepcopy(reviews)
+        unexpected['guides']['other-guide'] = unexpected['guides'].pop('guide-1')
+        invalid_state = deepcopy(reviews)
+        invalid_state['guides']['guide-1']['state'] = 'fake-meta-ready'
+        for evidence in (None, {}, wrong_schema, missing, unexpected, invalid_state):
+            with self.subTest(evidence=evidence), self.assertRaises(pilot.CheckError):
+                pilot.validate_build_reviews(evidence, guides)
+
     def test_live_learning_program_accepts_actual_catalog_for_all_six_role_variants(self):
         # Execute the shipped probe against the actual catalog, so adding a
         # role-specific exercise cannot silently break the live deploy gate.

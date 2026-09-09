@@ -63,6 +63,12 @@
           "name": "Black King Bar",
           "why": "Защитить время для атак вне вращения.",
           "condition": "Неснимаемый Manta контроль мешает драться. Проверь способности, проходящие сквозь невосприимчивость к эффектам."
+        },
+        {
+          "id": "monkey_king_bar",
+          "name": "Monkey King Bar",
+          "why": "Чаще попадать по цели с уклонением.",
+          "condition": "Выбирай вместо дополнительного уклонения Butterfly, если именно промахи мешают убить доступную цель. MKB не решает проблему контроля."
         }
       ],
       "final_items": [
@@ -137,11 +143,31 @@
         {
           "title": "Dota Coach: Black King Bar",
           "url": "https://dotacoach.gg/en/items/black-king-bar"
+        },
+        {
+          "title": "Valve: механика Monkey King Bar",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=135"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "against-evasion",
+          "label": "Против уклонения",
+          "when": "Твои атаки часто промахиваются по главной цели, а возможность пережить бой уже есть.",
+          "replace_item_id": "butterfly",
+          "item": {
+            "id": "monkey_king_bar",
+            "name": "Monkey King Bar",
+            "why": "Чаще попадать по цели с уклонением.",
+            "condition": "Выбирай вместо дополнительного уклонения Butterfly, если именно промахи мешают убить доступную цель. MKB не решает проблему контроля."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e"
     },
     {
       "id": "drow-carry-distance",
@@ -204,6 +230,12 @@
           "name": "Black King Bar",
           "why": "Получить возможность стрелять под большинством мешающих заклинаний.",
           "condition": "Одного отхода с Pike недостаточно против нескольких источников контроля."
+        },
+        {
+          "id": "sphere",
+          "name": "Linken’s Sphere",
+          "why": "Блокировать одно подходящее направленное заклинание, сохранив Pike и BKB.",
+          "condition": "Сначала проверь, блокируется ли конкретная угроза. Linken не защищает от всех заклинаний и не заменяет дистанцию."
         }
       ],
       "final_items": [
@@ -274,11 +306,47 @@
         {
           "title": "Dota Coach: Black King Bar",
           "url": "https://dotacoach.gg/en/items/black-king-bar"
+        },
+        {
+          "title": "Valve: механика Linken’s Sphere",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=123"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "targeted-catch",
+          "label": "Против одного опасного захвата",
+          "when": "Тебя ловят одной направленной способностью до BKB; враг не может легко сбить блок дешёвым заклинанием.",
+          "replace_item_id": "butterfly",
+          "item": {
+            "id": "sphere",
+            "name": "Linken’s Sphere",
+            "why": "Блокировать одно подходящее направленное заклинание, сохранив Pike и BKB.",
+            "condition": "Сначала проверь, блокируется ли конкретная угроза. Linken не защищает от всех заклинаний и не заменяет дистанцию."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e",
+      "patch_notes": [
+        {
+          "patch": "7.41e",
+          "checked_at": "2026-09-09",
+          "subject_id": "hurricane_pike",
+          "text": "У Hurricane Pike окно усиленных атак сокращено с 6 до 5 секунд. После применения не теряй время на лишнее перемещение.",
+          "source_url": "https://www.dota2.com/patches/7.41e"
+        },
+        {
+          "patch": "7.41e",
+          "checked_at": "2026-09-09",
+          "subject_id": "satanic",
+          "text": "Перезарядка Satanic выросла с 30 до 40 секунд. Перед следующим боем проверь готовность активной защиты.",
+          "source_url": "https://www.dota2.com/patches/7.41e"
+        }
+      ]
     },
     {
       "id": "phantom-lancer-carry-control",
@@ -415,11 +483,40 @@
         {
           "title": "Dota Coach: Eye of Skadi",
           "url": "https://dotacoach.gg/en/items/eye-of-skadi"
+        },
+        {
+          "title": "Valve: механика Diffusal Blade",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=174"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "hero-can-hit",
+          "label": "Когда настоящий герой может бить",
+          "when": "Не хватает доступного замедления, а настоящий герой может безопасно подойти и атаковать.",
+          "replace_item_id": "butterfly",
+          "item": {
+            "id": "diffusal_blade",
+            "name": "Diffusal Blade",
+            "why": "Сжигать ману атаками настоящего героя и замедлять цель активной способностью.",
+            "condition": "Настоящий герой может безопасно атаковать. Иллюзии не сжигают ману этим предметом; не покупай его только ради армии иллюзий."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e",
+      "patch_notes": [
+        {
+          "patch": "7.41e",
+          "checked_at": "2026-09-09",
+          "subject_id": "skadi",
+          "text": "Eye of Skadi сильнее замедляет скорость атак: 25% вместо 20%. Это не доказывает превосходство всей сборки.",
+          "source_url": "https://www.dota2.com/patches/7.41e"
+        }
+      ]
     },
     {
       "id": "viper-mid-pressure",
@@ -555,11 +652,40 @@
         {
           "title": "Dota Coach: Pipe of Insight",
           "url": "https://dotacoach.gg/en/items/pipe-of-insight"
+        },
+        {
+          "title": "Valve: механика Pipe of Insight",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=90"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "team-magic",
+          "label": "Команде мешает массовая магия",
+          "when": "Ты играешь рядом с командой, массовая магия срывает давление, и Pipe ещё никто не покупает.",
+          "replace_item_id": "butterfly",
+          "item": {
+            "id": "pipe",
+            "name": "Pipe of Insight",
+            "why": "Дать группе защиту от магического урона.",
+            "condition": "Команда играет рядом, страдает от массовой магии и Pipe ещё никто не собирает."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e",
+      "patch_notes": [
+        {
+          "patch": "7.41e",
+          "checked_at": "2026-09-09",
+          "subject_id": "hurricane_pike",
+          "text": "Окно усиленных атак Hurricane Pike теперь 5 секунд. Проверяй, успел ли атаковать после применения.",
+          "source_url": "https://www.dota2.com/patches/7.41e"
+        }
+      ]
     },
     {
       "id": "puck-mid-two-entries",
@@ -622,6 +748,12 @@
           "name": "Linken's Sphere",
           "why": "Блокировать подходящее направленное заклинание.",
           "condition": "Главная угроза — одна важная способность, а не множество дешёвых способов сбить защиту."
+        },
+        {
+          "id": "black_king_bar",
+          "name": "Black King Bar",
+          "why": "Защитить время для заклинаний и выхода из боя.",
+          "condition": "Применяй до неснимаемого контроля. Проверь способности, проходящие сквозь защиту; ради неё откладывается сокращение перезарядок."
         }
       ],
       "final_items": [
@@ -695,11 +827,31 @@
         {
           "title": "Dota Coach: Linken's Sphere",
           "url": "https://dotacoach.gg/en/items/linkens-sphere"
+        },
+        {
+          "title": "Valve: механика Black King Bar",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=116"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "cast-before-control",
+          "label": "Защита входа от контроля",
+          "when": "После прыжка мешает несколько источников контроля; одного блока Linken или выхода через циклон недостаточно.",
+          "replace_item_id": "octarine_core",
+          "item": {
+            "id": "black_king_bar",
+            "name": "Black King Bar",
+            "why": "Защитить время для заклинаний и выхода из боя.",
+            "condition": "Применяй до неснимаемого контроля. Проверь способности, проходящие сквозь защиту; ради неё откладывается сокращение перезарядок."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e"
     },
     {
       "id": "necrophos-mid-survival",
@@ -836,11 +988,31 @@
         {
           "title": "Dota Coach: Lotus Orb",
           "url": "https://dotacoach.gg/en/items/lotus-orb"
+        },
+        {
+          "title": "Valve: механика Pipe of Insight",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=90"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "survive-magic",
+          "label": "Раньше защитить группу от магии",
+          "when": "Ожидание Radiance приводит к потерянным боям: команда умирает от магии, другого покупателя Pipe нет.",
+          "replace_item_id": "radiance",
+          "item": {
+            "id": "pipe",
+            "name": "Pipe of Insight",
+            "why": "Прикрыть группу от магического урона.",
+            "condition": "Именно магия быстро заканчивает бой и Pipe ещё никто не собирает."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e"
     },
     {
       "id": "axe-offlane-initiation",
@@ -903,6 +1075,12 @@
           "name": "Lotus Orb",
           "why": "Добавить броню, развеивание и отражение направленных заклинаний.",
           "condition": "Регулярно мешает снимаемый эффект; Lotus не блокирует исходное попадание."
+        },
+        {
+          "id": "pipe",
+          "name": "Pipe of Insight",
+          "why": "Добавить командный магический барьер, сохранив Blink, Blade Mail и BKB.",
+          "condition": "Договорись с другими покупателями аур: повторный барьер Pipe имеет ограничения. Отложенная Shiva означает меньше брони и другого контроля."
         }
       ],
       "final_items": [
@@ -981,11 +1159,31 @@
         {
           "title": "Dota Coach: Lotus Orb",
           "url": "https://dotacoach.gg/en/items/lotus-orb"
+        },
+        {
+          "title": "Valve: механика Pipe of Insight",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=90"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "team-barrier",
+          "label": "Защитить продолжение команды",
+          "when": "Call получается, но союзники рядом погибают от магии прежде, чем заканчивается бой.",
+          "replace_item_id": "shivas_guard",
+          "item": {
+            "id": "pipe",
+            "name": "Pipe of Insight",
+            "why": "Добавить командный магический барьер, сохранив Blink, Blade Mail и BKB.",
+            "condition": "Договорись с другими покупателями аур: повторный барьер Pipe имеет ограничения. Отложенная Shiva означает меньше брони и другого контроля."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e"
     },
     {
       "id": "centaur-offlane-team",
@@ -1048,6 +1246,12 @@
           "name": "Lotus Orb",
           "why": "Дать развеивание себе или союзнику.",
           "condition": "Нужно снимать конкретный эффект; отражение не отменяет исходное попадание."
+        },
+        {
+          "id": "black_king_bar",
+          "name": "Black King Bar",
+          "why": "Получить возможность завершить вход и оглушение.",
+          "condition": "Сохраняются Blink и командные ауры; откладывается Heart. Активируй заранее и проверь исключения, проходящие сквозь защиту."
         }
       ],
       "final_items": [
@@ -1122,11 +1326,40 @@
         {
           "title": "Dota Coach: Lotus Orb",
           "url": "https://dotacoach.gg/en/items/lotus-orb"
+        },
+        {
+          "title": "Valve: механика Black King Bar",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=116"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "finish-stomp",
+          "label": "Надёжнее дать оглушение",
+          "when": "Запаса здоровья хватает, но контроль каждый раз мешает завершить Hoof Stomp после прыжка.",
+          "replace_item_id": "heart",
+          "item": {
+            "id": "black_king_bar",
+            "name": "Black King Bar",
+            "why": "Получить возможность завершить вход и оглушение.",
+            "condition": "Сохраняются Blink и командные ауры; откладывается Heart. Активируй заранее и проверь исключения, проходящие сквозь защиту."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e",
+      "patch_notes": [
+        {
+          "patch": "7.41e",
+          "checked_at": "2026-09-09",
+          "subject_id": "retaliate",
+          "text": "В Retaliate уменьшена доля силы в ответном уроне. Не оценивай будущую драку по старому урону отражения.",
+          "source_url": "https://www.dota2.com/patches/7.41e"
+        }
+      ]
     },
     {
       "id": "rubick-support-second-action",
@@ -1189,6 +1422,12 @@
           "name": "Glimmer Cape",
           "why": "Прикрыть цель магической защитой и невидимостью.",
           "condition": "Такая защита нужна раньше дальности; учитывай вражеское обнаружение."
+        },
+        {
+          "id": "aeon_disk",
+          "name": "Aeon Disk",
+          "why": "Получить защитное срабатывание и сильное развеивание при резком падении здоровья.",
+          "condition": "В защитном окне твой урон тоже становится нулевым: используй время, чтобы отойти. Перезарядка после срабатываний растёт; диск не заменяет позицию."
         }
       ],
       "final_items": [
@@ -1262,11 +1501,31 @@
         {
           "title": "Dota Coach: Glimmer Cape",
           "url": "https://dotacoach.gg/en/items/glimmer-cape"
+        },
+        {
+          "title": "Valve: механика Aeon Disk",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=256"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "survive-first-burst",
+          "label": "Пережить первый врыв",
+          "when": "Тебя убивают первым, прежде чем удаётся украсть и применить важное заклинание.",
+          "replace_item_id": "sheepstick",
+          "item": {
+            "id": "aeon_disk",
+            "name": "Aeon Disk",
+            "why": "Получить защитное срабатывание и сильное развеивание при резком падении здоровья.",
+            "condition": "В защитном окне твой урон тоже становится нулевым: используй время, чтобы отойти. Перезарядка после срабатываний растёт; диск не заменяет позицию."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e"
     },
     {
       "id": "spirit-breaker-support-charge",
@@ -1329,6 +1588,12 @@
           "name": "Black King Bar",
           "why": "Помочь завершить контакт под мешающими заклинаниями.",
           "condition": "Контроль срывает задачу; проверь, не проходит ли он сквозь эту защиту."
+        },
+        {
+          "id": "lotus_orb",
+          "name": "Lotus Orb",
+          "why": "Дать союзнику базовое развеивание и отражение подходящих направленных заклинаний.",
+          "condition": "Проверь, снимается ли нужный эффект. Отражение не отменяет исходное попадание; выбери момент применения до продолжения врага."
         }
       ],
       "final_items": [
@@ -1403,11 +1668,40 @@
         {
           "title": "Dota Coach: Black King Bar",
           "url": "https://dotacoach.gg/en/items/black-king-bar"
+        },
+        {
+          "title": "Valve: механика Lotus Orb",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=226"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "ally-dispel",
+          "label": "Снимать опасный эффект с союзника",
+          "when": "Союзнику регулярно мешает снимаемое молчание или другой эффект, а дополнительных перезарядок тебе пока не требуется.",
+          "replace_item_id": "octarine_core",
+          "item": {
+            "id": "lotus_orb",
+            "name": "Lotus Orb",
+            "why": "Дать союзнику базовое развеивание и отражение подходящих направленных заклинаний.",
+            "condition": "Проверь, снимается ли нужный эффект. Отражение не отменяет исходное попадание; выбери момент применения до продолжения врага."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e",
+      "patch_notes": [
+        {
+          "patch": "7.41e",
+          "checked_at": "2026-09-09",
+          "subject_id": "spirit_vessel",
+          "text": "Urn и Spirit Vessel больше не получают заряды от ближайших убийств, находясь в тайнике. Забирай предмет перед совместным выходом.",
+          "source_url": "https://www.dota2.com/patches/7.41e"
+        }
+      ]
     },
     {
       "id": "lich-hard-support-save",
@@ -1470,6 +1764,12 @@
           "name": "Aether Lens",
           "why": "Давать направленные заклинания с большей дистанции.",
           "condition": "Спасение уже есть, но ради Gaze приходится опасно выходить вперёд."
+        },
+        {
+          "id": "lotus_orb",
+          "name": "Lotus Orb",
+          "why": "Снять подходящий эффект с себя или союзника.",
+          "condition": "Работает как базовое развеивание, а не против любого контроля. Отказ от Lens уменьшает безопасную дистанцию заклинаний; не выходи вперёд без обзора."
         }
       ],
       "final_items": [
@@ -1540,11 +1840,31 @@
         {
           "title": "Dota Coach: Aether Lens",
           "url": "https://dotacoach.gg/en/items/aether-lens"
+        },
+        {
+          "title": "Valve: механика Lotus Orb",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=226"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "save-with-dispel",
+          "label": "Нужно развеивание для команды",
+          "when": "Glimmer и Force не убирают эффект, из-за которого союзник не может продолжить бой.",
+          "replace_item_id": "aether_lens",
+          "item": {
+            "id": "lotus_orb",
+            "name": "Lotus Orb",
+            "why": "Снять подходящий эффект с себя или союзника.",
+            "condition": "Работает как базовое развеивание, а не против любого контроля. Отказ от Lens уменьшает безопасную дистанцию заклинаний; не выходи вперёд без обзора."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e"
     },
     {
       "id": "crystal-maiden-hard-support-position",
@@ -1607,6 +1927,12 @@
           "name": "Black King Bar",
           "why": "Защитить Freezing Field от части прерываний.",
           "condition": "Команде нужен этот урон, есть бюджет и проверен оставшийся контроль. Нажимай BKB до начала поддерживаемого заклинания."
+        },
+        {
+          "id": "ghost",
+          "name": "Ghost Scepter",
+          "why": "На короткое время защититься от физического урона и выиграть время для отхода.",
+          "condition": "Магический урон становится опаснее. Ghost не работает во время невосприимчивости к эффектам: не складывай его с BKB в одно защитное окно."
         }
       ],
       "final_items": [
@@ -1677,11 +2003,31 @@
         {
           "title": "Dota Coach: Black King Bar",
           "url": "https://dotacoach.gg/en/items/black-king-bar"
+        },
+        {
+          "title": "Valve: механика Ghost Scepter",
+          "url": "https://www.dota2.com/datafeed/itemdata?language=english&item_id=37"
         }
       ],
       "verified_patch": "7.41e",
       "checked_at": "2026-09-08",
-      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены."
+      "applicability_note": "Механики сверены с текущими источниками. Это учебные рекомендации Narma; статистика эффективности по MMR и обязательные сроки покупок не установлены.",
+      "adaptations": [
+        {
+          "id": "physical-burst",
+          "label": "Пережить обычные атаки",
+          "when": "Основная причина смерти — атаки догнавшего героя; ждать дорогого Hex слишком долго.",
+          "replace_item_id": "sheepstick",
+          "item": {
+            "id": "ghost",
+            "name": "Ghost Scepter",
+            "why": "На короткое время защититься от физического урона и выиграть время для отхода.",
+            "condition": "Магический урон становится опаснее. Ghost не работает во время невосприимчивости к эффектам: не складывай его с BKB в одно защитное окно."
+          }
+        }
+      ],
+      "adaptations_checked_at": "2026-09-09",
+      "adaptations_verified_patch": "7.41e"
     }
   ]
 }

@@ -16,6 +16,7 @@ KEY=('viper-mid-pressure','HERALD_GUARDIAN')
 
 @pytest.fixture
 def setup(monkeypatch,tmp_path):
+    monkeypatch.setenv('NARMA_BUILD_STATS_SOURCE','stratz')
     monkeypatch.setenv('STRATZ_API_TOKEN','synthetic.test')
     monkeypatch.setenv('NARMA_STRATZ_REFRESH_ENABLED','0')
     monkeypatch.setattr(explore,'get_payload',lambda kind:{'stale':False,'errors':[],
@@ -94,6 +95,34 @@ def test_disabled_worker_has_no_network_side_effects(setup,monkeypatch):
     assert cache.thread is None
     assert not calls
     assert cache.get(*KEY)['status']=='unavailable'
+
+
+def test_authored_mode_never_uses_credential_or_saved_provider_evidence(setup,monkeypatch):
+    cache,calls=setup
+    cache.refresh(KEY)
+    calls.clear()
+    monkeypatch.setenv('NARMA_BUILD_STATS_SOURCE','authored')
+    monkeypatch.setenv('NARMA_STRATZ_REFRESH_ENABLED','1')
+    cache.start()
+    assert cache.thread is None
+    result=cache.get(*KEY)
+    assert result['source']==result['status']=='authored'
+    assert result['items']==result['plans']=={}
+    assert result['joint_build_winrate'] is None
+    assert 'checked_at' not in result and 'source_url' not in result
+    with pytest.raises(SourceError,match='configuration'):
+        cache.refresh(KEY)
+    assert calls==[]
+
+
+def test_authored_is_default_even_with_a_provider_token(setup,monkeypatch):
+    cache,calls=setup
+    monkeypatch.delenv('NARMA_BUILD_STATS_SOURCE')
+    monkeypatch.setenv('NARMA_STRATZ_REFRESH_ENABLED','1')
+    cache.start()
+    assert cache.thread is None
+    assert cache.get(*KEY)['status']=='authored'
+    assert calls==[]
 
 
 @pytest.mark.parametrize('code',['access_denied','authentication_failed','configuration'])

@@ -1,15 +1,7 @@
 name: STRATZ source verification
 
 on:
-  push:
-    branches: [codex/replay-map-hardening-8ea829a]
-    paths:
-      - .github/workflows/stratz-source-check.yml
-      - scripts/inspect-stratz-builds.py
-      - scripts/check-stratz-build-data.py
-      - scripts/check-stratz-context.py
-      - services/video/narma_video/build_meta.py
-      - services/video/narma_video/build_statistics.py
+  # Provider diagnostics are explicit. Authored releases never retry denied access.
   workflow_dispatch:
     inputs:
       inspect_schema:
@@ -53,6 +45,7 @@ jobs:
         env:
           STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
           PYTHONPATH: services/video
+          NARMA_BUILD_STATS_SOURCE: stratz
         run: |
           python3 -m pip install --disable-pip-version-check --quiet fastapi==0.141.1 httpx==0.28.1
           python3 -m narma_video.build_meta --check

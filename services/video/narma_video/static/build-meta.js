@@ -6,13 +6,20 @@ export function createBuildMeta(signal,onPreferences){
   const params=new URLSearchParams(location.search);
   let rank=ranks[params.get('rank')]?params.get('rank'):'HERALD_GUARDIAN';
   let mode=modes[params.get('basis')]?params.get('basis'):'guide';
-  let host=null,guide=null,callback=null,data=null,timer=null,request=null,sequence=0,disposed=false;
-  const preferences=()=>({rank,basis:mode});
+  let host=null,guide=null,callback=null,data=null,sourceMode=null,timer=null,request=null,sequence=0,disposed=false;
+  const preferences=()=>({rank,basis:mode,source:data?.source||sourceMode});
   const cancel=()=>{clearTimeout(timer);request?.abort();sequence++;};
   const dispose=()=>{disposed=true;cancel();};
   signal.addEventListener('abort',dispose,{once:true});
   function render(){
     if(!host?.isConnected||disposed)return;
+    if((data?.status==='authored'&&data?.source==='authored')||(!sourceMode&&data?.status==='unavailable')){
+      host.hidden=true;
+      if(mode!=='guide'){mode='guide';onPreferences();}
+      callback(null,null,null);
+      return;
+    }
+    host.hidden=!data;
     const status=host.querySelector('[data-meta-status]');
     const source=host.querySelector('[data-meta-source]');
     let message='Загружаем статистику покупок…';
@@ -50,14 +57,15 @@ export function createBuildMeta(signal,onPreferences){
       const value=await response.json();
       if(value.schema_version!=='narma.build-meta.v1'||value.guide!==guide.id||value.rank!==rank)throw Error('invalid');
       if(mine!==sequence||disposed)return;
-      data=value;render();
+      sourceMode=value.source;data=value;render();onPreferences();
     }catch{
       if(mine!==sequence||disposed)return;
-      data=data?.checked_at?{...data,status:'stale',stale:true,plans:{}}:{status:'unavailable'};render();
+      data=sourceMode==='authored'?{source:'authored',status:'authored'}:data?.checked_at?{...data,status:'stale',stale:true,plans:{}}:{status:'unavailable'};render();
     }finally{if(mine===sequence&&!disposed)timer=setTimeout(refresh,data?.status==='loading'?10000:60000);}
   }
   function mount(target,currentGuide,onPlan){
     cancel();host=target;guide=currentGuide;callback=onPlan;data=null;
+    host.hidden=true;
     host.innerHTML=`<div class="build-evidence-controls"><div class="field"><label for="build-rank">Ранг матчей</label><select id="build-rank">${Object.entries(ranks).map(([id,label])=>`<option value="${id}"${rank===id?' selected':''}>${label}</option>`).join('')}</select></div><div class="field"><label for="build-basis">Основа подбора</label><select id="build-basis">${Object.entries(modes).map(([id,label])=>`<option value="${id}"${mode===id?' selected':''}>${label}</option>`).join('')}</select></div></div><p data-meta-status role="status" aria-live="polite"></p><p class="build-evidence-source" data-meta-source></p>`;
     host.querySelector('#build-rank').addEventListener('change',event=>{rank=event.target.value;cancel();data=null;render();onPreferences();void refresh();});
     host.querySelector('#build-basis').addEventListener('change',event=>{mode=event.target.value;render();onPreferences();});

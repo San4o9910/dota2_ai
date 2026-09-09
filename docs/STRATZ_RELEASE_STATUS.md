@@ -1,5 +1,18 @@
 # STRATZ rollout status — 2026-09-09
 
+## Independently authorized authored release
+
+The owner subsequently approved progress with authored guides and alternative
+sources. That release selects `NARMA_BUILD_STATS_SOURCE=authored`, adds 12
+conditional six-slot variants and official patch review notes, and does not
+activate STRATZ. A stored token never activates the provider. Standalone source
+diagnostics now require manual dispatch; enabled STRATZ deployment still requires
+the real source-data gate below. The source blocker itself is unresolved.
+See `BUILD_SOURCE_REVIEW.md` for the distinct authored-content scope.
+
+The deployment receipts below describe the prior blocked STRATZ candidate,
+not a claim that a later authored release has failed or enabled statistics.
+
 **Blocked; not deployed.** The working site retains release
 `c9632736dc0f18ce57b662490401e8edb6c074b4` with 12 authored six-slot guides.
 The integration candidate is `fdac732328ec50d7ad3526bfd124743ab304ce82` on

@@ -22,6 +22,13 @@
   .build-slot span{font-size:11px;line-height:1.4}
 }
 .build-statistics{margin:24px 0;padding:18px;border:1px solid var(--line,#343b40);border-radius:10px;background:rgba(0,0,0,.1)}
+.build-statistics[hidden]{display:none}
+.build-adaptation{margin-top:22px;padding:18px;background:#202b28;border:1px solid #42534e;border-radius:8px}
+.build-adaptation label{display:block;font-weight:650;margin-bottom:10px;font-size:15px}
+.build-adaptation select{width:100%;min-width:0;min-height:44px;background:#141a1d;color:#ecf1ef;border:1px solid #62726b;border-radius:6px;padding:10px;font:inherit;font-size:14px}
+.build-adaptation-reason{font-size:13px;line-height:1.65;color:var(--muted,#abb6bf);margin:12px 0 0}
+.build-patch-notes{font-size:13px;line-height:1.65;margin:12px 0 18px;border-left:2px solid var(--gold,#dfbd7b);padding:8px 14px;background:#25261f}
+.build-patch-notes summary{cursor:pointer;color:var(--gold,#dfbd7b)}
 .build-evidence-controls{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .build-evidence-controls select{width:100%;min-width:0;min-height:44px;background:#141a1d;color:#ecf1ef;border:1px solid #56616a;border-radius:7px;padding:10px;font:inherit}
 .build-evidence-controls label{display:block;margin-bottom:6px;font-size:.85rem;color:#c1cbcf}

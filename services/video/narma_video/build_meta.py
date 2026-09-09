@@ -75,6 +75,11 @@ def graphql(token, query, operation, variables=None):
         raise SourceError("source_unavailable") from None
 
 
+def source_mode():
+    # Possession of a credential does not activate an optional data provider.
+    return os.environ.get("NARMA_BUILD_STATS_SOURCE", "authored")
+
+
 class BuildCache:
     def __init__(self, path=None, fetch=graphql, now=time.time):
         self.path, self.fetch, self.now = path, fetch, now
@@ -98,7 +103,7 @@ class BuildCache:
                 self.data = {}
 
     def start(self):
-        if not os.environ.get("STRATZ_API_TOKEN") or os.environ.get("NARMA_STRATZ_REFRESH_ENABLED", "1") != "1":
+        if source_mode() != "stratz" or not os.environ.get("STRATZ_API_TOKEN") or os.environ.get("NARMA_STRATZ_REFRESH_ENABLED", "1") != "1":
             return
         if self.thread and self.thread.is_alive():
             return
@@ -111,6 +116,8 @@ class BuildCache:
         self.stop_event.set()
 
     def refresh(self, key):
+        if source_mode() != "stratz":
+            raise SourceError("configuration")
         token = os.environ.get("STRATZ_API_TOKEN", "")
         if self.now() - self.metadata_at >= HOUR:
             self.items, self.source_patch = catalog(self.fetch(token, META_QUERY, "NarmaBuildCatalog"))
@@ -159,6 +166,10 @@ class BuildCache:
             self.stop_event.wait(2 if pending else 30)
 
     def get(self, guide_id, rank):
+        if source_mode() != "stratz":
+            return {"schema_version":"narma.build-meta.v1", "source":"authored",
+                    "status":"authored", "guide":guide_id, "rank":rank,
+                    "items":{}, "plans":{}, "joint_build_winrate":None}
         key = (guide_id, rank)
         with self.lock:
             self.requested.add(key)

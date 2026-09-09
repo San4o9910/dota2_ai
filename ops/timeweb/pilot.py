@@ -21,6 +21,7 @@ from uuid import UUID
 
 from preflight import CheckError, NoRedirect, ORIGIN
 from prebuilt_images import ImageError, prepare_bundle
+from stratz_secrets import build_stats_payload, build_stats_source
 
 NAME = "narma-vision-pilot-01"
 MARKER = "NARMA managed pilot San4o9910/dota2_ai 2026-09-06"
@@ -33,6 +34,22 @@ PINNED_TARGET = {"server_id": 9037783, "project_id": 2655641, "ipv4": "72.56.98.
 
 def event(name, **values):
     print(json.dumps({"event": name, **values}), flush=True)
+
+
+def validate_build_reviews(evidence, guides):
+    """Require a complete review catalog; a stale review is a valid honest state."""
+    if not isinstance(evidence, dict):
+        raise CheckError('public_build_reviews_invalid')
+    reviews = evidence.get('guides')
+    expected = {guide.get('id') for guide in guides}
+    if (evidence.get('schema_version') != 'narma.build-reviews.v1'
+            or not isinstance(reviews, dict) or len(reviews) != 12
+            or set(reviews) != expected
+            or any(not isinstance(row, dict)
+                   or row.get('state') not in {'reviewed', 'review_due', 'patch_changed', 'unknown'}
+                   or not isinstance(row.get('adaptations'), list)
+                   for row in reviews.values())):
+        raise CheckError('public_build_reviews_invalid')
 
 
 class Cloud:
@@ -311,7 +328,7 @@ def ensure_https(ssh,release,hostname,host):
     event('public_experience_ready',anonymous_access=True,hero_count=len(heroes),
           news_count=len(news),lesson_count=len(lessons),guide_count=len(guides),
           six_slot_guide_count=len(guides),practice_scenario_count=len(scenarios),provider_calls_created=0)
-    if os.environ.get('STRATZ_API_TOKEN', '').strip():
+    if build_stats_source(os.environ.get('NARMA_BUILD_STATS_SOURCE')) == 'stratz':
         for attempt in range(12):
             with opener.open(portal_origin+'/api/explore/builds?guide=viper-mid-pressure&rank=HERALD_GUARDIAN',timeout=20) as response:
                 evidence=json.loads(response.read(1024*1024))
@@ -326,6 +343,19 @@ def ensure_https(ssh,release,hostname,host):
               item_count=len(evidence['items']),week=evidence.get('week'),
               popular_slots=len(evidence.get('plans',{}).get('popular',[])),
               winrate_slots=len(evidence.get('plans',{}).get('winrate',[])),ai_generation_requests=0)
+    else:
+        with opener.open(portal_origin+'/api/explore/builds?guide=viper-mid-pressure&rank=HERALD_GUARDIAN',timeout=20) as response:
+            evidence=json.loads(response.read(1024*1024))
+        if (evidence.get('source')!='authored' or evidence.get('status')!='authored'
+                or evidence.get('items')!={} or evidence.get('plans')!={}
+                or evidence.get('joint_build_winrate') is not None):
+            raise CheckError('public_authored_build_mode_invalid')
+        with opener.open(portal_origin+'/api/explore/build-reviews',timeout=20) as response:
+            reviews=json.loads(response.read(1024*1024))
+        validate_build_reviews(reviews, guides)
+        event('public_authored_builds_ready',source='authored',six_slot_guide_count=len(guides),
+              review_guide_count=len(reviews['guides']),statistical_feed_enabled=False,
+              ai_generation_requests=0)
 
 
 def selected_project(cloud):
@@ -427,6 +457,10 @@ def validate_chatgpt_preparation(state):
 def main(*, activate_hermes=False, prepare_chatgpt_auth=False):
     if activate_hermes and prepare_chatgpt_auth:
         raise CheckError('conflicting_provider_activation_modes')
+    try:
+        statistics_payload = build_stats_payload(os.environ)
+    except ValueError:
+        raise CheckError('invalid_build_statistics_configuration') from None
     cloud = Cloud()
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     sha = os.environ.get("GITHUB_SHA", "")
@@ -571,7 +605,7 @@ runcmd:
             # Secrets cross SSH only; none enters cloud-init, the source archive,
             # GitHub artifacts, command arguments or public logs.
             secret_input = json.dumps({"gemini_key":key, "release":sha,
-                                      "stratz_token":os.environ.get("STRATZ_API_TOKEN", "").strip(),
+                                      **statistics_payload,
                                       "prepare_chatgpt_auth":prepare_chatgpt_auth}).encode()
             command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
             event("installing_private_services", server_id=server_id, release=sha)
