@@ -42,3 +42,25 @@ control and the quality of rotations require relevant replay review; a farm
 counter cannot establish them. Builds are authored instructional plans with
 review dates, not a live popularity or win-rate ranking. The build catalog does
 not claim to cover every hero on every position.
+
+## Installed release — 2026-09-09
+
+- Code: `53fdf7de317ddad80f6cdc66e4a5ec520fca5ad1`.
+- Deployment: https://github.com/San4o9910/dota2_ai/actions/runs/34396476567 — successful.
+- PostgreSQL/API suite: 663 passed, 1 skipped; 74 operations tests passed.
+- Public and private browser gates passed on mobile and desktop; practice role
+  coverage checks passed for all five positions and all three difficulties.
+- Existing server 9037783 updated. Live checks found 17 six-slot guides,
+  43 practice situations and all five distinct role-specific learning plans.
+- Read-only checks preserved the existing owner and four saved matches;
+  three evidence reports passed the learning check. Replay worker heartbeat is
+  fresh. These checks created zero model requests.
+- Live browser verification confirmed different Viper 2/3 inventories, different
+  support/carry lesson actions and an exclusive position-5 lane question.
+- Hermes services remain prepared with `waiting_auth`, not authenticated. No
+  runtime activation or model generation was performed by this release.
+
+Live examples:
+- https://narma-72-56-98-68.sslip.io/builds?q=Viper&position=3
+- https://narma-72-56-98-68.sslip.io/learn?position=5
+- https://narma-72-56-98-68.sslip.io/practice?position=5
