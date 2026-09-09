@@ -1,0 +1,83 @@
+name: Deep learning and public builds verification
+
+on:
+  push:
+    branches: [codex/deep-learning-workshop-builds]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deep-learning-verification
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check public and private browser flows
+        env:
+          PLAYWRIGHT_NODE_MODULES: ${{ runner.temp }}/narma-portal-qa/node_modules
+          NARMA_PORTAL_SCREENSHOTS: ${{ runner.temp }}/narma-screenshots/private
+          NARMA_EXPLORE_SCREENSHOTS: ${{ runner.temp }}/narma-screenshots/public
+        run: |
+          npm install --prefix "$RUNNER_TEMP/narma-portal-qa" --no-audit --no-fund playwright@1.62.1 axe-core@4.10.3
+          "$RUNNER_TEMP/narma-portal-qa/node_modules/.bin/playwright" install --with-deps chromium
+          node scripts/check-workshop-builds.mjs
+          node scripts/check-explore-ui.mjs
+          node scripts/check-portal-ui.mjs
+      - name: Preserve synthetic UI screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deep-learning-visual-qa
+          path: ${{ runner.temp }}/narma-screenshots
+          retention-days: 7
+          if-no-files-found: ignore
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Validate operational checks and build runtime
+        run: |
+          python3 -m compileall -q services/video/narma_video ops/timeweb
+          bash -n ops/timeweb/bootstrap.sh
+          python3 -m unittest discover -s ops/timeweb/tests -p 'test_*.py' -q
+          docker build --tag narma-video-check services/video
+          docker run --rm narma-video-check python -c "import narma_video.api; print('Runtime imports passed')"
+      - name: Verify PostgreSQL migrations and application tests
+        env:
+          POSTGRES_PASSWORD: narma_ci_only
+          DATABASE_URL: postgresql://narma:narma_ci_only@db:5432/narma
+          VIDEO_SERVICE_TOKEN: local_ci_fixture_token_0000000000000000000000000000000000000000
+          GEMINI_API_KEY: unused_offline_ci_fixture
+          GEMINI_MODEL: gemini-3.8-flash
+          NARMA_EXPLORE_REFRESH_ENABLED: "0"
+          NARMA_WORKSHOP_REFRESH_ENABLED: "0"
+        run: |
+          compose=(docker compose --project-name narma-video-ci --file services/video/compose.yaml)
+          trap 'docker compose --project-name narma-video-ci --file services/video/compose.yaml down --volumes >/dev/null' EXIT
+          "${compose[@]}" up --build -d db migrate api
+          for attempt in {1..30}; do
+            if "${compose[@]}" exec -T api python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=15).close()"; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "${ready:-0}" = 1
+          docker run --rm --user root --network narma-video-ci_default \
+            --env TEST_DATABASE_URL="$DATABASE_URL" \
+            --env NARMA_EXPLORE_REFRESH_ENABLED=0 --env NARMA_WORKSHOP_REFRESH_ENABLED=0 \
+            --volume "$PWD/services/video/tests:/app/tests:ro" narma-video-check \
+            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest tests -q'

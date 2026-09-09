@@ -319,7 +319,7 @@ def ensure_https(ssh,release,hostname,host):
     with opener.open(portal_origin+'/assets/build-guides.json',timeout=20) as response:
         guides=json.loads(response.read(1024*1024)).get('guides',[])
     with opener.open(portal_origin+'/assets/practice-scenarios.json',timeout=20) as response:
-        scenarios=json.loads(response.read(1024*1024)).get('scenarios',[])
+        scenarios=json.loads(response.read(4*1024*1024)).get('scenarios',[])
     if (len(heroes)<100 or not news or not lessons
             or len(guides)<10 or len(scenarios)<25
             or any(len(guide.get('final_items',[]))!=6 for guide in guides)

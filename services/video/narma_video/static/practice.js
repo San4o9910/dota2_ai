@@ -2,6 +2,7 @@
 const TOPICS = Object.freeze({ all: 'Все темы', map: 'Карта', lane: 'Линия', items: 'Предметы', fights: 'Драка' });
 const POSITIONS = Object.freeze({ all: 'Все позиции', 1: '1 · Керри', 2: '2 · Мид', 3: '3 · Офлейн', 4: '4 · Поддержка', 5: '5 · Полная поддержка' });
 const DIFFICULTIES = Object.freeze({ foundations: 'Основы', application: 'Применение', advanced: 'Сложные решения' });
+const SESSION_LENGTHS = Object.freeze({ 5: '5 решений · короткая практика', 10: '10 решений · обычная серия', 15: '15 решений · подробная практика' });
 const LEVEL_DESCRIPTIONS = Object.freeze({
   foundations: 'Одна задача и явные условия: добивание, доступность предмета, позиция и безопасный маршрут. Начни здесь, если ещё трудно назвать причину решения.',
   application: 'Сравни две полезные задачи: подготовку волны, время команды, расход телепорта и продолжение контроля. Объясни, чем платишь за выбранный вариант.',
@@ -13,15 +14,17 @@ const mounts = new WeakMap();
 const bounded = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 const ident = value => typeof value === 'string' && /^[a-z0-9-]{1,64}$/.test(value);
 const difficultyOf = value => Object.hasOwn(DIFFICULTIES, value) ? value : 'foundations';
+const lengthOf = value => Object.hasOwn(SESSION_LENGTHS, value) ? Number(value) : 10;
+const questionCount = count => `${count} ${count % 100 >= 11 && count % 100 <= 14 ? 'вопросов' : count % 10 === 1 ? 'вопрос' : count % 10 >= 2 && count % 10 <= 4 ? 'вопроса' : 'вопросов'}`;
 
 function validateChoices(value) {
-  if (!Array.isArray(value.choices) || value.choices.length !== 3 || new Set(value.choices.map(choice => choice?.id)).size !== 3) throw new Error('Invalid choices');
+  if (!Array.isArray(value.choices) || value.choices.length < 3 || value.choices.length > 4 || new Set(value.choices.map(choice => choice?.id)).size !== value.choices.length) throw new Error('Invalid choices');
   for (const choice of value.choices) if (!choice || !ident(choice.id) || !bounded(choice.text, 400) || !bounded(choice.explanation, 900)) throw new Error('Invalid choice');
   if (!value.choices.some(choice => choice.id === value.correctChoiceId)) throw new Error('Invalid answer');
 }
 
 export function validatePracticeCatalog(value) {
-  if (!value || value.version !== VERSION || !Array.isArray(value.scenarios) || !value.scenarios.length || value.scenarios.length > 100) throw new Error('Invalid practice catalog');
+  if (!value || value.version !== VERSION || !Array.isArray(value.scenarios) || !value.scenarios.length || value.scenarios.length > 500) throw new Error('Invalid practice catalog');
   if (value.positionGoals !== undefined && (!value.positionGoals || typeof value.positionGoals !== 'object' || [1, 2, 3, 4, 5].some(position => !bounded(value.positionGoals[position], 700)))) throw new Error('Invalid position goals');
   const ids = new Set();
   for (const scenario of value.scenarios) {
@@ -32,6 +35,14 @@ export function validatePracticeCatalog(value) {
     for (const key of ['title', 'question', 'signal', 'action', 'why', 'exception', 'reviewQuestion']) if (!bounded(scenario[key], key === 'title' ? 120 : 700)) throw new Error('Invalid practice text');
     if (!Array.isArray(scenario.context) || scenario.context.length < 2 || scenario.context.length > 6 || scenario.context.some(line => !bounded(line, 700))) throw new Error('Invalid context');
     validateChoices(scenario);
+    for (const [key, limit] of [['briefing', 1600], ['common_trap', 1000], ['takeaway', 500]]) {
+      if (scenario[key] !== undefined && !bounded(scenario[key], limit)) throw new Error('Invalid teaching text');
+    }
+    for (const key of ['decision_steps', 'worked_example']) {
+      if (scenario[key] !== undefined && (!Array.isArray(scenario[key]) || scenario[key].length < 2 || scenario[key].length > 6 || scenario[key].some(step => !bounded(step, 900)))) throw new Error('Invalid teaching steps');
+    }
+    if (scenario.counterfactual !== undefined && (!scenario.counterfactual || ['change', 'decision'].some(key => !bounded(scenario.counterfactual[key], 1000)))) throw new Error('Invalid counterfactual');
+    if (scenario.replay_task !== undefined && (!scenario.replay_task || ['setup', 'action', 'success'].some(key => !bounded(scenario.replay_task[key], 900)))) throw new Error('Invalid replay task');
     if (scenario.variation !== undefined) {
       const variation = scenario.variation;
       if (!variation || !bounded(variation.question, 700) || !Array.isArray(variation.context) || variation.context.length < 1 || variation.context.length > 4 || variation.context.some(line => !bounded(line, 700))) throw new Error('Invalid variation');
@@ -49,7 +60,7 @@ export function filterPracticeScenarios(scenarios, filters = {}) {
   return scenarios.filter(scenario => difficultyOf(scenario.difficulty) === difficulty && (topic === 'all' || scenario.topic === topic) && (position === 'all' || scenario.positions.includes(Number(position))));
 }
 
-export function createPracticeSession(scenarios, filters = {}, random = Math.random) {
+export function createPracticeSession(scenarios, filters = {}, random = Math.random, options = {}) {
   const questions = filterPracticeScenarios(scenarios, filters).slice();
   if (!questions.length) return null;
   for (let i = questions.length - 1; i > 0; i -= 1) {
@@ -57,13 +68,15 @@ export function createPracticeSession(scenarios, filters = {}, random = Math.ran
     const j = Math.floor(Math.max(0, Math.min(0.999999999, Number.isFinite(draw) ? draw : 0)) * (i + 1));
     [questions[i], questions[j]] = [questions[j], questions[i]];
   }
-  // Keep the shuffled order within each group, but put the selected role's
-  // authored decisions before shared fundamentals. Never broaden the filter
-  // to another position when a topic has too few questions.
-  if (String(filters.position) !== 'all' && Object.hasOwn(POSITIONS, filters.position)) {
-    questions.sort((one, two) => one.positions.length - two.positions.length);
-  }
-  return { questions: questions.slice(0, 5), index: 0, answers: [], variations: {}, status: 'answering' };
+  // Recent ids are newest first. Use unseen situations first, then the least
+  // recently practised. Role-specific decisions lead within each group. A small
+  // selection stays small; another role or difficulty must never fill it out.
+  const recent = [...new Set((Array.isArray(options.recentScenarioIds) ? options.recentScenarioIds : []).filter(ident))];
+  const recency = new Map(recent.map((id, index) => [id, recent.length - index]));
+  const selectedRole = String(filters.position) !== 'all' && Object.hasOwn(POSITIONS, filters.position);
+  questions.sort((one, two) => (recency.get(one.id) || 0) - (recency.get(two.id) || 0) || (selectedRole ? one.positions.length - two.positions.length : 0));
+  const requestedLength = lengthOf(filters.length);
+  return { questions: questions.slice(0, requestedLength), requestedLength, availableCount: questions.length, index: 0, answers: [], variations: {}, rationales: {}, status: 'answering' };
 }
 
 export function answerPracticeQuestion(session, choiceId) {
@@ -97,7 +110,14 @@ export function answerPracticeVariation(session, choiceId) {
 
 export function validatePracticeHistory(value) {
   if (!value || value.version !== VERSION || !Array.isArray(value.sessions) || value.sessions.length > 20) return [];
-  return value.sessions.filter(entry => entry && bounded(entry.id, 100) && typeof entry.completedAt === 'string' && entry.completedAt.length <= 40 && Number.isFinite(Date.parse(entry.completedAt)) && Number.isInteger(entry.total) && entry.total >= 1 && entry.total <= 5 && Number.isInteger(entry.correct) && entry.correct >= 0 && entry.correct <= entry.total && Object.hasOwn(TOPICS, entry.topic) && Object.hasOwn(POSITIONS, entry.position) && (entry.difficulty === undefined || Object.hasOwn(DIFFICULTIES, entry.difficulty))).slice(-20).map(entry => ({ ...entry, difficulty: difficultyOf(entry.difficulty) }));
+  return value.sessions.filter(entry => entry && bounded(entry.id, 100) && typeof entry.completedAt === 'string' && entry.completedAt.length <= 40 && Number.isFinite(Date.parse(entry.completedAt)) && Number.isInteger(entry.total) && entry.total >= 1 && entry.total <= 15 && Number.isInteger(entry.correct) && entry.correct >= 0 && entry.correct <= entry.total && Object.hasOwn(TOPICS, entry.topic) && Object.hasOwn(POSITIONS, entry.position) && (entry.difficulty === undefined || Object.hasOwn(DIFFICULTIES, entry.difficulty))).slice(-20).map(entry => ({
+    id: entry.id, completedAt: entry.completedAt, total: entry.total, correct: entry.correct,
+    topic: entry.topic, position: String(entry.position), difficulty: difficultyOf(entry.difficulty), length: lengthOf(entry.length),
+    // Older history did not record ids. Keep its scores without guessing which
+    // questions were seen. Ignore malformed optional metadata, not the history.
+    questionIds: Array.isArray(entry.questionIds) && entry.questionIds.length === entry.total && entry.questionIds.every(ident) && new Set(entry.questionIds).size === entry.total ? entry.questionIds : [],
+    topicResults: Array.isArray(entry.topicResults) ? entry.topicResults.filter(result => result && Object.hasOwn(TOPICS, result.topic) && result.topic !== 'all' && Number.isInteger(result.total) && result.total > 0 && result.total <= entry.total && Number.isInteger(result.correct) && result.correct >= 0 && result.correct <= result.total).slice(0, 4) : [],
+  }));
 }
 
 function element(tag, className, text) {
@@ -153,6 +173,38 @@ function choiceFeedback(choices, choiceId, stage) {
   return review;
 }
 
+function teachingDetails(title, contents, kind) {
+  const details = element('details', 'practice-teaching');
+  details.dataset.practiceTeaching = kind;
+  details.append(element('summary', '', title));
+  const body = element('div', 'practice-teaching-content');
+  body.append(...contents);
+  details.append(body);
+  // Keep one deeper explanation open at a time, including browsers without
+  // support for the native details[name] accordion.
+  details.addEventListener('toggle', () => {
+    if (!details.open) return;
+    details.parentElement?.querySelectorAll(':scope > details[data-practice-teaching]').forEach(other => { if (other !== details) other.open = false; });
+  });
+  return details;
+}
+
+function teachingSteps(steps) {
+  const list = element('ol', 'practice-teaching-steps');
+  steps.forEach(step => list.append(element('li', '', step)));
+  return list;
+}
+
+function replayTask(task) {
+  const checklist = element('dl', 'practice-replay-task');
+  for (const [title, value] of [['Где проверить', task.setup], ['Что сделать', task.action], ['По чему судить', task.success]]) {
+    const row = element('div');
+    row.append(element('dt', '', title), element('dd', '', value));
+    checklist.append(row);
+  }
+  return checklist;
+}
+
 export function mountPractice(container) {
   if (!(container instanceof HTMLElement)) throw new TypeError('Practice needs a container');
   mounts.get(container)?.();
@@ -168,13 +220,14 @@ export function mountPractice(container) {
     topic: Object.hasOwn(TOPICS, query.get('topic')) ? query.get('topic') : 'all',
     position: Object.hasOwn(POSITIONS, query.get('position')) ? query.get('position') : 'all',
     difficulty: difficultyOf(query.get('difficulty')),
+    length: String(lengthOf(query.get('length'))),
   };
   let history = [];
   let storageAvailable = true;
   let loadAttempt = 0;
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored && stored.length <= 20000) history = validatePracticeHistory(JSON.parse(stored));
+    if (stored && stored.length <= 100000) history = validatePracticeHistory(JSON.parse(stored));
   } catch { storageAvailable = false; }
 
   container.classList.add('practice');
@@ -187,7 +240,9 @@ export function mountPractice(container) {
     catch { storageAvailable = false; }
   }
   function begin(source = catalog) {
-    session = createPracticeSession(Array.isArray(source) ? source : catalog, filters);
+    const chosenSource = Array.isArray(source) ? source : catalog;
+    const recentScenarioIds = chosenSource === catalog ? history.slice().reverse().flatMap(entry => entry.questionIds || []) : [];
+    session = createPracticeSession(chosenSource, filters, Math.random, { recentScenarioIds });
     if (!session) return;
     sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     recorded = false;
@@ -218,26 +273,28 @@ export function mountPractice(container) {
   function syncFilterUrl() {
     const url = new URL(globalThis.location.href);
     for (const [key, value] of Object.entries(filters)) {
-      if (value === 'all' || (key === 'difficulty' && value === 'foundations')) url.searchParams.delete(key);
+      if (value === 'all' || (key === 'difficulty' && value === 'foundations') || (key === 'length' && value === '10')) url.searchParams.delete(key);
       else url.searchParams.set(key, value);
     }
     globalThis.history.replaceState(globalThis.history.state, '', url);
   }
   function updateAvailability() {
     const count = filterPracticeScenarios(catalog, filters).length;
+    const length = lengthOf(filters.length);
     const status = container.querySelector('[data-practice-availability]');
     if (!status) return;
     status.textContent = count === 0 ? 'Для этого сочетания пока нет ситуаций. Сбрось фильтры, чтобы начать.'
-      : count < 5 ? `В этой выборке ${count} из ${catalog.length} ситуаций. В серии будет ${count}; повторов не будет.`
-      : `В этой выборке ${count} из ${catalog.length} ситуаций. В серии — 5 случайных, без повторов.`;
+      : count < length ? `В подборке для выбранных позиции, темы и уровня — ${questionCount(count)}. Серия будет короче выбранных ${length}; в ней только задания по твоим условиям.`
+      : `В подборке — ${questionCount(count)}. В серии — ${length} без повторов; сначала ситуации, которых ещё не было в сохранённой истории.`;
     const start = container.querySelector('[data-practice-start]');
     start.disabled = count === 0;
-    start.textContent = count ? `Начать серию · ${Math.min(5, count)} ${Math.min(5, count) === 1 ? 'вопрос' : Math.min(5, count) < 5 ? 'вопроса' : 'вопросов'}` : 'Нет подходящих ситуаций';
+    start.textContent = count ? `Начать серию · ${questionCount(Math.min(length, count))}` : 'Нет подходящих ситуаций';
     container.querySelector('[data-practice-reset-filters]').hidden = filters.topic === 'all' && filters.position === 'all';
     const levelNote = container.querySelector('[data-practice-level-note]');
     if (levelNote) levelNote.textContent = LEVEL_DESCRIPTIONS[filters.difficulty];
     const roleNote = container.querySelector('[data-practice-role-note]');
     if (roleNote) roleNote.textContent = positionGoals[filters.position] || 'Выбери свою позицию: изменятся приоритеты на линии, перемещения и первые задания серии. Общие принципы остаются там, где они применимы к выбранной роли.';
+    container.querySelector('.practice-history')?.replaceWith(historyPanel());
   }
   function historyPanel() {
     const box = element('aside', 'practice-history');
@@ -246,11 +303,14 @@ export function mountPractice(container) {
       box.append(element('h3', '', 'Можно тренироваться без сохранения'), element('p', '', 'Браузер не разрешил сохранить историю. Ответы и объяснения работают; после закрытия страницы история этой серии может исчезнуть.'));
       return box;
     }
-    const latest = history.at(-1);
-    box.append(element('h3', '', latest ? 'Твоя последняя серия' : 'Начни с пяти решений'));
+    const matching = history.filter(entry => (filters.position === 'all' || entry.position === filters.position) && entry.difficulty === filters.difficulty && (filters.topic === 'all' || entry.topic === filters.topic));
+    const latest = matching.at(-1);
+    box.append(element('h3', '', latest ? 'Последняя серия по твоему выбору' : 'Практика с разбором решений'));
     if (latest) {
       box.append(element('p', 'practice-history-score', `${latest.correct} из ${latest.total}`));
       box.append(element('p', '', `Выбраны действия, соответствующие условиям задания. ${new Date(latest.completedAt).toLocaleDateString('ru-RU')} · ${DIFFICULTIES[latest.difficulty]} · ${TOPICS[latest.topic]} · ${POSITIONS[latest.position]}`));
+      const topicResults = (latest.topicResults || []).filter(value => value.correct < value.total).sort((one, two) => one.correct / one.total - two.correct / two.total);
+      if (topicResults.length) box.append(element('p', 'practice-history-focus', `Вернись к теме «${TOPICS[topicResults[0].topic]}»: в последней серии ${topicResults[0].correct} из ${topicResults[0].total} решений соответствовали условиям.`));
       box.append(element('p', 'practice-fine', `Сохранено серий: ${history.length}. Здесь хранятся последние 20 завершённых серий, только в этом браузере.`));
       box.append(button('Очистить историю на устройстве', () => {
         history = [];
@@ -260,7 +320,8 @@ export function mountPractice(container) {
         if (note) note.textContent = storageAvailable ? 'История на этом устройстве очищена.' : 'Браузер не разрешил очистить сохранённую историю.';
       }, 'practice-text-button'));
     } else {
-      box.append(element('p', '', 'После серии здесь появится её результат. Без регистрации, сравнения с другими игроками и таймера.'));
+      box.append(element('p', '', 'Выбери 5, 10 или 15 решений. После каждого — логика выбора, разбор альтернатив и задание для собственной игры. Для сложных ситуаций есть новое условие: проверь, умеешь ли ты менять план.'));
+      if (history.length) box.append(element('p', 'practice-fine', 'Серий для выбранных позиции, темы и уровня ещё нет. Другие результаты сохранены.'));
     }
     const notice = element('p', 'practice-fine');
     notice.dataset.practiceHistoryNotice = '';
@@ -273,7 +334,7 @@ export function mountPractice(container) {
     const layout = element('div', 'practice-setup');
     const card = element('section', 'practice-card practice-intro');
     card.append(caption('Сигнал → действие → почему'), element('h2', '', 'Что ты сделаешь дальше?'));
-    card.append(element('p', 'practice-lead', 'Прочитай условия, выбери одно действие и сравни своё объяснение с разбором. После ответа можно спокойно изучить каждый вариант.'));
+    card.append(element('p', 'practice-lead', 'Тренируй ход мысли: что известно, какая задача важнее и чем ты рискуешь. Сначала прими решение, затем разберись в альтернативах и проверь вывод в своей игре.'));
     const steps = element('ol', 'practice-steps');
     for (const [number, title, text] of [['01', 'Заметь сигнал', 'Что известно до решения?'], ['02', 'Выбери действие', 'Что доступно прямо сейчас?'], ['03', 'Проверь причину', 'Почему этот выбор подходит?']]) {
       const li = element('li');
@@ -282,7 +343,7 @@ export function mountPractice(container) {
     }
     card.append(steps);
     const filterRow = element('div', 'practice-filters');
-    filterRow.append(selectFilter('Уровень заданий', 'difficulty', DIFFICULTIES), selectFilter('Тема', 'topic', TOPICS), selectFilter('Твоя позиция', 'position', POSITIONS));
+    filterRow.append(selectFilter('Уровень заданий', 'difficulty', DIFFICULTIES), selectFilter('Тема', 'topic', TOPICS), selectFilter('Твоя позиция', 'position', POSITIONS), selectFilter('Длина серии', 'length', SESSION_LENGTHS));
     card.append(filterRow);
     const roleNote = element('p', 'practice-level-note');
     roleNote.dataset.practiceRoleNote = '';
@@ -346,6 +407,22 @@ export function mountPractice(container) {
     const question = element('h3', 'practice-choice-question', scenario.question);
     question.id = 'practice-choice-question';
     card.append(question);
+    if (!answered) {
+      const reflection = element('details', 'practice-reflection');
+      reflection.append(element('summary', '', 'Сначала объясни себе решение · по желанию'));
+      const label = element('label', 'practice-reflection-label');
+      label.append(element('span', '', 'Какой факт решающий и при каком изменении ты выберешь другое действие?'));
+      const input = element('textarea', 'practice-reflection-input');
+      input.rows = 3;
+      input.maxLength = 900;
+      input.value = current.rationales?.[scenario.id] || '';
+      input.dataset.practiceRationale = '';
+      input.placeholder = 'Например: сначала проверю…, потому что… Если…, сменю план на…';
+      input.addEventListener('input', () => { session.rationales = { ...session.rationales, [scenario.id]: input.value }; });
+      label.append(input);
+      reflection.append(label, element('p', 'practice-fine', 'Заметка нужна для сравнения с разбором. Она не оценивается автоматически и не сохраняется после выхода из серии.'));
+      card.append(reflection);
+    }
     const choices = element('div', 'practice-choices');
     choices.setAttribute('role', 'group');
     choices.setAttribute('aria-labelledby', question.id);
@@ -379,15 +456,24 @@ export function mountPractice(container) {
       feedbackTitle.dataset.practiceFeedbackTitle = '';
       feedbackTitle.setAttribute('role', 'status');
       feedback.append(feedbackTitle);
+      if (scenario.briefing) feedback.append(element('p', 'practice-briefing', scenario.briefing));
       const reasoning = element('dl', 'practice-reasoning');
       for (const [term, text] of [['Сигнал', scenario.signal], ['Действие', scenario.action], ['Почему', scenario.why]]) {
         const row = element('div'); row.append(element('dt', '', term), element('dd', '', text)); reasoning.append(row);
       }
       feedback.append(reasoning);
       feedback.append(choiceFeedback(scenario.choices, answer.choiceId, 'main'));
+      const deeper = element('div', 'practice-teaching-group');
+      if (current.rationales?.[scenario.id]) deeper.append(teachingDetails('Сравни со своим объяснением', [element('p', 'practice-own-reason', current.rationales[scenario.id]), element('p', 'practice-fine', 'Какой важный сигнал ты учёл? Что пропустил? Разбор выше помогает проверить логику, но не оценивает твой текст.')], 'reflection'));
+      if (scenario.decision_steps) deeper.append(teachingDetails('Как прийти к решению · по шагам', [teachingSteps(scenario.decision_steps)], 'steps'));
+      if (scenario.worked_example) deeper.append(teachingDetails('Разобранный пример', [teachingSteps(scenario.worked_example)], 'example'));
+      if (scenario.common_trap) deeper.append(teachingDetails('Почему легко ошибиться', [element('p', '', scenario.common_trap)], 'trap'));
+      if (scenario.counterfactual) deeper.append(teachingDetails('Если изменить один факт', [element('h4', '', 'Что изменилось'), element('p', '', scenario.counterfactual.change), element('h4', '', 'Как изменится решение'), element('p', '', scenario.counterfactual.decision)], 'counterfactual'));
+      if (deeper.childElementCount) feedback.append(deeper);
       feedback.append(element('p', 'practice-exception', `Когда решение изменится: ${scenario.exception}`));
       const transfer = element('div', 'practice-transfer');
-      transfer.append(caption('Перенеси в свою игру'), element('p', '', scenario.reviewQuestion));
+      transfer.append(caption('Перенеси в свою игру'), element('p', '', scenario.takeaway || scenario.reviewQuestion));
+      if (scenario.replay_task) transfer.append(teachingDetails('Задание для своего матча', [replayTask(scenario.replay_task)], 'replay'));
       feedback.append(transfer);
       if (scenario.variation) feedback.append(variationPanel(scenario));
       const next = button(current.index + 1 === current.questions.length ? 'Посмотреть итог' : 'Следующая ситуация', () => {
@@ -461,8 +547,12 @@ export function mountPractice(container) {
   }
   function renderResult() {
     const score = session.answers.filter(answer => answer.correct).length;
+    const topicResults = Object.keys(TOPICS).filter(topic => topic !== 'all').map(topic => {
+      const answers = session.answers.filter(answer => session.questions.find(question => question.id === answer.scenarioId)?.topic === topic);
+      return { topic, total: answers.length, correct: answers.filter(answer => answer.correct).length };
+    }).filter(value => value.total);
     if (!recorded) {
-      history = [...history, { id: sessionId, completedAt: new Date().toISOString(), total: session.questions.length, correct: score, ...filters }].slice(-20);
+      history = [...history, { id: sessionId, completedAt: new Date().toISOString(), total: session.questions.length, correct: score, ...filters, questionIds: session.questions.map(question => question.id), topicResults }].slice(-20);
       writeHistory();
       recorded = true;
     }
@@ -478,8 +568,15 @@ export function mountPractice(container) {
     recap.append(element('h3', '', 'Возьми один фокус в следующую игру'));
     const firstMissed = session.answers.find(answer => !answer.correct);
     const focus = session.questions.find(scenario => scenario.id === firstMissed?.scenarioId) || session.questions[0];
-    recap.append(element('p', '', focus.reviewQuestion));
+    recap.append(element('p', '', focus.takeaway || focus.reviewQuestion));
+    if (focus.replay_task) recap.append(replayTask(focus.replay_task));
     result.append(recap);
+    const topics = element('div', 'practice-topic-results');
+    topics.append(element('h3', '', 'Что показала эта серия'));
+    const topicList = element('ul');
+    for (const row of topicResults) topicList.append(element('li', '', `${TOPICS[row.topic]}: ${row.correct} из ${row.total} · ${row.correct < row.total ? 'вернись к объяснению ошибок' : 'проверь вывод в матче'}`));
+    topics.append(topicList);
+    result.append(topics);
     const list = element('div', 'practice-result-list');
     session.questions.forEach((scenario, index) => {
       const details = element('details', 'practice-result-row');
@@ -487,6 +584,8 @@ export function mountPractice(container) {
       summary.append(element('span', '', `${index + 1}. ${scenario.title}`), element('span', session.answers[index].correct ? 'practice-result-state practice-result-state--correct' : 'practice-result-state', session.answers[index].correct ? 'Подходит' : 'Повторить смысл'));
       details.append(summary, element('p', '', `Твой выбор: ${scenario.choices.find(choice => choice.id === session.answers[index].choiceId).text}`), element('p', '', `Действие: ${scenario.action}`), element('p', '', `Почему: ${scenario.why}`), element('p', 'practice-fine', `Когда решение изменится: ${scenario.exception}`));
       list.append(details);
+      if (scenario.decision_steps) details.append(teachingSteps(scenario.decision_steps));
+      if (scenario.replay_task) details.append(replayTask(scenario.replay_task));
     });
     result.append(list);
     const actions = element('div', 'practice-actions');
@@ -514,7 +613,7 @@ export function mountPractice(container) {
       const response = await fetch(new URL('./practice-scenarios.json', import.meta.url), { credentials: 'same-origin', signal: aborter.signal });
       if (!response.ok) throw new Error('Catalog unavailable');
       const raw = await response.text();
-      if (raw.length > 200000) throw new Error('Catalog too large');
+      if (raw.length > 4 * 1024 * 1024) throw new Error('Catalog too large');
       const payload = JSON.parse(raw);
       catalog = validatePracticeCatalog(payload);
       positionGoals = payload.positionGoals || {};

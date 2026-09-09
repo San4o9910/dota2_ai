@@ -129,3 +129,28 @@ body::after {
 }
 
 .role-guidance{margin:0 0 22px;padding:18px 20px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:var(--bg);min-width:0}.role-guidance h3{font-size:17px;line-height:1.5;margin:0 0 10px;color:var(--accent)}.role-guidance p{font-size:13px;line-height:1.75;margin:8px 0;max-width:960px;overflow-wrap:anywhere}.role-guidance details{margin-top:10px}.role-guidance summary{min-height:44px;align-content:center;cursor:pointer;font-size:12px;color:var(--accent)}.role-guidance summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.role-guidance strong{font-weight:600}@media(max-width:680px){.role-guidance{padding:14px}.role-guidance p{font-size:12px}}
+
+/* Reading modules: a worked example stays visible; deeper context opens on demand. */
+.learning-chapter { margin: 24px 0; padding: clamp(18px, 3vw, 30px); border: 1px solid var(--line); border-radius: 8px; background: rgba(20, 28, 29, .9); }
+.chapter-header h3 { font-size: clamp(22px, 3vw, 30px); line-height: 1.25; margin: 8px 0 14px; }
+.learning-chapter p, .learning-chapter li, .learning-chapter dd { line-height: 1.75; overflow-wrap: anywhere; }
+.learning-chapter h4 { font-size: 17px; margin: 0 0 12px; }
+.learning-chapter ul, .learning-chapter ol { padding-left: 24px; }
+.learning-chapter li + li { margin-top: 10px; }
+.chapter-goals { margin: 24px 0; }
+.learning-chapter details { border-top: 1px solid var(--line); padding: 16px 0; }
+.learning-chapter summary { cursor: pointer; font-weight: 600; line-height: 1.5; }
+.learning-chapter summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.chapter-example { margin: 20px 0; padding: 20px; border-left: 3px solid var(--teal); background: rgba(101, 198, 179, .06); }
+.chapter-example-result { font-weight: 600; }
+.chapter-errors dt { font-weight: 600; margin-top: 16px; }
+.chapter-errors dd { margin: 6px 0 0; }
+.chapter-practice, .chapter-self-check { margin-top: 24px; }
+.chapter-practice-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
+.chapter-practice-grid > div { padding: 16px; border: 1px solid var(--line); border-radius: 6px; }
+.chapter-practice h5 { font-size: 14px; margin: 0 0 8px; color: var(--accent); }
+.chapter-practice p { margin: 0; }
+.chapter-takeaway { border-top: 1px solid var(--line); padding-top: 20px; margin: 20px 0 0; }
+@media (max-width: 680px) { .chapter-practice-grid { grid-template-columns: 1fr; } .chapter-example { padding: 14px; } }
+
+.learning-chapter p + p, .learning-chapter details > p { margin-top: 12px; }

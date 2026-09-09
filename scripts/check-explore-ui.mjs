@@ -17,7 +17,7 @@ const {chromium}=dependency('playwright'),axe=dependency('axe-core');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
 const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
-for(const filename of ['explore.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
+for(const filename of ['explore.js','learning-chapter.js','workshop-builds.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
 files.set('/assets/dota/items/hurricane_pike.png',['dota/items/hurricane_pike.png','image/png']);
 const server=createServer(async(request,response)=>{
   const file=files.get(new URL(request.url,'http://localhost').pathname);
@@ -31,6 +31,15 @@ const screenshotDir=process.env.NARMA_EXPLORE_SCREENSHOTS;
 if(screenshotDir)await mkdir(screenshotDir,{recursive:true});
 const scenarios=JSON.parse(await readFile(path.join(root,'practice-scenarios.json'),'utf8')).scenarios;
 const buildCatalog=JSON.parse(await readFile(path.join(root,'build-guides.json'),'utf8'));
+function workshopFixture() {
+  const at=new Date().toISOString(), item=(id,name)=>({id,name});
+  const core=[item('power_treads','Power Treads'),item('dragon_lance','Dragon Lance'),item('blink','Blink Dagger')];
+  const extensions=[item('ultimate_scepter',"Aghanim's Scepter"),item('skadi','Eye of Skadi'),item('disperser','Disperser')];
+  const base={author:'Проверочный автор',source_patch:'7.41e',source_updated_at:at,fetched_at:at,status:'current_patch',starting_items:[item('tango','Tango')],early_items:[core[0]],core_items:core,extension_items:extensions,situational_items:[],luxury_items:[],final_items:[...core,...extensions],final_note:'Синтетическая сборка для проверки интерфейса.'};
+  const guide={...base,id:'steam-999999991',workshop_id:'999999991',hero_slug:'meepo',hero_name:'Meepo',title:'Meepo · Position 2',position:2,positions:[2],position_exact:true,role:'core',source_url:'https://steamcommunity.com/sharedfiles/filedetails/?id=999999991'};
+  const support={...base,id:'steam-999999992',workshop_id:'999999992',hero_slug:'crystal_maiden',hero_name:'Crystal Maiden',title:'Crystal Maiden · Support',position:null,positions:[4,5],position_exact:false,role:'support',source_url:'https://steamcommunity.com/sharedfiles/filedetails/?id=999999992',final_items:core,extension_items:[]};
+  return {schema_version:'narma.workshop-builds.v1',checked_at:at,stale:false,latest_patch:'7.41e',refresh_interval_seconds:86400,source_review_days:30,coverage:{heroes:2,total_heroes:127,guides:2,current_patch_guides:2},guides:[guide,support],errors:[]};
+}
 const itemIcon=id=>id==='hurricane_pike'?'/assets/dota/items/hurricane_pike.png':`https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${id}.png`;
 assert.equal(buildCatalog.schema_version,'narma.build-guides.v1');
 assert.ok(buildCatalog.guides.length>=2,'Build selection uses the actual authored library.');
@@ -77,7 +86,7 @@ const updates={schema_version:'narma.explore.v1',source_url:'https://www.dota2.c
   {id:'qa-lookalike',title:'Поддельный адрес Valve',category:'news',url:'https://store.steampowered.com.evil.example.test/news',published_at:stamp},
 ]};
 // Exercise content comes from the actual dependency-free production catalog.
-const catalogByPosition=JSON.parse(execFileSync(process.env.NARMA_TEST_PYTHON||'python3',['-c',"import json,sys; sys.path.insert(0,sys.argv[1]); from narma_video import curriculum as module; print(json.dumps([module.get_catalog(position or None) for position in range(6)],ensure_ascii=False))",path.resolve(root,'..','..')],{encoding:'utf8'}));
+const catalogByPosition=JSON.parse(execFileSync(process.env.NARMA_TEST_PYTHON||'python3',['-c',"import json,sys; sys.path.insert(0,sys.argv[1]); from narma_video import curriculum as module; from narma_video.learning_lessons import get_lessons; print(json.dumps([{**module.get_catalog(position or None), **get_lessons(position or None)} for position in range(6)],ensure_ascii=False))",path.resolve(root,'..','..')],{encoding:'utf8'}));
 const realExercises=new Map(catalogByPosition.flatMap(catalog=>catalog.exercises).map(exercise=>[exercise.id,exercise]));
 assert.equal(realExercises.size,13,'The full authored curriculum is available to the public learning test.');
 const catalog=position=>{const value=structuredClone(catalogByPosition[position||0]);value.sources.push({id:'qa-unsafe',title:'Небезопасный тестовый источник',url:'javascript:alert(1)'});for(const exercise of value.exercises)exercise.source_refs.push('qa-unsafe');return value;};
@@ -87,7 +96,7 @@ try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
     const errors=[],unexpected=[],apiRequests=[];
-    let newsFailed=false,buildPatchOverride=null,metaStale=false,authoredMode=true,metaFailed=false;
+    let newsFailed=false,buildPatchOverride=null,metaStale=false,authoredMode=true,metaFailed=false,workshopEnabled=false;
     page.on('pageerror',error=>errors.push(error.message));
     page.on('console',message=>{if(/Content Security Policy|Refused to (?:execute|apply|load)/i.test(message.text()))errors.push(message.text());});
     page.on('dialog',async dialog=>{errors.push('Unexpected dialog: '+dialog.message());await dialog.dismiss();});
@@ -103,6 +112,7 @@ try {
       if(request.method()!=='GET'){unexpected.push(`${request.method()} ${url.pathname}`);status=405;body={};}
       else if(url.pathname==='/api/explore/heroes')body=heroes;
       else if(url.pathname==='/api/explore/updates'){status=newsFailed?503:200;body=newsFailed?{detail:'Synthetic unavailable news feed'}:buildPatchOverride||updates;}
+      else if(url.pathname==='/api/explore/workshop-builds')body=workshopEnabled?workshopFixture():{schema_version:'narma.workshop-builds.v1',checked_at:new Date().toISOString(),stale:false,latest_patch:'7.41e',refresh_interval_seconds:86400,source_review_days:30,coverage:{heroes:0,total_heroes:127,guides:0,current_patch_guides:0},guides:[],errors:[]};
       else if(url.pathname==='/api/explore/build-reviews')body={schema_version:'narma.build-reviews.v1',guides:Object.fromEntries(buildCatalog.guides.map(g=>[g.id,{patch_notes:g.patch_notes||[]}]))};
       else if(url.pathname==='/api/explore/builds'){
         if(metaFailed){await route.fulfill({status:503,json:{detail:'Synthetic outage'}});return;}
@@ -296,6 +306,33 @@ try {
     assert.equal(await page.locator('#build-position').inputValue(),'3');
     await accessibility('builds-role');
 
+    workshopEnabled=true;
+    buildPatchOverride={...updates,checked_at:new Date().toISOString(),stale:false,errors:[],latest_patch:{version:'7.41e',url:'https://www.dota2.com/patches/7.41e',published_at:stamp}};
+    await open('/builds?source=workshop&q=Meepo&position=2&guide=steam-999999991');
+    await page.locator('[data-guide-id="steam-999999991"]').waitFor();
+    assert.equal(await page.locator('#build-source').inputValue(),'workshop');
+    assert.equal(await page.locator('[data-build-slot]').count(),6);
+    assert.equal(await page.locator('[data-guide-source="workshop"]').count(),1);
+    assert.equal(await page.locator('[data-workshop-phase]:visible').count(),1);
+    await page.locator('#workshop-phase-select').selectOption('extension_items');
+    assert.equal(await page.locator('[data-workshop-phase]:visible').getAttribute('data-workshop-phase'),'extension_items');
+    assert.equal(await page.locator('#build-slot-detail h4').textContent(),"Aghanim's Scepter");
+    await page.locator('[data-build-slot="5"]').focus();await page.locator('[data-build-slot="5"]').press('Enter');
+    assert.equal(await page.locator('#build-slot-detail h4').textContent(),'Disperser');
+    assert.equal(await page.locator('#build-slot-detail').count(),1);
+    assert.match(await page.locator('.build-patch').textContent(),/7\.41e/);
+    await accessibility('builds-workshop');
+    await page.locator('#build-position').selectOption('5');
+    assert.equal(await page.locator('[data-guide-source="workshop"]').count(),0,'A mid guide cannot survive a support filter.');
+    await page.locator('#build-search').fill('');
+    await page.locator('[data-guide-id="steam-999999992"]').waitFor();
+    assert.match(await page.locator('.workshop-role-note').textContent(),/без точного номера позиции/);
+    assert.equal(await page.locator('.build-inventory-grid > *').count(),6);
+    assert.equal(await page.locator('.build-slot--empty').count(),3,'Missing source items stay visibly unfilled.');
+    assert.equal(await page.locator('#build-role-context .role-guidance').getAttribute('data-position'),'5');
+    await accessibility('builds-workshop-support');
+    workshopEnabled=false;
+
     await open('/learn');
     assert.equal(await page.locator('[data-stage]').count(),6);
     await page.locator('#learn-position').selectOption('5');
@@ -324,6 +361,12 @@ try {
       assert.equal(await page.locator('#learning-library .role-guidance > p').first().textContent(),catalogByPosition[Number(position)].role_context.lane_priority);
       for(const stage of catalogByPosition[Number(position)].stages){
         await page.locator(`[data-stage="${stage.id}"]`).click();
+        const chapter=catalogByPosition[Number(position)].lessons.find(row=>row.stage_ids.includes(stage.id));
+        assert.ok(chapter);
+        assert.equal(await page.locator('.learning-chapter').getAttribute('data-lesson'),chapter.id);
+        assert.equal(await page.locator('.chapter-example ol li').count(),chapter.worked_example.steps.length);
+        assert.equal(await page.locator('.chapter-self-check details').count(),chapter.self_check.length);
+        assert.equal(await page.locator('.chapter-self-check details[open]').count(),0,'Self-check answers start hidden.');
         for(const card of await page.locator('#lesson-content [data-exercise]').all()){
           const id=await card.getAttribute('data-exercise'),exercise=catalogByPosition[Number(position)].exercises.find(item=>item.id===id);assert.ok(exercise);
           assert.equal(await card.locator('h3').textContent(),exercise.title);
@@ -374,9 +417,11 @@ try {
     await practice.locator('[data-practice-filter="topic"]').selectOption('lane');
     assert.equal(await practice.locator('[data-practice-filter="difficulty"]').inputValue(),'foundations');
     const shortCount=scenarios.filter(scenario=>scenario.difficulty==='foundations'&&scenario.topic==='lane'&&scenario.positions.includes(5)).length;
-    assert.ok(shortCount>0&&shortCount<5);
-    assert.match(await practice.locator('[data-practice-availability]').textContent(),new RegExp(`В серии будет ${shortCount}`),'A short selection advertises its actual length.');
+    assert.ok(shortCount>=5,'The introductory support lane topic must include at least five meaningful cases.');
+    assert.equal(await practice.locator('[data-practice-filter="length"]').inputValue(),'10','The default session has ten questions.');
+    assert.match(await practice.locator('[data-practice-start]').textContent(),new RegExp(String(Math.min(shortCount,10))),'The start button advertises the actual selected session length.');
     await practice.locator('[data-practice-reset-filters]').click();
+    await practice.locator('[data-practice-filter="length"]').selectOption('5');
     await practice.locator('[data-practice-start]').focus();await practice.locator('[data-practice-start]').press('Enter');
     const seen=new Set();
     for(let index=0;index<5;index++){
@@ -400,10 +445,10 @@ try {
     await accessibility('practice-result');
     await practice.locator('[data-practice-retry]').focus();await practice.locator('[data-practice-retry]').press('Enter');
     await practice.locator('[data-scenario-id]').waitFor();
-    assert.equal(await practice.locator('[data-choice-id]:enabled').count(),3,'Retry starts a fresh, unanswered question.');
+    assert.ok([3,4].includes(await practice.locator('[data-choice-id]:enabled').count()),'Retry starts a fresh, unanswered question.');
     assert.equal(await practice.locator('[data-practice-retry]').count(),0);
     for(const difficulty of ['application','advanced']){
-      await open('/practice?difficulty='+difficulty);
+      await open('/practice?difficulty='+difficulty+'&length=5');
       await practice.locator('[data-practice-start]').waitFor();
       assert.equal(await practice.locator('[data-practice-filter="difficulty"]').inputValue(),difficulty,'A direct training link preserves its selected depth.');
       await practice.locator('[data-practice-start]').click();
@@ -453,6 +498,28 @@ try {
         assert.equal(await practice.locator('.practice-score').textContent(),'1 из 1');
         assert.equal(await practice.locator('[data-practice-repeat-missed]').count(),0,'Correct focused retry does not invent remaining mistakes.');
       }
+    }
+    for(const length of [10,15]){
+      await open('/practice?length='+length);
+      await practice.locator('[data-practice-start]').waitFor();
+      assert.equal(await practice.locator('[data-practice-filter="length"]').inputValue(),String(length));
+      await practice.locator('[data-practice-start]').click();
+      const roundIds=new Set();
+      for(let index=0;index<length;index++){
+        const card=practice.locator('[data-scenario-id]');await card.waitFor();
+        const id=await card.getAttribute('data-scenario-id'),scenario=scenarios.find(row=>row.id===id);
+        assert.ok(scenario);assert.equal(roundIds.has(id),false);roundIds.add(id);
+        if(index===0){await practice.locator('.practice-reflection summary').click();await practice.locator('[data-practice-rationale]').fill('Личная проверка рассуждения: не сохранять эту фразу.');}
+        await practice.locator('[data-choice-id="'+scenario.correctChoiceId+'"]').click();
+        await practice.locator('[data-practice-next]').waitFor();
+        assert.ok(await practice.locator('[data-practice-teaching]').count()>0,'Feedback teaches a decision process, not just a correct choice.');
+        await practice.locator('[data-practice-next]').click();
+      }
+      await practice.locator('[data-practice-retry]').waitFor();
+      assert.equal(await practice.locator('.practice-score').textContent(),length+' из '+length);
+      const history=await page.evaluate(()=>localStorage.getItem('narma.practice.v1.history'));
+      assert.equal(history.includes('Личная проверка рассуждения'),false);
+      assert.equal(JSON.parse(history).sessions.at(-1).total,length);
     }
     assert.ok(apiRequests.every(request=>request.path.startsWith('/api/explore/')&&request.method==='GET'),'Public visitors never invoke auth, replay, Hermes, or model APIs.');
     assert.deepEqual(unexpected,[],'The synthetic public UI run never contacts live sources or providers.');

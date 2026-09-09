@@ -1,8 +1,12 @@
 import {createBuildMeta,itemEvidence} from './build-meta.js';
 import {adaptationOptions,applyAdaptation} from './build-adaptations.js';
 import {roleGuidance} from './role-guidance.js';
+import {WORKSHOP_PHASES,validateWorkshopFeed,workshopMatchesPosition,workshopRoleLabel,workshopFreshness} from './workshop-builds.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const positions = {1:'Керри',2:'Мидер',3:'Офлейнер',4:'Поддержка',5:'Полная поддержка'};
+const isWorkshop = guide => guide?.source === 'workshop';
+const matchesPosition = (guide,position) => isWorkshop(guide)?workshopMatchesPosition(guide,position):(!position||String(guide.position)===position);
+const guideRole = guide => isWorkshop(guide)?(guide.position_exact?`${guide.position} · ${positions[guide.position]}`:workshopRoleLabel(guide)):`${guide.position} · ${positions[guide.position]}`;
 const mountedBuilds = new WeakMap();
 const REVIEW_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 export function buildFreshness(guide, feed, now = Date.now()) {
@@ -65,21 +69,45 @@ export async function mountBuilds(root) {
   root.innerHTML=`<div class="page-heading"><div><p class="eyebrow">Предмет под игровую задачу</p><h1>Сборки с объяснением</h1><p>Выбери героя и позицию. Разберись, зачем нужен каждый предмет и когда стоит поменять план.</p></div><a class="text-link" href="/heroes">Все герои →</a></div><div id="build-library"><p class="page-status" role="status">Открываем руководства…</p></div>`;
   const content=root.querySelector('#build-library');
   try {
+    // A slow community source must not delay the existing authored library.
+    const initialWorkshop=getJSON('/api/explore/workshop-builds',controller.signal).then(data=>({data})).catch(()=>({error:true}));
     const [catalog,initialUpdates,initialReviews]=await Promise.all([getJSON('/assets/build-guides.json',controller.signal),getJSON('/api/explore/updates',controller.signal).then(data=>({data})).catch(()=>({error:true})),getJSON('/api/explore/build-reviews',controller.signal).catch(()=>null)]);
     if(disposed)return cleanup;
     let updatesResult=initialUpdates;
     let reviews=initialReviews;
     if(catalog.schema_version!=='narma.build-guides.v1'||!Array.isArray(catalog.guides))throw Error('CATALOG_INVALID');
-    const guides=catalog.guides.filter(g=>/^[a-z0-9-]{1,90}$/.test(g.id)&&asset('heroes',g.hero_slug)&&positions[g.position]);
-    if(!guides.length)throw Error('CATALOG_EMPTY');
+    const authoredGuides=catalog.guides.filter(g=>/^[a-z0-9-]{1,90}$/.test(g.id)&&asset('heroes',g.hero_slug)&&positions[g.position]);
+    if(!authoredGuides.length)throw Error('CATALOG_EMPTY');
+    let guides=authoredGuides,workshopFeed=null,workshopLoading=true,workshopFailed=false,workshopReceivedAt=0;
     const params=new URLSearchParams(location.search);
     let query=(params.get('q')||params.get('hero')||'').slice(0,80),position=positions[params.get('position')]?params.get('position'):'';
+    let sourceFilter=['narma','workshop'].includes(params.get('source'))?params.get('source'):'all';
+    let pendingGuideId=/^steam-\d{1,20}$/.test(params.get('guide')||'')?params.get('guide'):null;
     let selected=guides.find(g=>g.id===params.get('guide'))||guides.find(g=>g.hero_slug===params.get('hero')&&(!position||String(g.position)===position))||null;
     const selectedSlots=new Map();
     const selectedAdaptations=new Map();
+    const selectedWorkshopItems=new Map();
+    const selectedWorkshopPhases=new Map();
     if(selected&&adaptationOptions(selected).some(row=>row.id===params.get('variant')))selectedAdaptations.set(selected.id,params.get('variant'));
-    content.innerHTML=`<div class="build-toolbar"><div class="field"><label for="build-search">Поиск героя или руководства</label><input type="search" id="build-search" maxlength="80" placeholder="Например, Viper" value="${esc(query)}"></div><div class="field"><label for="build-position">Позиция</label><select id="build-position"><option value="">Все позиции</option>${Object.entries(positions).map(([id,label])=>`<option value="${id}"${position===id?' selected':''}>${id} · ${label}</option>`).join('')}</select></div><p class="build-editorial-note">Руководства Narma: условия выбора и действия в игре. Позиция меняет задачи на линии и план покупки. Статистический рейтинг героев здесь не рассчитывается.</p></div><div id="build-role-context" aria-live="polite"></div><div class="build-layout"><aside class="build-picker" aria-label="Выбор руководства"><p class="build-count" id="build-count" role="status" aria-live="polite"></p><div id="build-list"></div></aside><section id="build-detail" aria-label="Выбранное руководство"></section></div><aside class="build-meta"><div><p class="eyebrow">Проверяй изменения перед игрой</p><h2>Мета зависит от патча и уровня матчей</h2><p>Сначала проверь, что изменилось у героя, затем сравни его задачи со своим пулом. Популярная сборка не отменяет условия конкретного матча.</p></div><div class="build-meta-links"><a class="button subtle" href="/updates?category=patch">Изменения и новости Valve →</a><a class="text-link" href="https://www.dotabuff.com/heroes/meta" target="_blank" rel="noopener noreferrer">Статистика по рангам · Dotabuff ↗</a><a class="text-link" href="https://dota2protracker.com/meta" target="_blank" rel="noopener noreferrer">Матчи 7000+ MMR · Dota2ProTracker ↗</a></div></aside>`;
+    content.innerHTML=`<div class="build-toolbar"><div class="field"><label for="build-search">Поиск героя или руководства</label><input type="search" id="build-search" maxlength="80" placeholder="Например, Viper" value="${esc(query)}"></div><div class="field"><label for="build-position">Позиция</label><select id="build-position"><option value="">Все позиции</option>${Object.entries(positions).map(([id,label])=>`<option value="${id}"${position===id?' selected':''}>${id} · ${label}</option>`).join('')}</select></div><div class="field"><label for="build-source">Источник руководства</label><select id="build-source"><option value="all"${sourceFilter==='all'?' selected':''}>Все руководства</option><option value="workshop"${sourceFilter==='workshop'?' selected':''}>Сообщество · Steam Workshop</option><option value="narma"${sourceFilter==='narma'?' selected':''}>Narma · с объяснением решений</option></select></div><p class="build-editorial-note">Сборки сообщества показывают покупки автора по этапам игры. Планы Narma объясняют условия выбора. У каждого руководства указаны роль, источник и проверка патча.</p></div><div id="build-coverage" class="build-coverage" role="status" aria-live="polite"></div><div id="build-role-context" aria-live="polite"></div><div class="build-layout"><aside class="build-picker" aria-label="Выбор руководства"><p class="build-count" id="build-count" role="status" aria-live="polite"></p><div id="build-list"></div></aside><section id="build-detail" aria-label="Выбранное руководство"></section></div><aside class="build-meta"><div><p class="eyebrow">Проверяй изменения перед игрой</p><h2>Мета зависит от патча и уровня матчей</h2><p>Сначала проверь, что изменилось у героя, затем сравни его задачи со своим пулом. Популярная сборка не отменяет условия конкретного матча.</p></div><div class="build-meta-links"><a class="button subtle" href="/updates?category=patch">Изменения и новости Valve →</a><a class="text-link" href="https://www.dotabuff.com/heroes/meta" target="_blank" rel="noopener noreferrer">Статистика по рангам · Dotabuff ↗</a><a class="text-link" href="https://dota2protracker.com/meta" target="_blank" rel="noopener noreferrer">Матчи 7000+ MMR · Dota2ProTracker ↗</a></div></aside>`;
     const detail=content.querySelector('#build-detail');
+    const workshopStatusFeed=()=>{
+      const feed=updatesResult.data,checked=Date.parse(feed?.checked_at||'');
+      const officialFresh=feed?.stale===false&&Array.isArray(feed.errors)&&feed.errors.length===0&&Number.isFinite(checked)&&checked<=Date.now()+300000&&Date.now()-checked<30*60*1000;
+      const latest=officialFresh?feed.latest_patch?.version:(Date.now()-workshopReceivedAt<30*60*1000?workshopFeed?.latest_patch:null);
+      return {...(workshopFeed||{}),latest_patch:latest||null};
+    };
+    const renderCoverage=()=>{
+      const host=content.querySelector('#build-coverage');
+      if(workshopLoading&&!workshopFeed){host.textContent='Загружаем сборки сообщества. Учебные планы Narma уже доступны.';return;}
+      if(!workshopFeed){host.textContent='Сборки сообщества сейчас не загрузились. Учебные планы Narma доступны; загрузку повторим автоматически.';return;}
+      const statusFeed=workshopStatusFeed();
+      const heroCount=new Set(workshopFeed.guides.map(guide=>guide.hero_slug)).size;
+      const currentCount=workshopFeed.guides.filter(guide=>workshopFreshness(guide,statusFeed).state==='current_patch').length;
+      const checked=checkedDate(workshopFeed.checked_at);
+      const markup=`<strong>Сборки сообщества · ${heroCount} из ${workshopFeed.coverage.total_heroes} героев</strong><span>${workshopFeed.guides.length} руководств · ${currentCount} с отметкой текущего патча${statusFeed.latest_patch?` ${esc(statusFeed.latest_patch)}`:''}${checked?` · Проверка ${esc(checked)}`:''}</span><span>${workshopFailed||workshopFeed.stale?'Показана сохранённая подборка. Обновление источника задерживается.':'Проверяем обновления авторов каждый день. После нового патча устаревшие сборки получают отметку.'} Винрейт и популярность готовых сборок этими источниками не подтверждены.</span>`;
+      if(host.innerHTML!==markup)host.innerHTML=markup;
+    };
     const roleHost=content.querySelector('#build-role-context'),roleCache=new Map();
     let roleSequence=0,displayedPosition=null;
     const renderRole=async()=>{
@@ -101,6 +129,13 @@ export async function mountBuilds(root) {
     const updatePatchLabel=()=>{
       const label=detail.querySelector('.build-patch');
       if(!label||!selected)return;
+      if(isWorkshop(selected)){
+        const status=workshopFreshness(selected,workshopStatusFeed());
+        const date=checkedDate(selected.source_updated_at);
+        label.textContent=status.text+(date?` · Обновление автора ${date}`:'');
+        label.classList.toggle('is-stale',status.stale);label.dataset.freshness=status.state;
+        return;
+      }
       const review=reviews?.guides?.[selected.id],evaluated=Date.parse(reviews?.evaluated_at||'');
       const validReview=reviews?.schema_version==='narma.build-reviews.v1'&&Number.isFinite(evaluated)&&evaluated<=Date.now()+300000&&Date.now()-evaluated<120000
         &&review?.verified_patch===selected.verified_patch&&review?.checked_at===selected.checked_at
@@ -111,19 +146,70 @@ export async function mountBuilds(root) {
       label.classList.toggle('is-stale',status.stale);
       label.dataset.freshness=status.state;
     };
-    const sync=()=>{const p=new URLSearchParams();if(query)p.set('q',query);if(position)p.set('position',position);if(selected){p.set('guide',selected.id);const variant=selectedAdaptations.get(selected.id);if(variant)p.set('variant',variant);}if(meta){const preference=meta.preferences();if(preference.source==='STRATZ'){p.set('rank',preference.rank);if(preference.basis!=='guide')p.set('basis',preference.basis);}}history.replaceState(null,'',`/builds${p.size?'?'+p:''}`);};
+    const sync=()=>{const p=new URLSearchParams();if(query)p.set('q',query);if(position)p.set('position',position);if(sourceFilter!=='all')p.set('source',sourceFilter);if(pendingGuideId)p.set('guide',pendingGuideId);else if(selected){p.set('guide',selected.id);const variant=selectedAdaptations.get(selected.id);if(variant&&!isWorkshop(selected))p.set('variant',variant);}if(meta&&!isWorkshop(selected)){const preference=meta.preferences();if(preference.source==='STRATZ'){p.set('rank',preference.rank);if(preference.basis!=='guide')p.set('basis',preference.basis);}}history.replaceState(null,'',`/builds${p.size?'?'+p:''}`);};
     meta=createBuildMeta(controller.signal,sync);
+    const renderWorkshopGuide=guide=>{
+      // Workshop identifiers must never reach the statistical adapter.
+      meta?.dispose();meta=null;
+      const allItems=Object.keys(WORKSHOP_PHASES).flatMap(key=>guide[key]);
+      const stored=selectedWorkshopItems.get(guide.id);
+      let chosen=allItems.find(item=>item.id===stored)||guide.final_items[0]||allItems[0];
+      const slots=Array.from({length:6},(_,index)=>guide.final_items[index]||null);
+      const phases=Object.entries(WORKSHOP_PHASES).filter(([key])=>guide[key].length);
+      const requestedPhase=selectedWorkshopPhases.get(guide.id)||'core_items';
+      const phase=phases.some(([key])=>key===requestedPhase)?requestedPhase:phases[0]?.[0];
+      const phaseItems=phases.map(([key,label])=>`<section class="workshop-phase" data-workshop-phase="${key}"${key!==phase?' hidden':''}><h4>${esc(label)}</h4><div class="workshop-item-row" role="group" aria-label="${esc(label)}">${guide[key].map(item=>`<button type="button" class="workshop-item" data-workshop-item="${esc(item.id)}" aria-pressed="${chosen?.id===item.id}" aria-controls="build-slot-detail">${picture('items',item.id,item.name)}<span>${esc(item.name)}</span></button>`).join('')}</div></section>`).join('');
+      const roleNote=guide.position_exact?`Автор указал позицию ${guide.position} · ${positions[guide.position]}.`:
+        guide.role==='unknown'?'Автор не указал позицию. Руководство доступно в общем каталоге; для выбранной позиции нужны дополнительные основания.':
+        guide.role==='offlane'?'Автор отметил офлейн. Задачи третьей позиции показаны отдельно от списка покупок.':
+        `${guide.role==='support'?'Автор отметил поддержку':'Автор отметил кор-роль'}, без точного номера позиции. Подборка применима к группе ${guide.positions.join(' / ')}; отдельная сборка для каждой из этих позиций не подтверждена.`;
+      const practicePosition=position||guide.position||'';
+      detail.innerHTML=`<article class="build-guide build-guide--workshop" data-guide-id="${esc(guide.id)}" data-guide-source="workshop">
+        <header class="build-guide-header">${picture('heroes',guide.hero_slug,guide.hero_name,'build-portrait')}<div><p class="eyebrow">${esc(guideRole(guide))}</p><h2>${esc(guide.hero_name)}</h2><p>${esc(guide.title)}</p></div></header>
+        <div class="workshop-attribution"><span>Автор: <strong>${esc(guide.author)}</strong></span><a class="text-link" href="${esc(sourceURL(guide.source_url))}" target="_blank" rel="noopener noreferrer">Оригинал в Steam Workshop ↗</a></div>
+        <p class="build-patch"></p><p class="workshop-role-note">${esc(roleNote)}</p>
+        <section class="build-inventory" aria-labelledby="build-inventory-heading">
+          <div class="build-inventory-heading"><h3 id="build-inventory-heading">План на 6 слотов</h3><p>${esc(guide.final_note||'План слотов Narma из основных покупок автора. Полные этапы руководства показаны ниже.')}</p></div>
+          <div class="build-inventory-grid" role="group" aria-label="Шесть слотов инвентаря">${slots.map((item,index)=>item?`<button type="button" class="build-slot" data-build-slot="${index}" data-workshop-item="${esc(item.id)}" aria-pressed="${item.id===chosen?.id}" aria-controls="build-slot-detail" aria-label="Слот ${index+1}: ${esc(item.name)}">${picture('items',item.id,item.name)}<span>${esc(item.name)}</span></button>`:`<div class="build-slot build-slot--empty" aria-label="Слот ${index+1}: не заполнен источником"><span class="build-empty-slot-number">${index+1}</span><span>По ситуации</span></div>`).join('')}</div>
+          <div class="workshop-stage-heading"><h3>Покупки по этапам · список автора</h3><p>Выбери предмет, чтобы увидеть, на каком этапе автор его предлагает. Этапы могут включать альтернативы; это не один инвентарь.</p></div>
+          <label class="workshop-phase-filter" for="workshop-phase-select">Этап покупки<select id="workshop-phase-select">${phases.map(([key,label])=>`<option value="${key}"${key===phase?' selected':''}>${esc(label)} · ${guide[key].length}</option>`).join('')}</select></label>
+          <div class="workshop-phases">${phaseItems}</div><div id="build-slot-detail" class="build-slot-detail" aria-live="polite" aria-atomic="true"></div>
+        </section>
+        <section class="build-check"><h3>Перед покупкой проверь задачу</h3><p>Какую угрозу закрывает предмет сейчас: вход в драку, выживание, урон или помощь союзнику? Соотнеси список автора со своей ролью и героями противника. План на шесть слотов составлен Narma из предметов руководства; точные минуты покупки и винрейт комплекта здесь не заявлены.</p><div class="button-row"><a class="button primary" href="/practice?topic=items${practicePosition?`&position=${esc(practicePosition)}`:''}">Потренировать выбор предметов →</a><a class="button subtle" href="/replays">Проверить свой матч ↗</a></div></section>
+      </article>`;
+      const paintChosen=item=>{
+        if(!item)return;
+        chosen=item;selectedWorkshopItems.set(guide.id,item.id);
+        const stages=Object.entries(WORKSHOP_PHASES).filter(([key])=>guide[key].some(row=>row.id===item.id)).map(([,label])=>label);
+        detail.querySelector('#build-slot-detail').innerHTML=`<div class="workshop-selected-item">${picture('items',item.id,item.name)}<div><h4>${esc(item.name)}</h4><p><strong>Этапы автора:</strong> ${esc(stages.join(' · '))}</p><p>Это покупка из руководства ${esc(guide.author)}. Точную минуту и условие замены проверяй по своей игре и пояснениям автора.</p></div></div>`;
+        detail.querySelectorAll('[data-workshop-item]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.workshopItem===item.id)));
+        imageFallbacks(detail.querySelector('#build-slot-detail'));
+      };
+      detail.querySelectorAll('[data-workshop-item]').forEach(button=>button.addEventListener('click',()=>paintChosen(allItems.find(item=>item.id===button.dataset.workshopItem))));
+      detail.querySelector('#workshop-phase-select').addEventListener('change',event=>{
+        const key=event.target.value;if(!Object.hasOwn(WORKSHOP_PHASES,key)||!guide[key].length)return;
+        selectedWorkshopPhases.set(guide.id,key);
+        detail.querySelectorAll('[data-workshop-phase]').forEach(section=>{section.hidden=section.dataset.workshopPhase!==key;});
+        paintChosen(guide[key][0]);
+      });
+      paintChosen(chosen);imageFallbacks(detail);updatePatchLabel();
+    };
     const renderDetail=()=>{
       void renderRole();
       if(!selected){
+        meta?.dispose();meta=null;
+        if(sourceFilter==='workshop'&&workshopLoading){detail.innerHTML='<p class="page-status" role="status">Загружаем руководства сообщества…</p>';return;}
+        if(sourceFilter==='workshop'&&!workshopFeed){detail.innerHTML='<div class="build-empty"><h2>Не удалось загрузить сборки сообщества</h2><p>Повтори загрузку или выбери планы Narma в фильтре источника.</p><button type="button" class="button subtle" data-workshop-retry>Повторить загрузку</button></div>';detail.querySelector('[data-workshop-retry]').addEventListener('click',()=>{workshopLoading=true;renderCoverage();renderDetail();void getJSON('/api/explore/workshop-builds',controller.signal).then(data=>receiveWorkshop({data})).catch(()=>receiveWorkshop({error:true}));});return;}
         const normalized=query.trim().toLocaleLowerCase('ru-RU');
         const alternatives=normalized?guides.filter(g=>`${g.hero_name} ${g.title} ${g.hero_slug}`.toLocaleLowerCase('ru-RU').includes(normalized)):[];
         const roleQuery=position?`?position=${position}`:'';
-        detail.innerHTML=`<div class="build-empty"><h2>Для этой пары героя и позиции пока нет руководства</h2><p>${position?`Выбрана позиция ${esc(position)} · ${esc(positions[position])}. `:''}Сборку для другой роли нельзя автоматически переносить на выбранную.</p>${alternatives.length?`<p>Для найденного героя доступны другие учебные планы:</p><div class="button-row">${alternatives.map(g=>`<button type="button" class="button subtle" data-supported-guide="${esc(g.id)}">${esc(g.hero_name)} · ${esc(g.position)} · ${esc(positions[g.position])}</button>`).join('')}</div>`:'<p>Попробуй имя другого героя или открой обучение по выбранной позиции.</p>'}<a class="text-link" href="/learn${roleQuery}">Обучение${position?` · ${esc(positions[position])}`:''} →</a></div>`;
-        detail.querySelectorAll('[data-supported-guide]').forEach(button=>button.addEventListener('click',()=>{selected=guides.find(g=>g.id===button.dataset.supportedGuide);position=String(selected.position);content.querySelector('#build-position').value=position;render();}));
+        detail.innerHTML=`<div class="build-empty"><h2>Для этой пары героя и позиции пока нет руководства</h2><p>${position?`Выбрана позиция ${esc(position)} · ${esc(positions[position])}. `:''}Сборку для другой роли нельзя автоматически переносить на выбранную.</p>${alternatives.length?`<p>Для найденного героя доступны другие учебные планы:</p><div class="button-row">${alternatives.map(g=>`<button type="button" class="button subtle" data-supported-guide="${esc(g.id)}">${esc(g.hero_name)} · ${esc(guideRole(g))}</button>`).join('')}</div>`:'<p>Попробуй имя другого героя или открой обучение по выбранной позиции.</p>'}<a class="text-link" href="/learn${roleQuery}">Обучение${position?` · ${esc(positions[position])}`:''} →</a></div>`;
+        detail.querySelectorAll('[data-supported-guide]').forEach(button=>button.addEventListener('click',()=>{selected=guides.find(g=>g.id===button.dataset.supportedGuide);position=selected.position?String(selected.position):'';sourceFilter=isWorkshop(selected)?'workshop':'narma';pendingGuideId=null;content.querySelector('#build-position').value=position;content.querySelector('#build-source').value=sourceFilter;render();}));
         return;
       }
       const g=selected;
+      if(isWorkshop(g)){renderWorkshopGuide(g);return;}
+      if(!meta)meta=createBuildMeta(controller.signal,sync);
       const alternatives=adaptationOptions(g);
       const inventoryItems=finalItems(g),selectedSlot=selectedSlots.get(g.id)||0;
       const date=checkedDate(g.checked_at),freshness=buildFreshness(g,updatesResult.data);
@@ -186,23 +272,40 @@ export async function mountBuilds(root) {
       imageFallbacks(detail);
       updatePatchLabel();
     };
-    const render=()=>{
+    const render=(preserveAuthoredDetail=false)=>{
       const normalized=query.trim().toLocaleLowerCase('ru-RU');
-      const rows=guides.filter(g=>(!position||String(g.position)===position)&&`${g.hero_name} ${g.title} ${g.hero_slug}`.toLocaleLowerCase('ru-RU').includes(normalized));
-      if(!selected||!rows.some(g=>g.id===selected.id))selected=rows[0]||null;
+      const rows=guides.filter(g=>matchesPosition(g,position)&&(sourceFilter==='all'||(sourceFilter==='workshop')===isWorkshop(g))&&`${g.hero_name} ${g.title} ${g.hero_slug} ${g.author||''}`.toLocaleLowerCase('ru-RU').includes(normalized));
+      const previousId=selected?.id;
+      selected=rows.find(guide=>guide.id===selected?.id)||rows[0]||null;
       content.querySelector('#build-count').textContent=`Руководств: ${rows.length}`;
       const picker=content.querySelector('#build-list');
-      picker.innerHTML=rows.map(g=>`<button type="button" class="build-choice" data-guide="${esc(g.id)}" aria-pressed="${g.id===selected?.id}">${picture('heroes',g.hero_slug,g.hero_name)}<span><strong>${esc(g.hero_name)}</strong><small>${esc(g.position)} · ${esc(positions[g.position])}</small></span></button>`).join('');
-      picker.querySelectorAll('[data-guide]').forEach(button=>button.addEventListener('click',()=>{selected=rows.find(g=>g.id===button.dataset.guide);picker.querySelectorAll('[data-guide]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));renderDetail();sync();}));
-      imageFallbacks(picker);renderDetail();sync();
+      picker.innerHTML=rows.map(g=>`<button type="button" class="build-choice" data-guide="${esc(g.id)}" aria-pressed="${g.id===selected?.id}">${picture('heroes',g.hero_slug,g.hero_name)}<span><strong>${esc(g.hero_name)}</strong><small>${esc(guideRole(g))}</small><small class="build-choice-source">${esc(isWorkshop(g)?g.author:'Narma · разбор решений')}</small></span></button>`).join('');
+      picker.querySelectorAll('[data-guide]').forEach(button=>button.addEventListener('click',()=>{selected=rows.find(g=>g.id===button.dataset.guide);pendingGuideId=null;picker.querySelectorAll('[data-guide]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));renderDetail();sync();}));
+      imageFallbacks(picker);
+      if(!preserveAuthoredDetail||!selected||isWorkshop(selected)||selected?.id!==previousId)renderDetail();
+      renderCoverage();sync();
     };
-    content.querySelector('#build-search').addEventListener('input',event=>{query=event.target.value;render();});
-    content.querySelector('#build-position').addEventListener('change',event=>{position=event.target.value;render();});
+    const receiveWorkshop=result=>{
+      if(disposed)return;
+      workshopLoading=false;
+      try{
+        if(!result?.data)throw Error('SOURCE_UNAVAILABLE');
+        const feed=validateWorkshopFeed(result.data);
+        const changed=JSON.stringify(workshopFeed?.guides)!==JSON.stringify(feed.guides);
+        workshopFeed=feed;workshopReceivedAt=Date.now();workshopFailed=false;guides=[...authoredGuides,...feed.guides];
+        if(pendingGuideId){selected=guides.find(guide=>guide.id===pendingGuideId)||selected;pendingGuideId=null;}
+        if(changed)render(true);else{renderCoverage();updatePatchLabel();}
+      }catch{workshopFailed=true;renderCoverage();if(!workshopFeed&&sourceFilter==='workshop')renderDetail();}
+    };
+    content.querySelector('#build-search').addEventListener('input',event=>{query=event.target.value;pendingGuideId=null;render();});
+    content.querySelector('#build-position').addEventListener('change',event=>{position=event.target.value;pendingGuideId=null;render();});
+    content.querySelector('#build-source').addEventListener('change',event=>{sourceFilter=event.target.value;pendingGuideId=null;render();});
     render();
+    void initialWorkshop.then(receiveWorkshop);
     refreshPatch=async()=>{
       if(disposed||refreshing||document.hidden)return;
       clearTimeout(timer);refreshing=true;
-      try {const [feed,review]=await Promise.all([getJSON('/api/explore/updates',controller.signal),getJSON('/api/explore/build-reviews',controller.signal).catch(()=>null)]);updatesResult={data:feed};reviews=review;}
+      try {const [feed,review,workshop]=await Promise.all([getJSON('/api/explore/updates',controller.signal).catch(()=>null),getJSON('/api/explore/build-reviews',controller.signal).catch(()=>null),getJSON('/api/explore/workshop-builds',controller.signal).then(data=>({data})).catch(()=>({error:true}))]);updatesResult=feed?{data:feed}:{error:true};reviews=review;receiveWorkshop(workshop);}
       catch {updatesResult={error:true};reviews=null;}
       finally {
         refreshing=false;
