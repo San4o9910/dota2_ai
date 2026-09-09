@@ -17,6 +17,7 @@ const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narm
 const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
 const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
 for(const filename of ['explore.js','practice.js','builds.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
+files.set('/assets/dota/items/hurricane_pike.png',['dota/items/hurricane_pike.png','image/png']);
 const server=createServer(async(request,response)=>{
   const file=files.get(new URL(request.url,'http://localhost').pathname);
   if(!file){response.writeHead(404).end();return;}
@@ -29,6 +30,7 @@ const screenshotDir=process.env.NARMA_EXPLORE_SCREENSHOTS;
 if(screenshotDir)await mkdir(screenshotDir,{recursive:true});
 const scenarios=JSON.parse(await readFile(path.join(root,'practice-scenarios.json'),'utf8')).scenarios;
 const buildCatalog=JSON.parse(await readFile(path.join(root,'build-guides.json'),'utf8'));
+const itemIcon=id=>id==='hurricane_pike'?'/assets/dota/items/hurricane_pike.png':`https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${id}.png`;
 assert.equal(buildCatalog.schema_version,'narma.build-guides.v1');
 assert.ok(buildCatalog.guides.length>=2,'Build selection uses the actual authored library.');
 for(const guide of buildCatalog.guides){
@@ -156,7 +158,7 @@ try {
     assert.equal(await selectedGuide.locator('h2').textContent(),initialGuide.hero_name);
     const slots=selectedGuide.locator('[data-build-slot]');
     assert.equal(await slots.count(),6);
-    assert.deepEqual(await slots.locator('img').evaluateAll(images=>images.map(img=>img.getAttribute('src'))),initialGuide.final_items.map(item=>`https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${item.id}.png`));
+    assert.deepEqual(await slots.locator('img').evaluateAll(images=>images.map(img=>img.getAttribute('src'))),initialGuide.final_items.map(item=>itemIcon(item.id)));
     assert.equal(await selectedGuide.locator('#build-slot-detail h4').textContent(),initialGuide.final_items[0].name);
     await slots.nth(5).focus();await slots.nth(5).press('Enter');
     assert.equal(await selectedGuide.locator('[data-build-slot][aria-pressed="true"]').count(),1);
@@ -179,7 +181,7 @@ try {
     const expectedItems=[...initialGuide.starting_items,...initialGuide.core_items,...initialGuide.situational_items];
     assert.ok(expectedItems.length>0);
     assert.deepEqual(await selectedGuide.locator('.build-item h4').allTextContents(),expectedItems.map(item=>item.name));
-    assert.deepEqual(await selectedGuide.locator('.build-item img').evaluateAll(images=>images.map(image=>image.getAttribute('src'))),expectedItems.map(item=>`https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${item.id}.png`),'Item cards use their actual Dota inventory icon identifiers.');
+    assert.deepEqual(await selectedGuide.locator('.build-item img').evaluateAll(images=>images.map(image=>image.getAttribute('src'))),expectedItems.map(item=>itemIcon(item.id)),'Item cards use their actual Dota inventory icon identifiers.');
     assert.equal((await selectedGuide.textContent()).includes(initialGuide.next_game_check),true,'A build ends with an action the player can check in their next match.');
     await selectedGuide.locator('.build-sources summary').click();
     const sourceLinks=await selectedGuide.locator('.build-sources a').evaluateAll(links=>links.map(link=>({href:link.href,rel:link.rel,target:link.target})));
@@ -198,6 +200,13 @@ try {
     await page.locator(`#build-list [data-guide="${otherGuide.id}"]`).click();
     assert.equal(await page.locator('#build-detail .build-guide').count(),1);
     assert.equal(await page.locator('#build-detail .build-guide').getAttribute('data-guide-id'),otherGuide.id,'Choosing another build replaces the details instead of stacking all guides.');
+    const pikeGuide=buildCatalog.guides.find(guide=>guide.final_items.some(item=>item.id==='hurricane_pike'));
+    await page.locator(`#build-list [data-guide="${pikeGuide.id}"]`).click();
+    await page.getByRole('button',{name:/^Слот [1-6]: Hurricane Pike$/}).click();
+    const pikeImage=page.locator('.build-inventory img[src="/assets/dota/items/hurricane_pike.png"]');
+    await pikeImage.waitFor({state:'visible'});
+    await page.waitForFunction(()=>{const img=document.querySelector('.build-inventory img[src="/assets/dota/items/hurricane_pike.png"]');return img?.complete&&img.naturalWidth>0;});
+    assert.equal(await page.locator('#build-slot-detail h4').textContent(),'Hurricane Pike','The bundled original loads without an external CDN request.');
 
     await open('/learn');
     assert.equal(await page.locator('[data-stage]').count(),6);

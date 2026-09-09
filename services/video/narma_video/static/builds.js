@@ -21,7 +21,12 @@ const sourceHosts = new Set(['www.dota2.com','dota2.com','store.steampowered.com
 function sourceURL(value) {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.port && sourceHosts.has(url.hostname) ? url.href : ''; } catch { return ''; }
 }
-function asset(kind,id) { return /^[a-z0-9_]{1,80}$/.test(id||'') ? `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/${kind}/${id}.png` : ''; }
+function asset(kind,id) {
+  if(!/^[a-z0-9_]{1,80}$/.test(id||''))return '';
+  // Keep this verified original on our origin after repeated CDN image failures.
+  if(kind==='items'&&id==='hurricane_pike')return '/assets/dota/items/hurricane_pike.png';
+  return `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/${kind}/${id}.png`;
+}
 function picture(kind,id,name,cls='') { const src=asset(kind,id);return src?`<img src="${src}" alt="" class="${cls}" width="88" height="64" loading="lazy" decoding="async">`:''; }
 function sources(rows) {return (rows||[]).filter(row=>sourceURL(row.url)).map(row=>`<a href="${esc(sourceURL(row.url))}" target="_blank" rel="noopener noreferrer">${esc(row.title)} ↗</a>`).join('');}
 function list(rows) {return `<ul>${(Array.isArray(rows)?rows:rows?[rows]:[]).map(row=>`<li>${esc(row)}</li>`).join('')}</ul>`;}

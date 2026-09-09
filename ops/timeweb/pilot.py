@@ -268,7 +268,8 @@ def ensure_https(ssh,release,hostname,host):
     for path,signature in (('/',b'NARMA VISION'),('/replays',b'/assets/portal.js'),
                            ('/my-learning',b'pool-learning'),('/assets/portal.js',b'/api/session'),
                            ('/assets/portal.css',b'--surface'),('/practice',b'/assets/explore.js'),
-                           ('/builds',b'/assets/builds.css'),('/assets/builds.js',b'build-inventory-grid')):
+                           ('/builds',b'/assets/builds.css'),('/assets/builds.js',b'build-inventory-grid'),
+                           ('/assets/dota/items/hurricane_pike.png',b'\x89PNG\r\n\x1a\n')):
         with opener.open(portal_origin+path,timeout=20) as response:
             content=response.read(256*1024)
             if signature not in content or b'opendota' in content.lower():
