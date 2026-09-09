@@ -12,8 +12,10 @@ import check_stratz as check
 def inspect(token):
     # All selected fields and enum values were confirmed through authorized introspection.
     query = '''query NarmaSchemaInspection {
-      constants { gameVersions { id name asOfDateTime } }
-      heroStats { itemFullPurchase(heroId:47,positionIds:[POSITION_2],bracketBasicIds:[HERALD_GUARDIAN]) {
+      constants { gameVersions { id name asOfDateTime }
+        items(language:ENGLISH) { id name displayName shortName stat { cost isRecipe isPurchasable } components { componentId } }
+      }
+      heroStats { itemFullPurchase(heroId:47,positionIds:[POSITION_2],bracketBasicIds:[HERALD_GUARDIAN],minTime:0,maxTime:75,matchLimit:1) {
         heroId week bracketBasicIds position itemId instance time matchCount winCount winsAverage
       } }
       live { matches(request:{isCompleted:true,isLeague:false,take:5,skip:0,orderBy:MATCH_ID}) {
@@ -24,6 +26,7 @@ def inspect(token):
       itemStatSchema: __type(name:"ItemStatType") { fields { name type { %s } } }
       itemLanguageSchema: __type(name:"ItemLanguageType") { fields { name type { %s } } }
       itemComponentSchema: __type(name:"ItemComponentType") { fields { name type { %s } } }
+      purchaseSchema: __type(name:"HeroItemPurchaseType") { fields { name description } }
     }''' % (check.TYPE_REF, check.TYPE_REF, check.TYPE_REF, check.TYPE_REF)
     data = check.graphql(token, query)
     rows = data["heroStats"]["itemFullPurchase"] or []
@@ -53,6 +56,8 @@ def inspect(token):
             "item_language_fields":check.fields(data["itemLanguageSchema"]["fields"]),
             "item_component_fields":check.fields(data["itemComponentSchema"]["fields"]),
             "purchase_documentation":[r for r in data["statsSchema"]["fields"] if r["name"] in {"stats","itemFullPurchase"}],
+            "purchase_field_documentation":data["purchaseSchema"]["fields"],
+            "item_examples":[r for r in data["constants"]["items"] if r["id"] in {63,75,108,236}],
             "provider_requests":1, "private_account_requests":0}
 
 
