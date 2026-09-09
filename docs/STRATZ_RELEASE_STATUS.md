@@ -44,9 +44,11 @@ guarantee an exact per-match patch: see `STRATZ_SETUP.md` for these limitations.
 
 Local: 8 purchase/selection tests, 64 ops tests, and the public mobile/desktop
 regression suite passed. CI public/private UI gates and image imports passed.
-The new API/cache/transport tests have **not** completed in the native suite:
-the source gate stopped the workflow before that stage. This follow-up's
-permission-stop changes are syntax checked, but not claimed as runtime verified.
+A separate offline workflow `34342762182` passed **19** purchase/selection,
+API/cache/transport and permission-stop tests, plus **64** ops tests. It used no
+provider credentials or calls. The full native PostgreSQL/API deployment suite
+has not completed for this candidate because the actual source gate stopped
+the release before that stage. The live STRATZ integration remains unverified.
 
 ## Resume after provider access is resolved
 

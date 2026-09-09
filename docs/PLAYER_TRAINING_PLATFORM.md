@@ -82,3 +82,12 @@ Basic news and discovery can remain publicly useful. A future subscription
 should add recurring personal review, longitudinal practice and changes relevant
 to the subscriber's hero pool, with explicit limits. No payment page, paid plan
 or automatic rank-growth claim is enabled by this release.
+
+## STRATZ candidate status (2026-09-09)
+
+The statistics integration code has been prepared, with successful initial
+authorized source reads. Its production-adapter checks subsequently returned
+HTTP 403 and the rollout was blocked before deployment. See
+[STRATZ_RELEASE_STATUS.md](STRATZ_RELEASE_STATUS.md) for exact receipts, offline
+checks and the remaining cohort-validation question. Do not describe this
+candidate as an active source or a joint-build win-rate ranking.
