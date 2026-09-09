@@ -413,9 +413,16 @@ try {
       assert.equal(await selectedExplanation.textContent(),chosen.explanation,'The explanation of the selected action stays visible.');
       assert.equal(await selectedExplanation.isVisible(),true);
       assert.equal(await alternatives.getAttribute('open'),null,'Other explanations start collapsed to keep the decision review compact.');
-      for(const choice of choices.filter(choice=>choice.id!==choiceId))assert.equal(await alternatives.getByText(choice.explanation,{exact:true}).isVisible(),false);
+      const otherChoices=choices.filter(choice=>choice.id!==choiceId);
+      const rows=alternatives.locator('.practice-alternative');
+      assert.equal(await rows.count(),otherChoices.length);
+      for(const [index,choice] of otherChoices.entries()){
+        assert.equal(await rows.nth(index).locator('p').textContent(),choice.explanation);
+        assert.equal(await rows.nth(index).isVisible(),false);
+      }
       const summary=alternatives.locator('summary');await summary.focus();await summary.press('Enter');
-      for(const choice of choices)assert.equal(await practice.getByText(choice.explanation,{exact:true}).isVisible(),true,'Every alternative remains available with its own explanation.');
+      for(let index=0;index<otherChoices.length;index++)assert.equal(await rows.nth(index).isVisible(),true,'Every alternative remains available with its own explanation.');
+      assert.equal(await selectedExplanation.isVisible(),true);
       await summary.focus();await summary.press('Enter');
       assert.equal(await alternatives.getAttribute('open'),null,'Screenshots and continued practice use the compact default review.');
     }
