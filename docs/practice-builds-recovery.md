@@ -63,3 +63,15 @@ Required integration checks before release:
    selection, six slots/partial sources, deep links and asynchronous failures.
 4. Serve the new /assets/workshop-builds.js in the UI fixture.
 5. Integrate the independent Workshop backend/API and real source snapshot.
+
+## Follow-up: unknown items in future patches
+The Workshop refresh adapter currently uses its bundled item-name catalog.
+New or unavailable ids in an author's updated guide must be retained as
+unknown_item_ids. The backend owner is adding this field and assigning
+review_due when nonempty; known purchases remain available.
+
+The frontend independently refuses a current_patch badge for such a guide,
+excludes it from the current-patch coverage count, and tells the player that
+the item list is incomplete. Stronger stale, patch_changed and unknown states
+are retained with an additional completeness message. IDs are validated and
+not shown as guessed item names. Native regression checks cover this behavior.

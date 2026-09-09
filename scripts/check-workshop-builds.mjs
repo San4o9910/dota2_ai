@@ -42,4 +42,23 @@ assert.equal(workshopSourceURL('javascript:alert(1)', '12345'), '');
 assert.equal(workshopSourceURL('https://steamcommunity.com/sharedfiles/filedetails/?id=999', '12345'), '');
 assert.equal(workshopSourceURL('https://steamcommunity.com.evil.test/sharedfiles/filedetails/?id=12345', '12345'), '');
 assert.throws(() => validateWorkshopFeed({ ...payload, coverage: { heroes: 'all' } }));
+
+// New item ids must never disappear behind a current-patch badge. Preserve
+// known purchases, surface the incomplete source, and keep stronger stale or
+// changed-patch states instead of masking them with a generic review label.
+const incompleteGuide = { ...guide, unknown_item_ids: ['new_patch_item'] };
+const incomplete = validateWorkshopFeed({ ...payload, guides: [incompleteGuide] });
+assert.equal(incomplete.guides.length, 1);
+assert.deepEqual(incomplete.guides[0].core_items, guide.core_items);
+assert.deepEqual(incomplete.guides[0].unknown_item_ids, ['new_patch_item']);
+assert.equal(workshopFreshness(incompleteGuide, payload, now).state, 'review_due');
+assert.equal(workshopFreshness(incompleteGuide, payload, now).incompleteItems, true);
+assert.match(workshopFreshness(incompleteGuide, payload, now).text, /не полностью/);
+assert.equal(incomplete.guides.filter(row => workshopFreshness(row, payload, now).state === 'current_patch').length, 0);
+assert.equal(workshopFreshness(incompleteGuide, { ...payload, latest_patch: '7.42' }, now).state, 'patch_changed');
+assert.match(workshopFreshness(incompleteGuide, { ...payload, latest_patch: '7.42' }, now).text, /неполный список/);
+assert.equal(workshopFreshness({ ...incompleteGuide, fetched_at: '2026-09-08T11:00:00Z' }, payload, now).state, 'stale');
+assert.equal(workshopFreshness(incompleteGuide, { ...payload, latest_patch: null }, now).state, 'unknown');
+assert.equal(validateWorkshopFeed({ ...payload, guides: [{ ...guide, unknown_item_ids: ['<invalid>'] }] }).guides.length, 0);
+assert.equal(validateWorkshopFeed({ ...payload, guides: [{ ...guide, unknown_item_ids: ['new_patch_item', 'new_patch_item'] }] }).guides.length, 0);
 console.log('Workshop builds: source attribution, role filtering, partial inventories and patch freshness verified.');
