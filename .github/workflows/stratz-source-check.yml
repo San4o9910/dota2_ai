@@ -5,6 +5,7 @@ on:
     branches: [codex/replay-map-hardening-8ea829a]
     paths:
       - .github/workflows/stratz-source-check.yml
+      - scripts/inspect-stratz-builds.py
   workflow_dispatch:
 
 permissions:
@@ -34,4 +35,4 @@ jobs:
             echo 'STRATZ_API_TOKEN is not configured for this repository workflow'
             exit 1
           fi
-          python3 ops/timeweb/check_stratz.py
+          python3 scripts/inspect-stratz-builds.py
