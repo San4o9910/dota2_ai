@@ -106,6 +106,22 @@ def test_insufficient_evidence_can_return_no_patterns_without_inventing_claims()
     assert bridge.validate_review(bridge.Review.model_validate(payload), snapshot, digest)["patterns"] == []
 
 
+def test_runtime_snapshot_keeps_role_guidance_separate_and_deduplicated():
+    source = pool_fixture()
+    for index, row in enumerate(source['history']):
+        role = 4 if index == 0 else 5
+        row['position'] = row['pool_metadata']['position'] = role
+    snapshot, digest, _ = bridge.build_snapshot(source)
+    assert set(snapshot['role_contexts']) == {'4', '5'}
+    assert 'офлейнер' in snapshot['role_contexts']['4']['lane_priority'].lower()
+    assert 'керри' in snapshot['role_contexts']['5']['lane_priority'].lower()
+    assert all('role_context' not in observation for observation in snapshot['observations'])
+    assert all(context['classification'] == 'practice_guidance_not_match_evidence'
+               for context in snapshot['role_contexts'].values())
+    packet = bridge.packet_for({'id': 'synthetic', 'snapshot_sha256': digest, 'snapshot': snapshot})
+    assert 'Low support last hits or GPM do not establish an error' in packet['packet']['instructions']
+
+
 def test_metadata_dates_compare_instants_across_database_session_timezones():
     pool = pool_fixture()
     expected = bridge.build_snapshot(pool)

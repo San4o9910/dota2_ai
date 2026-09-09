@@ -127,6 +127,7 @@ with database() as c:
  assert c.execute('SHOW transaction_read_only').fetchone()['transaction_read_only']=='on'
  owners=c.execute('SELECT owner_id FROM portal_accounts ORDER BY owner_id').fetchall()
  calls_before=c.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']
+role_actions=[]
 for position in (None,1,2,3,4,5):
  catalog=get_catalog(position)
  assert catalog['schema_version']==catalog['version']=='narma.curriculum.v1'
@@ -134,6 +135,13 @@ for position in (None,1,2,3,4,5):
  cards=catalog['exercises']
  assert len(cards)==len({card['id'] for card in cards})==(10 if position is None else 12 if position in (4,5) else 11)
  assert all(not card['roles'] or position in card['roles'] for card in cards)
+ if position is None:
+  assert catalog['role_context'] is None
+ else:
+  assert catalog['role_context']['position']==position
+  assert all(card['position']==position for card in cards)
+  role_actions.append(next(card['action'] for card in cards if card['id']=='r1'))
+assert len(set(role_actions))==5
 reports=0
 matches=0
 for owner in owners:

@@ -1,3 +1,4 @@
+import './check-practice-roles.mjs';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -16,7 +17,7 @@ const {chromium}=dependency('playwright'),axe=dependency('axe-core');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
 const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
-for(const filename of ['explore.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
+for(const filename of ['explore.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
 files.set('/assets/dota/items/hurricane_pike.png',['dota/items/hurricane_pike.png','image/png']);
 const server=createServer(async(request,response)=>{
   const file=files.get(new URL(request.url,'http://localhost').pathname);
@@ -76,7 +77,7 @@ const updates={schema_version:'narma.explore.v1',source_url:'https://www.dota2.c
   {id:'qa-lookalike',title:'Поддельный адрес Valve',category:'news',url:'https://store.steampowered.com.evil.example.test/news',published_at:stamp},
 ]};
 // Exercise content comes from the actual dependency-free production catalog.
-const catalogByPosition=JSON.parse(execFileSync(process.env.NARMA_TEST_PYTHON||'python3',['-c',"import importlib.util,json,sys; spec=importlib.util.spec_from_file_location('curriculum',sys.argv[1]); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print(json.dumps([module.get_catalog(position or None) for position in range(6)],ensure_ascii=False))",path.resolve(root,'..','curriculum.py')],{encoding:'utf8'}));
+const catalogByPosition=JSON.parse(execFileSync(process.env.NARMA_TEST_PYTHON||'python3',['-c',"import json,sys; sys.path.insert(0,sys.argv[1]); from narma_video import curriculum as module; print(json.dumps([module.get_catalog(position or None) for position in range(6)],ensure_ascii=False))",path.resolve(root,'..','..')],{encoding:'utf8'}));
 const realExercises=new Map(catalogByPosition.flatMap(catalog=>catalog.exercises).map(exercise=>[exercise.id,exercise]));
 assert.equal(realExercises.size,13,'The full authored curriculum is available to the public learning test.');
 const catalog=position=>{const value=structuredClone(catalogByPosition[position||0]);value.sources.push({id:'qa-unsafe',title:'Небезопасный тестовый источник',url:'javascript:alert(1)'});for(const exercise of value.exercises)exercise.source_refs.push('qa-unsafe');return value;};
@@ -267,6 +268,34 @@ try {
     assert.equal(await page.locator('#build-slot-detail').count(),1);
     metaStale=false;
 
+    // The same hero must have different practical plans when its role changes.
+    authoredMode=true;
+    for(const [hero,roles] of [['Viper',[2,3]],['Rubick',[4,5]]]) {
+      await open(`/builds?q=${hero}&position=${roles[0]}`);
+      const inventories=[],checks=[];
+      for(const position of roles) {
+        await page.locator('#build-position').selectOption(String(position));
+        await page.locator(`#build-role-context .role-guidance[data-position="${position}"]`).waitFor();
+        const expected=buildCatalog.guides.find(g=>g.hero_name===hero&&g.position===position);
+        assert.ok(expected);
+        assert.equal(await page.locator('.build-guide').getAttribute('data-guide-id'),expected.id);
+        inventories.push(await page.locator('[data-build-slot] img').evaluateAll(images=>images.map(img=>img.getAttribute('src')).join('|')));
+        checks.push(await page.locator('.build-check > p').textContent());
+        for(const line of expected.lane_plan)assert.ok((await page.locator('.build-guide').textContent()).includes(line));
+        assert.equal(await page.locator('[data-build-slot]').count(),6);
+      }
+      assert.notEqual(inventories[0],inventories[1],'Hero role changes the actual item plan.');
+      assert.notEqual(checks[0],checks[1],'Hero role changes the next-game task.');
+    }
+    await open('/builds?q=Viper&position=5');
+    await page.locator('#build-role-context .role-guidance[data-position="5"]').waitFor();
+    assert.equal(await page.locator('.build-guide').count(),0,'Unsupported roles never silently receive a core build.');
+    assert.equal(await page.locator('[data-supported-guide="viper-offlane-pressure"]').count(),1);
+    assert.equal(await page.locator('#build-detail a[href="/learn?position=5"]').count(),1);
+    await page.locator('[data-supported-guide="viper-offlane-pressure"]').click();
+    assert.equal(await page.locator('#build-position').inputValue(),'3');
+    await accessibility('builds-role');
+
     await open('/learn');
     assert.equal(await page.locator('[data-stage]').count(),6);
     await page.locator('#learn-position').selectOption('5');
@@ -288,13 +317,15 @@ try {
     await page.reload();await page.locator('[data-exercise="m1"]').waitFor();
     assert.equal(await page.locator('#learn-position').inputValue(),'5');
     const renderedLessons=new Set();
-    for(const position of ['2','5']){
+    for(const position of ['1','2','3','4','5']){
       await page.locator('#learn-position').selectOption(position);
       await page.waitForFunction(()=>document.querySelector('#learning-library').getAttribute('aria-busy')==='false');
+      assert.equal(await page.locator('#learning-library .role-guidance').getAttribute('data-position'),position);
+      assert.equal(await page.locator('#learning-library .role-guidance > p').first().textContent(),catalogByPosition[Number(position)].role_context.lane_priority);
       for(const stage of catalogByPosition[Number(position)].stages){
         await page.locator(`[data-stage="${stage.id}"]`).click();
         for(const card of await page.locator('#lesson-content [data-exercise]').all()){
-          const id=await card.getAttribute('data-exercise'),exercise=realExercises.get(id);assert.ok(exercise);
+          const id=await card.getAttribute('data-exercise'),exercise=catalogByPosition[Number(position)].exercises.find(item=>item.id===id);assert.ok(exercise);
           assert.equal(await card.locator('h3').textContent(),exercise.title);
           assert.equal(await card.locator('.lesson-question').textContent(),exercise.decision_question);
           assert.equal((await card.textContent()).includes(exercise.measurement),true,'Every authored lesson includes how to check the result.');renderedLessons.add(id);

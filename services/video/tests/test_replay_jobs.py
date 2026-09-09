@@ -270,17 +270,28 @@ def test_saved_and_archived_reports_gain_own_hero_context_without_regeneration(b
             VALUES (%s,%s,%s,5,now())""", (OWNER, job['account_id'] + 1, job['match_id']))
         before = connection.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n']
     detail = browser.get(f"/api/replays/{job['id']}").json()
-    assert detail['report'] == report
+    assert {key: value for key, value in detail['report'].items() if key != 'coaching'} == {
+        key: value for key, value in report.items() if key != 'coaching'}
+    assert detail['report']['coaching']['status'] == 'context_changed'
+    assert detail['report']['coaching']['next_game'] == []
     assert detail['hero_context']['hero'] == report['player']['hero']
     assert detail['hero_context']['position'] == 3
     assert detail['hero_context']['abilities'][0]['casts'] == 7
     assert detail['hero_context']['training_plan']
+    with database() as connection:
+        connection.execute('UPDATE hero_pool_matches SET position=5 WHERE owner_id=%s AND account_id=%s AND match_id=%s',
+                           (OWNER, job['account_id'], job['match_id']))
+    changed = browser.get(f"/api/replays/{job['id']}").json()
+    assert changed['hero_context']['position'] == 5
+    assert changed['hero_context']['role_context']['label'] == 'Полная поддержка'
+    assert changed['hero_context']['training_plan'] != detail['hero_context']['training_plan']
+    assert changed['report']['metrics'] == detail['report']['metrics']
     queue_saved_refresh(job['id'])
     archived = browser.get(f"/api/replays/{job['id']}").json()
-    assert archived['report_is_previous'] and archived['report'] == report
-    assert archived['archived_report']['report'] == report
+    assert archived['report_is_previous'] and archived['report'] == changed['report']
+    assert archived['archived_report']['report'] == changed['report']
     assert archived['hero_context'] == archived['archived_report']['hero_context']
-    assert archived['hero_context']['position'] == 3
+    assert archived['hero_context']['position'] == 5
     with database() as connection:
         assert connection.execute('SELECT count(*) AS n FROM video_provider_calls').fetchone()['n'] == before
         assert connection.execute('SELECT report FROM replay_report_history WHERE job_id=%s',

@@ -11,6 +11,8 @@ from collections import Counter
 import math
 import re
 
+from .role_context import get_role_context
+
 
 SCHEMA = "narma.hero-context.v1"
 _HERO = re.compile(r"^npc_dota_hero_[a-z0-9_]{1,80}$")
@@ -129,6 +131,7 @@ def build_hero_context(report, position=None):
     if not isinstance(hero, str) or not _HERO.fullmatch(hero):
         return None
     position = position if type(position) is int and 1 <= position <= 5 else None
+    role = get_role_context(position)
     label = _label(hero)
     abilities, events = _abilities(report, hero), _events(report)
     names = {row["name"] for row in abilities}
@@ -179,11 +182,25 @@ def build_hero_context(report, position=None):
             f"В сводке {label} есть применения {spell}. В отмеченном эпизоде проверь, была ли способность доступна, какую задачу могла решить и какие условия ей мешали. Сводка не подтверждает применение именно здесь.",
             f"В следующей игре на {label} перед похожим эпизодом проверь готовность {spell} и назови задачу, для которой хочешь её использовать.",
             "После игры найди этот эпизод и сопоставь выбранную задачу с результатом. Для сравнения используй того же героя и свою указанную позицию.", episode)
+    if role:
+        # The event remains the only observed fact. Role priorities supply a
+        # different review question, never an invented account of the lane.
+        if not focus and events:
+            add("role-decision", f"{label} · {role['label']}: задача в эпизоде",
+                role["review_question"], role["next_game_action"], role["measurement"],
+                episode or events[0])
+        else:
+            for point in focus:
+                point["advice"] += " " + role["review_question"]
+            for plan in plans:
+                plan["action"] += " " + (role["item_priority"] if plan["id"] == "hero-item-task"
+                                            else role["next_game_action"])
     if necrophos:
         limits.append("Механика Necrophos приведена как справка Valve, проверенная 7 сентября 2026 года. Она не устанавливает патч этого реплея; советы предлагают проверку эпизода, а не диагноз ошибки.")
     if not focus:
         limits.append("Для привязки героевых упражнений к эпизодам недостаточно подтверждённых событий. Повторный анализ автоматически не запускается.")
     return {"schema_version": SCHEMA, "hero": hero, "label": label, "position": position,
         "position_label": f"Позиция {position} · указана тобой" if position else "Позиция не указана",
+        "role_context": role,
         "summary": summary, "abilities": abilities, "focus": focus[:2], "training_plan": plans[:2],
         "limits": limits, "sources": [dict(_SOURCE)] if necrophos else []}

@@ -11,6 +11,8 @@ import math
 import re
 import unicodedata
 
+from .role_context import get_role_context
+
 
 CONTEXT_SCHEMA = 'narma.hero-coach-context.v1'
 ANNOTATIONS_SCHEMA = 'narma.hero-coach-annotations.v1'
@@ -32,7 +34,7 @@ _NUMBER_WORD = re.compile(
     r'hundred|thousand|million|double|triple|twice|half)\b', re.IGNORECASE,
 )
 _METRICS = {'lh10', 'nw10', 'deaths10', 'dead_pct', 'gpm'}
-_FOCUSES = {'item_plan', 'farm_checkpoint', 'safe_return'}
+_FOCUSES = {'item_plan', 'farm_checkpoint', 'safe_return', 'lane_support', 'rotation_window'}
 _REFLECTIONS = {'done', 'partial', 'not_done'}
 
 
@@ -239,6 +241,7 @@ def build_hero_coach_context(pool: Mapping, *, hero: str, position: int,
                    'unknown': len(matches) - wins - losses,
                    'winrate': round(wins * 100 / (wins + losses), 1) if wins + losses else None},
         'matches': matches, 'metric_catalog': metrics, 'patterns': patterns,
+        'role_context': get_role_context(position),
         'limitations': sorted(set(limitations)),
     }
     encoded = _encoded(context)

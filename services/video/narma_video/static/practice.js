@@ -22,6 +22,7 @@ function validateChoices(value) {
 
 export function validatePracticeCatalog(value) {
   if (!value || value.version !== VERSION || !Array.isArray(value.scenarios) || !value.scenarios.length || value.scenarios.length > 100) throw new Error('Invalid practice catalog');
+  if (value.positionGoals !== undefined && (!value.positionGoals || typeof value.positionGoals !== 'object' || [1, 2, 3, 4, 5].some(position => !bounded(value.positionGoals[position], 700)))) throw new Error('Invalid position goals');
   const ids = new Set();
   for (const scenario of value.scenarios) {
     if (!scenario || !ident(scenario.id) || ids.has(scenario.id) || !Object.hasOwn(TOPICS, scenario.topic) || scenario.topic === 'all') throw new Error('Invalid practice scenario');
@@ -55,6 +56,12 @@ export function createPracticeSession(scenarios, filters = {}, random = Math.ran
     const draw = random();
     const j = Math.floor(Math.max(0, Math.min(0.999999999, Number.isFinite(draw) ? draw : 0)) * (i + 1));
     [questions[i], questions[j]] = [questions[j], questions[i]];
+  }
+  // Keep the shuffled order within each group, but put the selected role's
+  // authored decisions before shared fundamentals. Never broaden the filter
+  // to another position when a topic has too few questions.
+  if (String(filters.position) !== 'all' && Object.hasOwn(POSITIONS, filters.position)) {
+    questions.sort((one, two) => one.positions.length - two.positions.length);
   }
   return { questions: questions.slice(0, 5), index: 0, answers: [], variations: {}, status: 'answering' };
 }
@@ -152,6 +159,7 @@ export function mountPractice(container) {
   const aborter = new AbortController();
   let disposed = false;
   let catalog = [];
+  let positionGoals = {};
   let session = null;
   let sessionId = '';
   let recorded = false;
@@ -187,6 +195,7 @@ export function mountPractice(container) {
   }
   function resetFilters() {
     filters = { ...filters, topic: 'all', position: 'all' };
+    syncFilterUrl();
     renderSetup();
     container.querySelector('[data-practice-start]')?.focus();
   }
@@ -202,9 +211,17 @@ export function mountPractice(container) {
       option.selected = value === filters[key];
       select.append(option);
     }
-    select.addEventListener('change', () => { filters[key] = select.value; updateAvailability(); });
+    select.addEventListener('change', () => { filters[key] = select.value; syncFilterUrl(); updateAvailability(); });
     wrapper.append(select);
     return wrapper;
+  }
+  function syncFilterUrl() {
+    const url = new URL(globalThis.location.href);
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === 'all' || (key === 'difficulty' && value === 'foundations')) url.searchParams.delete(key);
+      else url.searchParams.set(key, value);
+    }
+    globalThis.history.replaceState(globalThis.history.state, '', url);
   }
   function updateAvailability() {
     const count = filterPracticeScenarios(catalog, filters).length;
@@ -219,6 +236,8 @@ export function mountPractice(container) {
     container.querySelector('[data-practice-reset-filters]').hidden = filters.topic === 'all' && filters.position === 'all';
     const levelNote = container.querySelector('[data-practice-level-note]');
     if (levelNote) levelNote.textContent = LEVEL_DESCRIPTIONS[filters.difficulty];
+    const roleNote = container.querySelector('[data-practice-role-note]');
+    if (roleNote) roleNote.textContent = positionGoals[filters.position] || 'Выбери свою позицию: изменятся приоритеты на линии, перемещения и первые задания серии. Общие принципы остаются там, где они применимы к выбранной роли.';
   }
   function historyPanel() {
     const box = element('aside', 'practice-history');
@@ -265,6 +284,10 @@ export function mountPractice(container) {
     const filterRow = element('div', 'practice-filters');
     filterRow.append(selectFilter('Уровень заданий', 'difficulty', DIFFICULTIES), selectFilter('Тема', 'topic', TOPICS), selectFilter('Твоя позиция', 'position', POSITIONS));
     card.append(filterRow);
+    const roleNote = element('p', 'practice-level-note');
+    roleNote.dataset.practiceRoleNote = '';
+    roleNote.setAttribute('role', 'status');
+    card.append(roleNote);
     const levelNote = element('p', 'practice-level-note');
     levelNote.dataset.practiceLevelNote = '';
     levelNote.setAttribute('role', 'status');
@@ -306,7 +329,7 @@ export function mountPractice(container) {
     const identity = element('div', 'practice-identity');
     if (scenario.hero) identity.append(artwork(scenario.hero, 'hero'));
     const labels = element('div');
-    labels.append(caption(`${DIFFICULTIES[scenario.difficulty]} · ${TOPICS[scenario.topic]}`));
+    labels.append(caption(`${DIFFICULTIES[scenario.difficulty]} · ${TOPICS[scenario.topic]} · ${filters.position === 'all' ? scenario.positions.map(position => POSITIONS[position]).join(', ') : POSITIONS[filters.position]}`));
     if (scenario.hero) labels.append(element('p', 'practice-hero-name', scenario.hero.name));
     identity.append(labels);
     if (scenario.item) {
@@ -492,7 +515,9 @@ export function mountPractice(container) {
       if (!response.ok) throw new Error('Catalog unavailable');
       const raw = await response.text();
       if (raw.length > 200000) throw new Error('Catalog too large');
-      catalog = validatePracticeCatalog(JSON.parse(raw));
+      const payload = JSON.parse(raw);
+      catalog = validatePracticeCatalog(payload);
+      positionGoals = payload.positionGoals || {};
       if (!disposed && attempt === loadAttempt) renderSetup();
     } catch {
       if (disposed || attempt !== loadAttempt) return;

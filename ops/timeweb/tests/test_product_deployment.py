@@ -35,7 +35,7 @@ def snapshot():
 
 class ProductDeploymentTest(unittest.TestCase):
     def test_authored_review_gate_accepts_complete_catalog_with_honest_stale_states(self):
-        guides = [{'id': 'guide-' + str(index)} for index in range(12)]
+        guides = [{'id': 'guide-' + str(index)} for index in range(17)]
         for state in ('reviewed', 'review_due', 'patch_changed', 'unknown'):
             reviews = {'schema_version': 'narma.build-reviews.v1', 'guides': {
                 guide['id']: {'state': state, 'adaptations': []} for guide in guides}}
@@ -43,7 +43,7 @@ class ProductDeploymentTest(unittest.TestCase):
                 pilot.validate_build_reviews(reviews, guides)
 
     def test_authored_review_gate_rejects_wrong_schema_or_incomplete_catalog(self):
-        guides = [{'id': 'guide-' + str(index)} for index in range(12)]
+        guides = [{'id': 'guide-' + str(index)} for index in range(17)]
         reviews = {'schema_version': 'narma.build-reviews.v1', 'guides': {
             guide['id']: {'state': 'unknown', 'adaptations': []} for guide in guides}}
         wrong_schema = {**reviews, 'schema_version': 'unrecognized'}
@@ -61,9 +61,8 @@ class ProductDeploymentTest(unittest.TestCase):
         # Execute the shipped probe against the actual catalog, so adding a
         # role-specific exercise cannot silently break the live deploy gate.
         path = Path(__file__).resolve().parents[3] / 'services/video/narma_video/curriculum.py'
-        spec = importlib.util.spec_from_file_location('narma_video.curriculum', path)
-        curriculum = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(curriculum)
+        sys.path.insert(0, str(path.parents[1]))
+        from narma_video import curriculum
         db, learning = ModuleType('narma_video.db'), ModuleType('narma_video.learning')
         learning.get_learning = Mock()
         learning.get_report_learning = Mock()

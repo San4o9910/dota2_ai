@@ -1,3 +1,4 @@
+import { roleGuidance } from './role-guidance.js';
 const $ = id => document.getElementById(id);
 const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set(),chatgpt:null,chatgptRequest:0,chatgptController:null,chatgptTimer:null,chatgptClock:null};
 if (state.token) history.replaceState(null, '', location.pathname);
@@ -364,6 +365,7 @@ function renderHeroContext() {
   const heading=node('h4',`Разбор за ${context.label??heroName(context.hero)}`); heading.id='hero-context-heading';
   target.append(heading,node('p',context.position_label??positionName(context.position),'hero-context-role'));
   if(context.summary) target.append(node('p',context.summary,'hero-context-summary'));
+  const guidance=roleGuidance(context.role_context);if(guidance)target.append(guidance);
   if(context.abilities?.length) {
     target.append(node('p','Применения способностей из реплея','eyebrow'));
     const abilities=node('ul',undefined,'hero-abilities');
@@ -489,7 +491,7 @@ function renderDetail() {
   if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points); }
   else {
     const needsConnection=coach?.failure_code==='CHATGPT_NOT_CONNECTED';
-    $('coaching-summary').textContent=coach?.status==='context_changed'?'Позиция изменилась. Упражнение выше учитывает текущую позицию; прежний тренерский комментарий к ней не применяется.':needsConnection?'Статистика матча готова. Подключи ChatGPT в аккаунте, чтобы использовать тренера Narma.':'Тренерский комментарий временно недоступен. Статистика и эпизоды из реплея доступны.';
+    $('coaching-summary').textContent=coach?.status==='context_changed'?'Контекст разбора обновлён. Упражнение выше учитывает текущую позицию; прежний тренерский комментарий больше не применяется.':needsConnection?'Статистика матча готова. Подключи ChatGPT в аккаунте, чтобы использовать тренера Narma.':'Тренерский комментарий временно недоступен. Статистика и эпизоды из реплея доступны.';
     $('coaching').replaceChildren();
     if(needsConnection){
       const connect=node('a','Подключить ChatGPT','secondary coaching-connect');connect.href=tabPaths.account;
@@ -515,7 +517,18 @@ setInterval(()=>{ if(!state.user||document.hidden||state.busy) return; void refr
 void session().catch(error=>{ $('loading').textContent='Не удалось открыть кабинет.'; notice(error.message); });
 
 // Long-term observations use only saved reports for the authenticated player.
-const poolFocusLabels={item_plan:'План на ключевой предмет',farm_checkpoint:'Фарм на 10-й минуте',safe_return:'Возвращение после смерти'};
+const poolFocusLabels={item_plan:'План на ключевой предмет',farm_checkpoint:'Фарм на 10-й минуте',safe_return:'Возвращение после смерти',lane_support:'Помощь союзнику на линии',rotation_window:'Окно для перемещения'};
+function poolFocusOptions(position,current) {
+  const options={
+    1:{farm_checkpoint:'Доступ к добиваниям и безопасному фарму',item_plan:'Предмет для фарма, защиты или урона',safe_return:'Безопасная задача после возвращения'},
+    2:{farm_checkpoint:'Ресурсы линии и цена ухода с мида',rotation_window:'Волна, руна и выход на другую линию',item_plan:'Предмет для реализации темпа',safe_return:'Новый маршрут после возвращения'},
+    3:{farm_checkpoint:'Рабочий предмет и давление на керри',item_plan:'Вход, контроль или командная защита',rotation_window:'Давление с поддержкой команды',safe_return:'Возвращение к доступной команде задаче'},
+    4:{lane_support:'Условия для игры офлейнера',rotation_window:'Безопасный уход к руне или на ганг',item_plan:'Контроль, мобильность или спасение',safe_return:'Полезная помощь после возвращения'},
+    5:{lane_support:'Безопасный фарм керри и отвод по волне',rotation_window:'Помощь миду без потери линии керри',item_plan:'Спасение союзника и нужные расходники',safe_return:'Защита и обзор после возвращения'},
+  }[position]??{item_plan:poolFocusLabels.item_plan,safe_return:poolFocusLabels.safe_return};
+  if(current&&!Object.hasOwn(options,current))options[current]=`${poolFocusLabels[current]??'Сохранённый фокус'} · выбран ранее`;
+  return options;
+}
 const poolReflectionLabels={done:'Выполнил',partial:'Частично',not_done:'Не выполнил'};
 const positionLabels={1:'1 · Керри',2:'2 · Мидер',3:'3 · Офлейнер',4:'4 · Поддержка',5:'5 · Полная поддержка'};
 const poolMetricLabels={deaths_per_30:'Смерти на 30 минут',gpm:'Золото в минуту',xpm:'Опыт в минуту',last_hits_10:'Добивания к 10-й минуте',net_worth_10:'Ценность героя на 10-й минуте',item_delay_seconds:'До первого применения предмета, сек.'};
@@ -545,7 +558,13 @@ async function loadPool() {
 }
 async function poolMutation(button,path,method,body,success) {
   const focusId=button.id, focusLabel=button.getAttribute('aria-label'); button.disabled=true;
-  try { await api(path,method,body); await loadPool(); $('pool-status').textContent=success;
+  try { await api(path,method,body); await loadPool();
+    if(body&&Object.hasOwn(body,'position')) {
+      state.reportLearning=null;state.reportExercise=null;
+      await loadLearning({preserveView:true});
+      if(state.selected&&path.endsWith(`/${encodeURIComponent(state.selected)}`))await openReplay(state.selected);
+    }
+    $('pool-status').textContent=success;
     const replacement=focusId?$(focusId):focusLabel?Array.from($('hero-pool').querySelectorAll('button[aria-label]')).find(item=>item.getAttribute('aria-label')===focusLabel):null;
     (replacement??$('pool-refresh')).focus({preventScroll:true});
   }
@@ -571,6 +590,8 @@ function renderPool() {
   if(summary.analysis_dated_matches) caveats.push(`У ${num(summary.analysis_dated_matches)} матчей нет даты игры: они показаны по дате разбора.`);
   $('pool-limitations').replaceChildren(...(data.limitations??[]).filter(limit=>typeof limit==='string').map(limit=>node('li',limit)));
   $('pool-coverage').textContent=caveats.join(' ');
+  $('pool-role-guidance')?.remove();
+  const guidance=roleGuidance(data.role_context);if(guidance){guidance.id='pool-role-guidance';$('pool-coverage').after(guidance);}
   $('pool-content').hidden=false;
   const empty=!summary.matches; $('pool-empty').hidden=!empty; $('pool-data').hidden=empty;
   const filtered=!!($('pool-hero').value||$('pool-position').value||$('pool-favorites-only').checked||$('pool-period').value!=='all');
@@ -716,7 +737,7 @@ function renderPoolJournal(row,match) {
   const focus=node('select',undefined,'pool-focus'), reflection=node('select',undefined,'pool-reflection');
   focus.id=`pool-focus-${match.job_id}`; reflection.id=`pool-reflection-${match.job_id}`;
   focus.append(new Option('Фокус не выбран','')); reflection.append(new Option('Ещё не проверил',''));
-  for(const [value,label] of Object.entries(poolFocusLabels)) focus.append(new Option(label,value));
+  for(const [value,label] of Object.entries(poolFocusOptions(match.position,draft.focus))) focus.append(new Option(label,value));
   for(const [value,label] of Object.entries(poolReflectionLabels)) reflection.append(new Option(label,value));
   focus.value=draft.focus??''; reflection.value=draft.reflection??'';
   for(const [text,control] of [[`Мой фокус в матче ${match.match_id}`,focus],[`После игры ${match.match_id}: получилось?`,reflection]]) {const field=node('div'),label=node('label',text);label.htmlFor=control.id;field.append(label,control);fields.append(field);}
@@ -849,8 +870,9 @@ function renderReportLearning() {
   if(state.showArchived||state.detail?.report_is_previous){target.append(node('p','Для практики открой текущий разбор: упражнение привязывается к его событиям.','help'));return;}
   const data=state.reportLearning;if(!data){target.append(node('p','Подбираем упражнение по сохранённому разбору…','help'));return;}
   const role=node('div',undefined,'learning-role'),label=node('label','Моя позиция в этом матче'),select=node('select');select.id='learning-report-position';label.htmlFor=select.id;select.append(new Option('Подтверди позицию',''));for(const [value,text]of Object.entries(positionLabels))select.append(new Option(text,value));select.value=data.position??'';
-  select.addEventListener('change',async()=>{select.disabled=true;state.reportLearningRequest++;const status=learningStatus('Сохраняем позицию…');role.append(status);try{await api(`/api/hero-pool/matches/${encodeURIComponent(data.job_id)}`,'PUT',{position:select.value?Number(select.value):null});state.reportLearning=null;state.reportExercise=null;await openReplay(state.selected);if(state.pool)await loadPool();}catch(error){status.textContent=error.message;select.disabled=false;}});
+  select.addEventListener('change',async()=>{select.disabled=true;state.reportLearningRequest++;const status=learningStatus('Сохраняем позицию…');role.append(status);try{await api(`/api/hero-pool/matches/${encodeURIComponent(data.job_id)}`,'PUT',{position:select.value?Number(select.value):null});state.reportLearning=null;state.reportExercise=null;await openReplay(state.selected);await loadLearning({preserveView:true});if(state.pool)await loadPool();}catch(error){status.textContent=error.message;select.disabled=false;}});
   role.append(label,select,node('p',data.position_required?'Позиция не определяется по имени героя. Подтверди, какую работу ты выполнял.':'Позиция указана тобой. Упражнения учитывают героя и эту позицию.','help'));target.append(role);
+  const guidance=roleGuidance(data.role_context??data.catalog?.role_context);if(guidance)target.append(guidance);
   const exercises=data.catalog?.exercises??[],active=(data.plans??[]).find(validLearningPlan);
   let exercise=exercises.find(item=>item.id===state.reportExercise)??exercises.find(item=>item.id===active?.exercise_id)??exercises.find(item=>item.id===data.suggestions?.[0]?.exercise_id)??exercises[0];
   if(!exercise){target.append(node('p','Выбери позицию, чтобы открыть подходящее упражнение.','help'));return;}
@@ -864,6 +886,7 @@ function renderLearning() {
   const target=$('pool-learning'),data=state.learning;target.replaceChildren();if(!data)return;
   const stages=data.catalog?.stages??[],exercises=data.catalog?.exercises??[],plans=data.plans??[];
   const hero=$('learning-hero')?.value??'',position=Number($('learning-position')?.value)||null,scopeReady=!!hero&&!!position;
+  const guidance=roleGuidance(data.role_context??data.catalog?.role_context);if(guidance)target.append(guidance);
   const current=scopeReady?plans.find(plan=>validLearningPlan(plan)&&plan.hero===hero&&plan.position===position):null;
   const preferred=exercises.find(item=>item.id===current?.exercise_id),firstAvailable=stages.find(stage=>exercises.some(exercise=>exercise.stage_id===stage.id));if(!stages.some(stage=>stage.id===state.learningStage))state.learningStage=preferred?.stage_id??firstAvailable?.id??stages[0]?.id;
   const rail=node('div',undefined,'learning-stages');rail.setAttribute('role','group');rail.setAttribute('aria-label','Ступени обучения');

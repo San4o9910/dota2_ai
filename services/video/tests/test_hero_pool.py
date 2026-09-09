@@ -342,3 +342,22 @@ def test_progress_upgrade_preserves_already_deployed_notes(browser):
         assert connection.execute("SELECT * FROM hero_pool_match_notes").fetchone() == before
         assert connection.execute("SELECT position FROM hero_pool_matches").fetchone()["position"] == 4
         connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(schema))
+
+
+def test_support_focus_roundtrip_keeps_role_scope_and_replay_facts(browser):
+    job = seed()
+    for position, focus, partner in ((4, "rotation_window", "офлейнер"), (5, "lane_support", "керри")):
+        response = browser.put(f"/api/hero-pool/matches/{job}", json={
+            "position": position, "focus": focus, "reflection": "partial"})
+        assert response.status_code == 200
+        payload = browser.get(f"/api/hero-pool?position={position}").json()
+        assert payload['role_context']['position'] == position
+        assert partner in payload['role_context']['lane_priority'].lower()
+        assert len(payload['history']) == 1
+        assert payload['history'][0]['focus'] == focus
+        assert payload['history'][0]['reflection'] == 'partial'
+        assert payload['summary']['matches'] == 1
+    assert browser.get('/api/hero-pool?position=4').json()['summary']['matches'] == 0
+    with database() as connection:
+        assert connection.execute('SELECT result_payload FROM replay_jobs WHERE id=%s',
+                                  (job,)).fetchone()['result_payload'] == report()

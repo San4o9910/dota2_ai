@@ -1,5 +1,6 @@
 import {createBuildMeta,itemEvidence} from './build-meta.js';
 import {adaptationOptions,applyAdaptation} from './build-adaptations.js';
+import {roleGuidance} from './role-guidance.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const positions = {1:'Керри',2:'Мидер',3:'Офлейнер',4:'Поддержка',5:'Полная поддержка'};
 const mountedBuilds = new WeakMap();
@@ -77,8 +78,26 @@ export async function mountBuilds(root) {
     const selectedSlots=new Map();
     const selectedAdaptations=new Map();
     if(selected&&adaptationOptions(selected).some(row=>row.id===params.get('variant')))selectedAdaptations.set(selected.id,params.get('variant'));
-    content.innerHTML=`<div class="build-toolbar"><div class="field"><label for="build-search">Поиск героя или руководства</label><input type="search" id="build-search" maxlength="80" placeholder="Например, Viper" value="${esc(query)}"></div><div class="field"><label for="build-position">Позиция</label><select id="build-position"><option value="">Все позиции</option>${Object.entries(positions).map(([id,label])=>`<option value="${id}"${position===id?' selected':''}>${id} · ${label}</option>`).join('')}</select></div><p class="build-editorial-note">Руководства Narma: условия выбора и действия в игре. Статистический рейтинг героев здесь не рассчитывается.</p></div><div class="build-layout"><aside class="build-picker" aria-label="Выбор руководства"><p class="build-count" id="build-count" role="status" aria-live="polite"></p><div id="build-list"></div></aside><section id="build-detail" aria-label="Выбранное руководство"></section></div><aside class="build-meta"><div><p class="eyebrow">Проверяй изменения перед игрой</p><h2>Мета зависит от патча и уровня матчей</h2><p>Сначала проверь, что изменилось у героя, затем сравни его задачи со своим пулом. Популярная сборка не отменяет условия конкретного матча.</p></div><div class="build-meta-links"><a class="button subtle" href="/updates?category=patch">Изменения и новости Valve →</a><a class="text-link" href="https://www.dotabuff.com/heroes/meta" target="_blank" rel="noopener noreferrer">Статистика по рангам · Dotabuff ↗</a><a class="text-link" href="https://dota2protracker.com/meta" target="_blank" rel="noopener noreferrer">Матчи 7000+ MMR · Dota2ProTracker ↗</a></div></aside>`;
+    content.innerHTML=`<div class="build-toolbar"><div class="field"><label for="build-search">Поиск героя или руководства</label><input type="search" id="build-search" maxlength="80" placeholder="Например, Viper" value="${esc(query)}"></div><div class="field"><label for="build-position">Позиция</label><select id="build-position"><option value="">Все позиции</option>${Object.entries(positions).map(([id,label])=>`<option value="${id}"${position===id?' selected':''}>${id} · ${label}</option>`).join('')}</select></div><p class="build-editorial-note">Руководства Narma: условия выбора и действия в игре. Позиция меняет задачи на линии и план покупки. Статистический рейтинг героев здесь не рассчитывается.</p></div><div id="build-role-context" aria-live="polite"></div><div class="build-layout"><aside class="build-picker" aria-label="Выбор руководства"><p class="build-count" id="build-count" role="status" aria-live="polite"></p><div id="build-list"></div></aside><section id="build-detail" aria-label="Выбранное руководство"></section></div><aside class="build-meta"><div><p class="eyebrow">Проверяй изменения перед игрой</p><h2>Мета зависит от патча и уровня матчей</h2><p>Сначала проверь, что изменилось у героя, затем сравни его задачи со своим пулом. Популярная сборка не отменяет условия конкретного матча.</p></div><div class="build-meta-links"><a class="button subtle" href="/updates?category=patch">Изменения и новости Valve →</a><a class="text-link" href="https://www.dotabuff.com/heroes/meta" target="_blank" rel="noopener noreferrer">Статистика по рангам · Dotabuff ↗</a><a class="text-link" href="https://dota2protracker.com/meta" target="_blank" rel="noopener noreferrer">Матчи 7000+ MMR · Dota2ProTracker ↗</a></div></aside>`;
     const detail=content.querySelector('#build-detail');
+    const roleHost=content.querySelector('#build-role-context'),roleCache=new Map();
+    let roleSequence=0,displayedPosition=null;
+    const renderRole=async()=>{
+      const role=Number(position||selected?.position)||null;
+      if(role===displayedPosition&&roleHost.hasChildNodes())return;
+      const sequence=++roleSequence;displayedPosition=role;roleHost.replaceChildren();
+      if(!role)return;
+      roleHost.textContent=`Задачи позиции ${role} · ${positions[role]}…`;
+      try{
+        let context=roleCache.get(role);
+        if(!context){const payload=await getJSON(`/api/explore/learning?position=${role}`,controller.signal);context=payload.role_context;if(context?.position!==role)throw Error('ROLE_UNAVAILABLE');roleCache.set(role,context);}
+        if(disposed||sequence!==roleSequence)return;
+        const card=roleGuidance(context);roleHost.replaceChildren();if(card)roleHost.append(card);
+      }catch{
+        if(disposed||sequence!==roleSequence)return;
+        roleHost.textContent='Не удалось загрузить задачи позиции. Выбери другую позицию и вернись, чтобы повторить загрузку.';
+      }
+    };
     const updatePatchLabel=()=>{
       const label=detail.querySelector('.build-patch');
       if(!label||!selected)return;
@@ -95,7 +114,15 @@ export async function mountBuilds(root) {
     const sync=()=>{const p=new URLSearchParams();if(query)p.set('q',query);if(position)p.set('position',position);if(selected){p.set('guide',selected.id);const variant=selectedAdaptations.get(selected.id);if(variant)p.set('variant',variant);}if(meta){const preference=meta.preferences();if(preference.source==='STRATZ'){p.set('rank',preference.rank);if(preference.basis!=='guide')p.set('basis',preference.basis);}}history.replaceState(null,'',`/builds${p.size?'?'+p:''}`);};
     meta=createBuildMeta(controller.signal,sync);
     const renderDetail=()=>{
-      if(!selected){detail.innerHTML='<p class="empty-message">По этим условиям руководств пока нет. Попробуй другую позицию или имя.</p>';return;}
+      void renderRole();
+      if(!selected){
+        const normalized=query.trim().toLocaleLowerCase('ru-RU');
+        const alternatives=normalized?guides.filter(g=>`${g.hero_name} ${g.title} ${g.hero_slug}`.toLocaleLowerCase('ru-RU').includes(normalized)):[];
+        const roleQuery=position?`?position=${position}`:'';
+        detail.innerHTML=`<div class="build-empty"><h2>Для этой пары героя и позиции пока нет руководства</h2><p>${position?`Выбрана позиция ${esc(position)} · ${esc(positions[position])}. `:''}Сборку для другой роли нельзя автоматически переносить на выбранную.</p>${alternatives.length?`<p>Для найденного героя доступны другие учебные планы:</p><div class="button-row">${alternatives.map(g=>`<button type="button" class="button subtle" data-supported-guide="${esc(g.id)}">${esc(g.hero_name)} · ${esc(g.position)} · ${esc(positions[g.position])}</button>`).join('')}</div>`:'<p>Попробуй имя другого героя или открой обучение по выбранной позиции.</p>'}<a class="text-link" href="/learn${roleQuery}">Обучение${position?` · ${esc(positions[position])}`:''} →</a></div>`;
+        detail.querySelectorAll('[data-supported-guide]').forEach(button=>button.addEventListener('click',()=>{selected=guides.find(g=>g.id===button.dataset.supportedGuide);position=String(selected.position);content.querySelector('#build-position').value=position;render();}));
+        return;
+      }
       const g=selected;
       const alternatives=adaptationOptions(g);
       const inventoryItems=finalItems(g),selectedSlot=selectedSlots.get(g.id)||0;

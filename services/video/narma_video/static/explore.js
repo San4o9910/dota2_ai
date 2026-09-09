@@ -1,3 +1,4 @@
+import { roleGuidance } from './role-guidance.js';
 const page = document.querySelector('#page-content');
 const paths = { '/': 'home', '/heroes': 'heroes', '/builds': 'builds', '/learn': 'learn', '/practice': 'practice', '/updates': 'updates' };
 const route = paths[location.pathname.replace(/\/$/, '') || '/'] || 'home';
@@ -119,9 +120,11 @@ async function learn() {
   const load = async () => {
     const request = ++serial;
     container.setAttribute('aria-busy', 'true');
+    container.replaceChildren(Object.assign(document.createElement('p'), { className: 'page-status', textContent: 'Подбираем упражнения для выбранной позиции…' }));
     try {
       const data = await api(`learning${position ? `?position=${position}` : ''}`);
       if (request !== serial) return;
+      document.querySelector('#learn-position-note').textContent = data.role_context ? `План для позиции «${data.role_context.label}». Задачи, действия и проверка результата ниже учитывают эту роль.` : 'Общие принципы доступны всем. Выбери позицию, чтобы открыть конкретные действия для своей роли.';
       const stages = data.stages || [];
       if (!stages.some(s => s.id === selectedStage)) selectedStage = stages.find(s => (data.exercises || []).some(e => e.stage_id === s.id))?.id || stages[0]?.id;
       container.innerHTML = `<div class="learning-layout"><nav class="stage-nav" aria-label="Ступени обучения">${stages.map(s => `<button class="stage-button" type="button" data-stage="${esc(s.id)}" aria-pressed="${s.id === selectedStage}"><span>${esc(String(s.order).padStart(2, '0'))}</span><span>${esc(s.title)}</span></button>`).join('')}</nav><section id="lesson-content" aria-label="Упражнения выбранной ступени"></section></div><p class="source-note">${esc(data.source_note)}</p>`;
@@ -135,6 +138,7 @@ async function learn() {
         document.querySelector('#choose-learning-position')?.addEventListener('click', () => { const select = document.querySelector('#learn-position'); select.scrollIntoView({ block: 'center' }); select.focus(); });
       };
       document.querySelectorAll('[data-stage]').forEach(b => b.addEventListener('click', () => { selectedStage = b.dataset.stage; render(); }));
+      const guidance = roleGuidance(data.role_context); if (guidance) container.prepend(guidance);
       render();
     } catch { if (request === serial) errorPanel(container, load, 'Не удалось открыть упражнения. Попробуй ещё раз.'); }
     finally { if (request === serial) container.setAttribute('aria-busy', 'false'); }

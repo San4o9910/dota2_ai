@@ -25,6 +25,7 @@ from .config import PART_BYTES, media_root
 from .db import database
 from .replay_metadata import parse_demo_metadata, resolve_player
 from .replay_hero_context import build_hero_context
+from .role_context import COACH_METHOD_VERSION
 from .web import account_required, csrf, json_body, reject
 
 MAX_REPLAY_BYTES = 512 * 1024**2
@@ -152,22 +153,50 @@ def get_replay(job_id, owner_id):
 
 
 def report_coaching_view(report, hero_context):
-    """Suppress outdated role-specific prose in the response, not in storage.
+    """Project current-role practice without changing stored replay evidence.
 
-    Pre-curriculum reports have no role provenance and retain their original
-    presentation. A new report records its input role; changing that role must
-    not silently display the old assessment as a current-role recommendation.
+    Old farm-first practice and AI prose with missing/mismatched role provenance
+    cannot silently become recommendations for a newly selected position.
     """
     if not isinstance(report, dict):
         return report
+    role = hero_context.get('role_context') if isinstance(hero_context, dict) else None
+    insights = report.get('insights')
+    if isinstance(insights, dict) and isinstance(insights.get('training_plan'), list):
+        if role:
+            plans = hero_context.get('training_plan') or [{
+                'id': 'role-practice', 'title': f"{role['label']}: задача на следующую игру",
+                'action': role['next_game_action'], 'measure': role['measurement'],
+                'evidence_ids': [], 'classification': 'practice_guidance_not_match_evidence'}]
+        else:
+            # Unknown position does not default to carry. Factual economy charts
+            # stay intact; the universal farm exercise is removed from practice.
+            plans = [task for task in insights['training_plan']
+                     if isinstance(task, dict) and task.get('id') != 'farm-check']
+        report = {**report, 'insights': {**insights, 'training_plan': plans}}
+    if role and isinstance(insights, dict) and isinstance(insights.get('items'), list):
+        items = []
+        for item in insights['items']:
+            timing = item.get('timing') if isinstance(item, dict) else None
+            if isinstance(timing, dict) and timing.get('status') == 'no_reference':
+                item = {**item, 'timing': {**timing, 'basis':
+                    'Нет подтверждённого ориентира покупки для героя, выбранной позиции и условий этого матча; время покупки не оценивается как раннее или позднее.'}}
+            items.append(item)
+        report = {**report, 'insights': {**report['insights'], 'items': items}}
     coaching = report.get('coaching')
-    if (not isinstance(coaching, dict) or coaching.get('status') != 'ready'
-            or not isinstance(coaching.get('context'), dict)):
+    if not isinstance(coaching, dict) or coaching.get('status') != 'ready':
         return report
+    if not isinstance(coaching.get('context'), dict):
+        if not role:
+            return report
+        return {**report, 'coaching': {**coaching, 'status': 'context_changed',
+                'summary': 'У старого комментария не сохранена позиция. Ниже показан план для выбранной роли.',
+                'points': [], 'next_game': []}}
     recorded = coaching['context']
     if (isinstance(hero_context, dict)
             and recorded.get('hero') == hero_context.get('hero')
-            and recorded.get('position') == hero_context.get('position')):
+            and recorded.get('position') == hero_context.get('position')
+            and (not role or recorded.get('method_version') == COACH_METHOD_VERSION)):
         return report
     return {**report, 'coaching': {**coaching, 'status': 'context_changed',
             'summary': 'Позиция или контекст изменились. Выбери учебную задачу для текущей позиции.',

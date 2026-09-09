@@ -402,6 +402,11 @@ def process_once():
     packet = packet_for(task)["packet"]
     packet["instructions"] += (
         " Analyze each hero and the explicitly recorded position separately; never infer position from hero."
+        " role_contexts contains practice guidance keyed by the observation's position, not observed evidence."
+        " Use its distinct lane, map and item priorities."
+        " Never judge support performance from carry last-hit or GPM goals. Support farm is contextual."
+        " Rune help, pulls, vision and allied lane safety need episode evidence; ask review questions when absent."
+        " Support rotations are conditional on the ally's safety and an achievable purpose, never mandatory roaming."
         " Unknown abilities, build, patch, match conditions and dates remain unknown."
         " Different heroes/positions are not interchangeable evidence for hero-specific advice."
         " Return producer name NousResearch/hermes-agent, version " + RUNTIME_REVISION + " and model " + task_model(task) + ".")

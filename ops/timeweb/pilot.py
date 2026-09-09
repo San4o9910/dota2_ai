@@ -43,7 +43,8 @@ def validate_build_reviews(evidence, guides):
     reviews = evidence.get('guides')
     expected = {guide.get('id') for guide in guides}
     if (evidence.get('schema_version') != 'narma.build-reviews.v1'
-            or not isinstance(reviews, dict) or len(reviews) != 12
+            or not expected or len(expected) != len(guides) or None in expected
+            or not isinstance(reviews, dict)
             or set(reviews) != expected
             or any(not isinstance(row, dict)
                    or row.get('state') not in {'reviewed', 'review_due', 'patch_changed', 'unknown'}

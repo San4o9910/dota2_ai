@@ -1,10 +1,12 @@
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
 const require=createRequire(import.meta.url);
+const roleProfiles=JSON.parse(execFileSync(process.env.NARMA_TEST_PYTHON||'python3',['-c',"import json,sys; sys.path.insert(0,sys.argv[1]); from narma_video.role_context import get_role_context; print(json.dumps([get_role_context(p) for p in range(6)],ensure_ascii=False))",path.resolve('services/video')],{encoding:'utf8'}));
 function dependency(name) {
   try { return require(name); }
   catch { const runtime=process.env.PLAYWRIGHT_NODE_MODULES||process.env.CODEX_PRIMARY_RUNTIME_NODE_MODULES; if(!runtime) throw Error(`Install ${name} to run the portal check.`); return require(path.join(runtime,name)); }
@@ -12,7 +14,7 @@ function dependency(name) {
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const files=Object.fromEntries(['/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
-Object.assign(files,{'/assets/portal.js':['portal.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
+Object.assign(files,{'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type',file[1]); response.end(await readFile(path.join(root,file[0])));
@@ -72,7 +74,7 @@ try {
     const learningPlans=[], learningWrites=[];
     const learningStages=[['lane','Линия и ресурсы'],['map','Две следующие задачи'],['risk','Риск и возвращение в игру'],['items','Задача предмета'],['fights','Своя работа в бою'],['decisions','Самостоятельный разбор']].map(([id,title],index)=>({id,title,order:index+1,description:'Один навык — одна проверка.',exercise_ids:[]}));
     const learningExercises=learningStages.map((stage,index)=>({id:stage.id==='risk'?'r1':`fixture-${stage.id}`,stage_id:stage.id,title:stage.id==='risk'?'Проверить риск перед выходом':stage.title,roles:stage.id==='lane'?[1,2,3]:[],decision_question:'Чего я хотел добиться и что знал до решения?',signal:'Перед переходом на следующую задачу.',action:'Назови цель и условие отмены действия.',why:'Так можно заранее заметить опасность.',exception:'Срочная помощь может изменить план.',drill:'Выбери три похожих эпизода.',measurement:'Объясни выбор по информации до действия.',focus_window_matches:3,mini_lesson:'Это учебный пример, не факт о твоём матче.',source_refs:[],review_mode:stage.id==='risk'?'episode_review':'manual_context',evidence_types:stage.id==='risk'?['death']:[]}));
-    const learningCatalog=position=>({schema_version:'narma.curriculum.v1',version:'narma.curriculum.v1',stages:learningStages,exercises:learningExercises.filter(exercise=>!exercise.roles.length||exercise.roles.includes(position)),position,position_required:!position,sources:[]});
+    const learningCatalog=position=>({role_context:roleProfiles[position||0],schema_version:'narma.curriculum.v1',version:'narma.curriculum.v1',stages:learningStages,exercises:learningExercises.filter(exercise=>!exercise.roles.length||exercise.roles.includes(position)),position,position_required:!position,sources:[]});
     const learningMatch=id=>poolMatches.find(match=>match.job_id===id)??{job_id:job?.id,match_id:'8984479726',hero:report.player.hero,position:learningPosition};
     const projectPlan=plan=>({...plan,validity:learningMatch(plan.source_job_id).position===plan.position?'current':'scope_changed',can_check:true,training_matches:0,reviewed_matches:plan.checks.length,self_report_counts:{applied:0,partial:0,not_applied:0,no_opportunity:plan.checks.filter(check=>check.self_assessment==='no_opportunity').length,uncertain:0}});
     function learningReport(id) {if(learningAlias&&id===job?.id)return {...learningReport('pool-1'),requested_job_id:id};const match=learningMatch(id);return {schema_version:'narma.learning.v1',job_id:id,requested_job_id:id,match_id:match.match_id,hero:match.hero,hero_label:'Necrophos',position:match.position,position_required:!match.position,catalog:learningCatalog(match.position),suggestions:[{exercise_id:'r1',kind:'episode_review',observation:'В реплее записана смерть; причина требует проверки.',evidence_ids:['death-1'],episode_time:600,limitation:'Факт смерти не доказывает ошибку.'}],review_candidates:[{evidence_id:'death-1',type:'death',time:id.startsWith('pool-')?600+Number(id.slice(5))*120:600,title:'Смерть героя'}],plans:learningPlans.filter(plan=>plan.hero===match.hero&&plan.position===match.position).map(projectPlan)};}
@@ -89,7 +91,7 @@ try {
       const groups=new Map(); for(const match of selected) {const key=match.hero+':'+match.position;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(match);}
       const sameRole=selected.filter(match=>match.hero==='npc_dota_hero_necrolyte'&&match.position===2);
       const selectedIds=new Set(selected.map(match=>match.match_id)), coaching={updated_at:'2026-09-08T06:00:00Z',patterns:coachPatterns.filter(pattern=>pattern.evidence.every(ref=>selectedIds.has(ref.match_id)))};
-      return {summary:summarize(selected),heroes:[...groups].map(([key,rows])=>({hero:rows[0].hero,label:rows[0].label,position:rows[0].position,favorite:favorites.has(key),...summarize(rows)})),available_heroes:[{hero:'npc_dota_hero_necrolyte',label:'Necrophos'},{hero:'npc_dota_hero_lion',label:'Lion'}],history:selected,trends:sameRole.length===6?[{hero:'npc_dota_hero_necrolyte',position:2,metric:'deaths_per_30',status:'ready',early_n:3,recent_n:3,early_mean:9,recent_mean:6,delta:-3,unit:'смертей'}]:[],patterns:sameRole.length>=3?[{id:'repeat-death',hero:'npc_dota_hero_necrolyte',label:'Necrophos',position:2,title:malicious,observation:'Повторная смерть в двух матчах.',action:'Перед возвращением на линию проверь доступные предметы.',occurrences:2,eligible_matches:sameRole.length,evidence:[{job_id:'pool-0',match_id:'8984000000'}]}]:[],coaching:coaching.patterns.length?coaching:null,goals,limitations:['Синтетическая тестовая выборка. Дата разбора не является датой игры.']};
+      return {role_context:roleProfiles[Number(pos)||0],summary:summarize(selected),heroes:[...groups].map(([key,rows])=>({hero:rows[0].hero,label:rows[0].label,position:rows[0].position,favorite:favorites.has(key),...summarize(rows)})),available_heroes:[{hero:'npc_dota_hero_necrolyte',label:'Necrophos'},{hero:'npc_dota_hero_lion',label:'Lion'}],history:selected,trends:sameRole.length===6?[{hero:'npc_dota_hero_necrolyte',position:2,metric:'deaths_per_30',status:'ready',early_n:3,recent_n:3,early_mean:9,recent_mean:6,delta:-3,unit:'смертей'}]:[],patterns:sameRole.length>=3?[{id:'repeat-death',hero:'npc_dota_hero_necrolyte',label:'Necrophos',position:2,title:malicious,observation:'Повторная смерть в двух матчах.',action:'Перед возвращением на линию проверь доступные предметы.',occurrences:2,eligible_matches:sameRole.length,evidence:[{job_id:'pool-0',match_id:'8984000000'}]}]:[],coaching:coaching.patterns.length?coaching:null,goals,limitations:['Синтетическая тестовая выборка. Дата разбора не является датой игры.']};
     }
     const errors=[], requests=[];
     const integrationRequests=[];
@@ -387,6 +389,12 @@ try {
     await page.locator('#pool-position').selectOption('5');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-matches .pool-match-row').length===1&&document.querySelector('#pool-matches').textContent.includes('Lion'));
     assert.equal(await coachCards.count(),0,'Position filters cannot turn mixed-context conclusions into same-role advice.');
+    assert.equal(await page.locator('#pool-role-guidance').getAttribute('data-position'),'5');
+    const supportFocus=page.locator('#pool-focus-pool-7');
+    assert.equal(await supportFocus.locator('option[value="farm_checkpoint"]').count(),0,'Support is not offered a personal farm target as its main journal focus.');
+    assert.equal(await supportFocus.locator('option[value="lane_support"]').count(),1);
+    assert.equal(await supportFocus.locator('option[value="rotation_window"]').count(),1);
+
     await page.locator('#pool-position').selectOption('');
     await page.waitForFunction(()=>document.querySelectorAll('#pool-patterns .pool-coach-card').length===2);
     await coachCard.locator('summary').click();
@@ -482,6 +490,7 @@ try {
     await learning.getByLabel('Моя позиция в этом матче',{exact:true}).selectOption('2');
     await learning.getByRole('button',{name:'Начать практику · 3–5 игр',exact:true}).waitFor();
     assert.equal(await learning.locator('.learning-exercise').count(),1);
+    assert.equal(await learning.locator('.role-guidance > p').first().textContent(),roleProfiles[2].lane_priority);
     await learning.getByRole('button',{name:'Начать практику · 3–5 игр',exact:true}).click();
     await learning.locator('.learning-check-form').waitFor();
     assert.match(await learning.locator('.learning-plan').textContent(),/Новых отмеченных матчей практики пока нет/);
@@ -505,6 +514,8 @@ try {
     await learning.getByLabel('Моя позиция в этом матче',{exact:true}).selectOption('5');
     await page.waitForFunction(()=>document.querySelector('#learning-report-position')?.value==='5'&&!document.querySelector('#report-learning .learning-plan'));
     assert.equal(await learning.locator('.learning-exercise').count(),1,'A role change cannot retain the previous role’s active plan.');
+    assert.equal(await learning.locator('.role-guidance > p').first().textContent(),roleProfiles[5].lane_priority,'Changing the saved match role replaces the role guidance.');
+    assert.notEqual(roleProfiles[2].lane_priority,roleProfiles[5].lane_priority);
     await learning.getByLabel('Моя позиция в этом матче',{exact:true}).selectOption('2');
     await learning.locator('.learning-plan').waitFor();
     await page.locator('nav [data-tab="learning"]').click();

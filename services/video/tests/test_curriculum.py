@@ -212,3 +212,40 @@ def test_unsorted_evidence_orders_by_actual_time_and_never_generates_field_value
     candidate = curriculum.suggest_exercises(payload, 1)[0]
     assert candidate["evidence_ids"] == ["first"] and candidate["episode_time"] == 120
     assert "2:00" in candidate["observation"]
+
+
+def test_every_shared_stage_changes_the_decision_and_review_for_all_five_positions():
+    # Stable IDs must not turn a saved item/fight plan into identical copy after
+    # a role switch. The actionable and review fields are what clients render.
+    for ident in ("m1", "r1", "r2", "i1", "i2", "f1", "f2", "a1", "a2", "a3"):
+        cards = [curriculum.get_exercise(ident, position) for position in range(1, 6)]
+        for field in ("decision_question", "action", "drill", "measurement"):
+            assert len({card[field] for card in cards}) == 5, (ident, field)
+        assert [card["position"] for card in cards] == list(range(1, 6))
+    for position in range(1, 6):
+        role = curriculum.get_catalog(position)["role_context"]
+        assert role["position"] == position
+        assert role["classification"] == "practice_guidance_not_match_evidence"
+    assert curriculum.get_catalog(None)["role_context"] is None
+
+
+def test_support_tasks_protect_different_allies_and_do_not_grade_personal_farm():
+    four, five = curriculum.get_exercise("l2", 4), curriculum.get_exercise("l2", 5)
+    assert "офлейнеру" in four["action"]
+    assert "керри" in five["action"]
+    assert "Низкие добивания и GPM не являются ошибкой" in four["measurement"]
+    assert "не основная оценка" in five["measurement"]
+    assert "безопасности" in curriculum.get_exercise("m1", 4)["action"]
+    assert "линия керри позволяет уйти" in curriculum.get_exercise("m1", 5)["action"]
+    assert "сохранил ли следующее" in curriculum.get_exercise("f1", 4)["measurement"]
+    assert "союзник в досягаемости" in curriculum.get_exercise("f1", 5)["measurement"]
+
+
+def test_role_switch_changes_review_question_without_rewriting_recorded_event():
+    payload = item_report()
+    carry = curriculum.suggest_exercises(payload, 1)
+    support = curriculum.suggest_exercises(payload, 5)
+    assert [row["observation"] for row in carry] == [row["observation"] for row in support]
+    assert [row["evidence_ids"] for row in carry] == [row["evidence_ids"] for row in support]
+    assert all(a["review_question"] != b["review_question"] for a, b in zip(carry, support))
+    assert all(row["role_focus"] for row in carry + support)

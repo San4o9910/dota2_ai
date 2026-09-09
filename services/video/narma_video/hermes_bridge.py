@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from starlette.concurrency import run_in_threadpool
 
 from .db import database
+from .role_context import get_role_context
 from .web import account_required, csrf, reject
 
 MAX_MATCHES = 30
@@ -195,6 +196,8 @@ def build_snapshot(pool):
     # Source order is irrelevant to the digest and identifiers remain match-local.
     observations.sort(key=lambda row: row["match_id"])
     snapshot = {"schema_version": 1, "player": {"account_id": account_id}, "observations": observations,
+        "role_contexts": {str(position): get_role_context(position)
+                          for position in sorted({row["position"] for row in observations if row["position"] is not None})},
         "limits": {"max_matches": MAX_MATCHES, "max_evidence_per_match": MAX_EVIDENCE_PER_MATCH},
         "notes": ["A missing value is unknown, never zero.",
                   "Win rate is an outcome, not proof of improved game understanding.",
@@ -253,11 +256,17 @@ def _owned_export(connection, owner_id, export_id):
 
 
 def packet_for(row):
-    return {"export_id": str(row["id"]), "snapshot_sha256": row["snapshot_sha256"],
+    packet = {"export_id": str(row["id"]), "snapshot_sha256": row["snapshot_sha256"],
         "packet": {"purpose": "Narma Vision longitudinal coaching evidence",
             "snapshot_sha256": row["snapshot_sha256"], "snapshot": row["snapshot"],
             "response_schema": Review.model_json_schema(),
             "instructions": "Find at most five repeated gameplay patterns using evidence from at least two distinct matches per pattern. Return only JSON matching response_schema. Never invent events, account identity, item identity or missing metrics. The observation field is an unverified reflection question or cautious interpretation, never a claim about MMR, intent or causes. Suggest at most three measurable future actions. A small sample does not establish a trend. Text fields must be plain Russian text. Empty patterns and goals are valid when evidence is insufficient."}}
+    packet["packet"]["instructions"] += (
+        " Keep heroes and declared positions separate. The role_contexts mapping is practice guidance, not match evidence."
+        " Use the corresponding position's priorities and leave missing positions unknown."
+        " Low support last hits or GPM do not establish an error; check allied lane needs and the cost of moving."
+        " Never invent rune help, pulls, vision, lane safety or created space from generic counters.")
+    return packet
 
 
 def create_export(owner_id):

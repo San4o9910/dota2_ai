@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from . import curriculum
 from .db import database
 from .hero_pool import HERO, _load_history, timestamp, valid_report
+from .role_context import get_role_context
 from .web import account_required, csrf, reject
 
 SCHEMA = "narma.learning.v1"
@@ -249,6 +250,7 @@ def get_learning(owner_id, hero=None, position=None):
     def included(row):
         return (hero is None or row["hero"] == hero) and (position is None or row["position"] == numeric_position)
     return {"schema_version": SCHEMA, "profile": profile, "scope": {"hero": hero, "position": numeric_position},
+            "role_context": get_role_context(numeric_position),
             "catalog": curriculum.get_catalog(numeric_position),
             "plans": [p for p in plans if included(p)], "history": [h for h in history if included(h)],
             "progress_source": "player_self_report"}
@@ -262,6 +264,7 @@ def get_report_learning(owner_id, job_id):
     return {"schema_version": SCHEMA, "job_id": fact["job_id"], "requested_job_id": str(job_id),
             "match_id": fact["match_id"], "hero": fact["hero"], "hero_label": fact["label"],
             "position": fact["position"], "position_required": fact["position"] is None,
+            "role_context": get_role_context(fact["position"]),
             "position_source": "user" if fact["position"] is not None else "unknown",
             "catalog": curriculum.get_catalog(fact["position"]), "plans": plans,
             "suggestions": curriculum.suggest_exercises(report, fact["position"]),

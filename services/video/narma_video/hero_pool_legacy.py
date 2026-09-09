@@ -17,7 +17,7 @@ from .web import reject
 
 SCHEMA = "narma.hero-pool.v1"
 LIMIT = 1000
-FOCUSES = {"item_plan", "farm_checkpoint", "safe_return"}
+FOCUSES = {"item_plan", "farm_checkpoint", "safe_return", "lane_support", "rotation_window"}
 REFLECTIONS = {"done", "partial", "not_done"}
 METRICS = {
     "lh10": ("Добивания к 10-й минуте", "LH"),

@@ -22,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .db import database
 from .replay_report import display_unit
+from .role_context import get_role_context
 from .web import account_required, csrf, reject
 # The first deployed coach-context contract remains supported independently.
 from .hero_pool_legacy import build_pool
@@ -169,6 +170,7 @@ def trends_for(matches):
             groups[(row["hero"], row["position"])].append(row)
     result = []
     for (hero, position), rows in sorted(groups.items()):
+        role = get_role_context(position)
         sources = {r["date_source"] for r in rows}
         builds = {str(r["engine_build"]) if r.get("engine_build") is not None else None for r in rows}
         for metric, (label, unit, desired) in TREND_METRICS.items():
@@ -191,7 +193,8 @@ def trends_for(matches):
                 "early_n": len(early), "recent_n": len(recent), "early_mean": a, "recent_mean": b,
                 "delta": round(b - a, 2) if a is not None else None,
                 "direction": "up" if a is not None and b > a else "down" if a is not None and b < a else "flat" if a is not None else None,
-                "desired_direction": desired,
+                "desired_direction": "context" if position in (4, 5) and metric in ("last_hits_10", "net_worth_10") else desired,
+                "interpretation": role["farm_policy"] if metric in ("last_hits_10", "net_worth_10") else "Изменение счётчика — повод пересмотреть эпизод; оно само по себе не доказывает улучшение решения.",
                 "early_match_ids": [r["match_id"] for r in early], "recent_match_ids": [r["match_id"] for r in recent]})
     return result
 
@@ -215,7 +218,8 @@ def patterns_for(matches):
             result.append({"id": ident, "hero": hero, "label": display_unit(hero), "position": position,
                 "title": definition["title"], "metric": definition["metric"], "occurrences": len(occurrences),
                 "eligible_matches": len(eligible), "observation": f"Наблюдается в {len(occurrences)} из {len(eligible)} доступных матчей. {definition['note']}",
-                "action": definition["action"], "evidence": [{"job_id": r["job_id"], "match_id": r["match_id"],
+                "action": definition["action"] + " " + get_role_context(position)["item_priority" if ident == "item-delay" else "fight_priority"],
+                "evidence": [{"job_id": r["job_id"], "match_id": r["match_id"],
                     "value": r["metrics"][definition["metric"]], "evidence_ids": [e["id"] for e in r["evidence"]
                         if e["type"] == ("death" if ident == "repeat-death" else "item_use")][:12]} for r in occurrences[:12]]})
     return result
@@ -322,6 +326,7 @@ def get_pool(owner_id, window="all", hero=None, position=None, favorites_only=Fa
         from .hermes_coaching import coaching_for
         coaching = coaching_for(latest_valid_review(owner_id), selected)
     return {"schema_version": SCHEMA, "profile": profile,
+        "role_context": get_role_context(int(position)) if position in ("1", "2", "3", "4", "5") else None,
         "filters": {"window": window, "hero": hero, "position": position, "favorites_only": favorites_only},
         "summary": summary(selected), "heroes": heroes,
         "available_heroes": [{"hero": h, "label": display_unit(h)} for h in sorted({r["hero"] for r in all_history})],
@@ -348,7 +353,7 @@ class MatchUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     position: int | None = Field(default=None, ge=1, le=5, strict=True)
     played_at: datetime | None = None
-    focus: Literal["item_plan", "farm_checkpoint", "safe_return"] | None = None
+    focus: Literal["item_plan", "farm_checkpoint", "safe_return", "lane_support", "rotation_window"] | None = None
     reflection: Literal["done", "partial", "not_done"] | None = None
     note: str = Field(default="", max_length=500, strict=True)
 

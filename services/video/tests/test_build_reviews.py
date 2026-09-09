@@ -77,7 +77,7 @@ class BuildReviewsTests(unittest.TestCase):
 
     def test_each_catalog_guide_has_useful_six_unique_slot_alternative(self):
         catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))["guides"]
-        self.assertEqual(len(catalog), 12)
+        self.assertEqual(len(catalog), 17)
         for g in catalog:
             with self.subTest(guide=g["id"]):
                 rows = adaptations(g)
