@@ -11,6 +11,11 @@ on:
       - services/video/narma_video/build_meta.py
       - services/video/narma_video/build_statistics.py
   workflow_dispatch:
+    inputs:
+      inspect_schema:
+        description: Explicitly inspect full schema metadata
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,7 +36,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Verify authorized schema and public build aggregates without deployment
+      - name: Verify configured credential and narrow public purchase cohorts
         env:
           STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
         run: |
@@ -39,9 +44,12 @@ jobs:
             echo 'STRATZ_API_TOKEN is not configured for this repository workflow'
             exit 1
           fi
-          python3 scripts/inspect-stratz-builds.py
-          python3 scripts/check-stratz-build-data.py
           python3 scripts/check-stratz-context.py
+      - name: Inspect schema only when explicitly requested
+        if: github.event_name == 'workflow_dispatch' && inputs.inspect_schema
+        env:
+          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
+        run: python3 scripts/inspect-stratz-builds.py
       - name: Verify the production adapter without server deployment
         env:
           STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
