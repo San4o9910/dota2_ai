@@ -80,6 +80,7 @@ class BuildCache:
         self.path, self.fetch, self.now = path, fetch, now
         self.lock, self.stop_event = threading.Lock(), threading.Event()
         self.thread = None
+        self.blocked = False
         self.data, self.due, self.errors = {}, {}, set()
         self.items, self.source_patch, self.metadata_at = {}, None, 0
         self.requested = {(g, "HERALD_GUARDIAN") for g in GUIDES}
@@ -102,6 +103,7 @@ class BuildCache:
         if self.thread and self.thread.is_alive():
             return
         self.stop_event.clear()
+        self.blocked = False
         self.thread = threading.Thread(target=self.run, name="narma-build-statistics", daemon=True)
         self.thread.start()
 
@@ -149,6 +151,9 @@ class BuildCache:
                         self.due[key] = self.now() + 300
                     code = str(exc) if isinstance(exc, SourceError) and str(exc) in SAFE_ERRORS else "invalid_source"
                     print(json.dumps({"event":"build_statistics_refresh_failed","code":code}),flush=True)
+                    if code in {"authentication_failed","access_denied","configuration"}:
+                        self.blocked = True
+                        break  # Stop access attempts until an explicit service restart/configuration change.
                     if self.stop_event.wait(300):
                         break  # One global backoff prevents a provider outage from multiplying requests.
             self.stop_event.wait(2 if pending else 30)
@@ -167,9 +172,10 @@ class BuildCache:
                 "guide":guide_id, "rank":rank, "rank_label":RANKS[rank], "minimum_matches":{"popular":30,"winrate":100},
                 "joint_build_winrate":None, "period":"current_source_week", "purchase_minutes":[0,75]}
         if not row:
-            return {**base,"status":"loading" if configured else "unavailable", "stale":True,"items":{},"plans":{}}
+            waiting=configured and not self.blocked and os.environ.get("NARMA_STRATZ_REFRESH_ENABLED","1")=="1"
+            return {**base,"status":"loading" if waiting else "unavailable", "stale":True,"items":{},"plans":{}}
         age = self.now() - row["checked_at"]
-        stale = error or not configured or age < 0 or age >= 2*HOUR or row["week"] != int(self.now() // WEEK)
+        stale = self.blocked or error or not configured or age < 0 or age >= 2*HOUR or row["week"] != int(self.now() // WEEK)
         # A weekly aggregate can straddle a new patch. Wait for a full subsequent
         # week and a matching reviewed hero pool before generating suggestions.
         from .explore import get_payload

@@ -96,6 +96,20 @@ def test_disabled_worker_has_no_network_side_effects(setup,monkeypatch):
     assert cache.get(*KEY)['status']=='unavailable'
 
 
+@pytest.mark.parametrize('code',['access_denied','authentication_failed','configuration'])
+def test_permission_failure_stops_the_worker_without_automatic_retry(setup,code):
+    cache,_=setup
+    calls=[]
+    def reject(*args):
+        calls.append(True)
+        raise SourceError(code)
+    cache.fetch=reject
+    cache.run()
+    assert len(calls)==1
+    assert cache.blocked
+    assert cache.get(*KEY)['status']=='unavailable'
+
+
 @pytest.mark.parametrize('status',[200,403])
 def test_documented_client_header_and_no_retry_on_access_denial(monkeypatch,status):
     calls=[]

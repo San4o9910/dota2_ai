@@ -1,0 +1,36 @@
+name: STRATZ offline checks
+
+on:
+  push:
+    branches: [codex/stratz-source-readiness]
+    paths:
+      - .github/workflows/stratz-offline.yml
+      - services/video/narma_video/build_meta.py
+      - services/video/narma_video/build_statistics.py
+      - services/video/tests/test_build_*.py
+      - ops/timeweb/check_stratz.py
+      - ops/timeweb/stratz_secrets.py
+      - ops/timeweb/tests/test_stratz*.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      PYTHONPATH: services/video
+      NARMA_STRATZ_REFRESH_ENABLED: '0'
+      NARMA_EXPLORE_REFRESH_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install test dependencies
+        run: python3 -m pip install --disable-pip-version-check --quiet fastapi==0.141.1 httpx==0.28.1 pytest==8.4.2
+      - name: Verify accounting, cache, access-denial stop and secret handling offline
+        run: |
+          python3 -m pytest services/video/tests/test_build_statistics.py services/video/tests/test_build_meta.py -q
+          python3 -m unittest discover -s ops/timeweb/tests -p 'test_*.py' -q
