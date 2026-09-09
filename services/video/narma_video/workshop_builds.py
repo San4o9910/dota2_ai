@@ -27,6 +27,17 @@ SOURCE_REVIEW_DAYS = 30
 GROUP_KEYS = ("starting_items", "early_items", "core_items", "extension_items", "situational_items", "luxury_items")
 BOOTS = {"boots", "power_treads", "phase_boots", "arcane_boots", "tranquil_boots", "travel_boots", "travel_boots_2", "guardian_greaves", "boots_of_bearing"}
 CONSUMABLES = {"aghanims_shard", "ultimate_scepter_2", "moon_shard", "tango", "flask", "clarity", "enchanted_mango", "faerie_fire", "tpscroll", "ward_observer", "ward_sentry", "dust", "smoke_of_deceit", "tome_of_knowledge", "cheese", "refresher_shard", "aegis"}
+# Basic parts remain visible in purchase stages; a final-slot illustration
+# must not leave a Ring of Health beside completed items and drop the next
+# complete item merely because the source lists that component separately.
+BASIC_COMPONENTS = {"branches", "gauntlets", "slippers", "mantle", "circlet",
+                    "belt_of_strength", "boots_of_elves", "robe", "ring_of_protection",
+                    "ring_of_regen", "sobi_mask", "wind_lace", "gloves", "blades_of_attack",
+                    "ring_of_health", "void_stone", "ring_of_tarrasque", "chainmail",
+                    "quarterstaff", "claymore", "broadsword", "mithril_hammer", "javelin",
+                    "ogre_axe", "blade_of_alacrity", "staff_of_wizardry", "energy_booster",
+                    "vitality_booster", "point_booster", "platemail", "talisman_of_evasion",
+                    "demon_edge", "eagle", "reaver", "mystic_staff", "hyperstone", "ultimate_orb"}
 # The projection removes known components in favour of their actual later
 # recommendation. It does not buy upgrades the author did not recommend.
 UPGRADES = {
@@ -149,7 +160,7 @@ def inventory_projection(groups):
     result, seen = [], set()
     for item in priority:
         key = item["id"]
-        if key not in seen and key not in CONSUMABLES and key not in components and not key.startswith("recipe_"):
+        if key not in seen and key not in CONSUMABLES and key not in BASIC_COMPONENTS and key not in components and not key.startswith("recipe_"):
             seen.add(key)
             result.append(deepcopy(item))
     return result[:6]
@@ -287,7 +298,8 @@ def refresh_snapshot(snapshot):
                 # Unpublished/private/removed records must stop being served.
                 return key, None
             source_time = datetime.fromtimestamp(row["time_updated"], timezone.utc)
-            if _iso(source_time) == previous["source_updated_at"]:
+            if (_iso(source_time) == previous["source_updated_at"]
+                    and "unknown_item_ids" in previous and not previous["unknown_item_ids"]):
                 refreshed = {**previous, "fetched_at": fetched_at}
                 refreshed.pop("source_error", None)
                 return key, refreshed

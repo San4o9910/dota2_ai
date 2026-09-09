@@ -116,9 +116,27 @@ def main():
             metadata.append({key: value for key, value in row.items() if key in fields})
         print(json.dumps({"event": "metadata_checked", "candidates": min(offset + 30, len(ids)), "approved": len(metadata)}), flush=True)
     checked = w._iso(w._now())
+    cached = {}
+    if CATALOG.exists():
+        previous = json.loads(CATALOG.read_text(encoding="utf-8"))
+        if previous.get("schema_version") == w.SCHEMA and previous.get("authors") == AUTHORS:
+            cached = {row["workshop_id"]: row for row in previous.get("guides", [])}
     guides, failures = [], []
     def download(row):
         if time.monotonic() - started > 1000: raise w.WorkshopError("source_unavailable")
+        previous = cached.get(str(row["publishedfileid"]))
+        if (previous and previous.get("creator_id") == str(row["creator"])
+                and "unknown_item_ids" in previous and not previous["unknown_item_ids"]
+                and previous.get("source_updated_at") == w._iso(w.datetime.fromtimestamp(row["time_updated"], w.timezone.utc))
+                and all(item["id"] in items for key in w.GROUP_KEYS for item in previous[key])):
+            # Public metadata revalidated unchanged authored facts. Recompute
+            # only Narma's slot illustration; never reset the author date.
+            result = json.loads(json.dumps(previous))
+            for key in w.GROUP_KEYS:
+                for item in result[key]: item["name"] = items[item["id"]]
+            result["fetched_at"] = checked
+            result["final_items"] = w.inventory_projection(result)
+            return result
         return w.parse_guide(row, w._request(w._cdn_url(row.get("file_url"))), heroes, items, AUTHORS, checked)
     # Small batches ensure an access denial stops subsequent requests. There
     # are at most three already-in-flight public reads when an error arrives.
