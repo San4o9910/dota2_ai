@@ -1,43 +1,84 @@
-# STRATZ schema inspection
+# STRATZ build statistics
 
-The build catalog does not yet have an authorized STRATZ statistics adapter. The
-operator can add a GitHub Actions repository secret named `STRATZ_API_TOKEN`,
-using a token obtained for this application at <https://stratz.com/api> under
-STRATZ's applicable access and commercial-use terms. Do not put the token in a
-commit, command argument, issue, browser code, or workflow output.
+The application uses `STRATZ_API_TOKEN`, stored as a GitHub Actions repository
+secret. Obtain it through <https://stratz.com/api>. Never paste credentials into
+issues, commits, browser code or logs. Deployment transfers the validated token
+over SSH stdin into the existing server's mode-0600 environment file. Database
+identity and other provider credentials are preserved.
 
-The existing **Timeweb pilot deployment** workflow runs
-`python3 ops/timeweb/check_stratz.py` before server provisioning. The token is
-available only to that inspection step; it is not copied to the Timeweb server.
+## Verified source and actual scope
 
-The separate **STRATZ source verification** workflow runs a targeted inspection
-of build-related schema types through `scripts/inspect-stratz-builds.py`, with at
-most four metadata requests and without deployment, server credentials or AI generation. It requires the secret
-to be present and runs when its workflow file changes on the pilot branch, or by
-manual dispatch. This isolates provider setup from the live application's rollout.
+Authorized introspection and bounded public data checks succeeded on 2026-09-09.
+The verified source is `heroStats.itemFullPurchase`: per-item match/win counts by
+purchase minute, hero, position and basic rank bracket. Explicit `minTime:0`,
+`maxTime:75`, `matchLimit:1` avoids the default threshold hiding most purchases.
+The initial Viper/mid/Herald–Guardian request returned 26 rows; the explicit range
+and threshold returned 3018. The API documents an omitted week as its current week.
+The returned week index was 2957; the client does not pretend that a fetch timestamp
+is the time of the last match included by the provider.
 
-- No secret: `source_not_configured`, exit 0. This does not block a UI release.
-- Authorized introspection: `stratz_schema_inspected`, exit 0. The output contains
-  only validated schema names, argument types and enum names; omitted fields and
-  types have explicit counts. `popular_builds_ready` remains `false`.
-- Authentication, HTTP, transport or schema failure: a fixed error code, exit 1.
-  Raw response errors, redirects and credentials are never printed. A configured
-  but failing source blocks deployment so the failure cannot look like readiness.
+**This endpoint does not supply joint six-item build win rates or popularity.**
+Narma never multiplies/averages individual item win rates into a build win rate.
+`joint_build_winrate` is null. STRATZ's winning Immortal guides are not used as a
+wins-and-losses sample. No private account identities, OpenDota, scraped competitor
+pages, or AI generation are used by this feature.
 
-The script sends at most two read-only GraphQL introspection queries to the fixed
-`https://api.stratz.com/graphql` endpoint. It reads query fields and the matching
-type metadata for matches, players, hero statistics and collections; it does not
-invoke those data fields, fetch private matches, or make an AI generation call.
-Redirects and environment proxies are disabled. Each response has a 2 MiB limit;
-socket and body-read time are bounded. No retries are made.
+## User experience
 
-After a successful inspection, an implementation still needs to verify the real
-authorized fields for full six-item combinations, matches/wins, sample size,
-patch, date window, position, rank bracket, pagination and refresh behavior. It
-must also confirm permitted product use and account quotas. A hero or individual
-item win rate must not be presented as the win rate of a complete build. Only
-after those checks and a tested adapter should popular/high-win-rate build
-collections and automatic statistics refresh be enabled. This inspector alone
-does not enable those features or establish a commercial data license.
+The 12 existing hero/position guides retain their authored six-slot plans. The
+rank selector exposes the four actual provider brackets, without invented exact
+MMR boundaries. Two additional modes select six compatible items from the guide's
+reviewed hero/role pool using item purchase frequency or item win-rate evidence.
+They are labelled as per-item selections, not the most popular joint build.
 
-Reference: [GraphQL introspection](https://graphql.org/learn/introspection/).
+- Popularity requires at least 30 recorded matches per item.
+- Win-rate selection requires at least 100 and sorts by the 95% Wilson lower bound.
+- Recipes, low-cost components, duplicate boot slots and known component/upgrade
+  pairs are excluded. Reviewed upgrade relationships also cover missing component
+  metadata in STRATZ's current constants response.
+- Only instance 0 purchase-minute buckets are combined; repeated instances are
+  excluded. Duplicate buckets, mixed weeks, other heroes/roles/ranks and impossible
+  win counts fail validation.
+- If six evidenced items cannot be selected, the UI explicitly shows the authored
+  plan, without fabricated items or statistics. The selected item displays its
+  match count, win rate and weighted mean purchase minute.
+- The UI explains that expensive late-game items have outcome-selection bias and
+  that their win rates do not establish causal benefit.
+
+## Freshness and known limitations
+
+One bounded in-process worker refreshes requested cohorts hourly. The default
+12 Herald–Guardian cohorts are warmed automatically. The finite request space is
+12 guide/position pairs × 4 brackets. Requests are serialized with a two-second
+minimum gap; an error applies a global five-minute backoff. Metadata refreshes
+hourly. Responses are limited to 2 MiB with bounded timeouts, no redirects and no
+ambient proxies. The public endpoint cannot submit arbitrary GraphQL queries.
+
+Validated public snapshots persist atomically at
+`VIDEO_STORAGE_PATH/public/build-statistics.json` on the existing media volume.
+Source failures retain dated evidence. Snapshots older than two hours or from a
+previous source week cannot produce current suggestions. A new Valve patch
+suppresses derived plans for seven days to avoid mixing weekly data across patches;
+a changed patch also requires review of the authored candidate pool. Unknown or
+stale Valve patch information suppresses suggestions while preserving the guide.
+
+STRATZ's constants response currently ends at 7.40b whereas Valve reports 7.41e.
+This is **not** represented as proof that the purchase sample is for 7.40b or
+7.41e: the per-item endpoint does not expose a patch ID. Current-week checking and
+the conservative patch-transition gate reduce stale-data risk, but do not create
+an exact per-match patch guarantee or a global joint-build ranking. Those require
+a supported provider dataset with the missing dimensions.
+
+## Checks and operations
+
+`STRATZ source verification` is a separate read-only GitHub workflow for schema and
+bounded aggregate diagnostics, without deployment or server credentials.
+The Timeweb deployment also runs the schema check and
+`python -m narma_video.build_meta --check` in the built image, then verifies the
+anonymous live `/api/explore/builds` route after rollout. Offline tests exercise
+cohort validation, sample-size selection, compatibility, stale persistence,
+patch changes, secret installation and mobile/desktop UI behavior.
+
+Set `NARMA_STRATZ_REFRESH_ENABLED=0` on the API to disable the refresher. The code
+requires a configured token to start it. No AI allowance or subscription billing
+is changed by this integration.

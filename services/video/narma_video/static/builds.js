@@ -1,3 +1,4 @@
+import {createBuildMeta,itemEvidence} from './build-meta.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const positions = {1:'Керри',2:'Мидер',3:'Офлейнер',4:'Поддержка',5:'Полная поддержка'};
 const mountedBuilds = new WeakMap();
@@ -38,7 +39,7 @@ function finalItems(guide) {
   return Array.isArray(rows)&&rows.length===6&&rows.every(item=>item&&asset('items',item.id)&&typeof item.name==='string'&&typeof item.why==='string')?rows:[];
 }
 function slotExplanation(item) {
-  return `<h4>${esc(item.name)}</h4><p>${esc(item.why)}</p>${item.condition?`<p class="build-condition"><strong>Когда:</strong> ${esc(item.condition)}</p>`:''}`;
+  return `<h4>${esc(item.name)}</h4>${itemEvidence(item)}<p>${esc(item.why)}</p>${item.condition?`<p class="build-condition"><strong>Когда:</strong> ${esc(item.condition)}</p>`:''}`;
 }
 function inventory(rows,selectedSlot,note) {
   if(rows.length!==6)return '';
@@ -52,7 +53,8 @@ export async function mountBuilds(root) {
   mountedBuilds.get(root)?.();
   const controller=new AbortController();
   let timer=null,disposed=false,refreshing=false;
-  const cleanup=()=>{disposed=true;clearTimeout(timer);controller.abort();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pagehide',onPageHide);window.removeEventListener('pageshow',onPageShow);};
+  let meta=null;
+  const cleanup=()=>{disposed=true;clearTimeout(timer);meta?.dispose();controller.abort();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pagehide',onPageHide);window.removeEventListener('pageshow',onPageShow);};
   let refreshPatch=async()=>{};
   const onVisibility=()=>{if(!document.hidden)void refreshPatch();};
   const onPageHide=event=>{clearTimeout(timer);if(!event.persisted)cleanup();};
@@ -82,7 +84,8 @@ export async function mountBuilds(root) {
       label.classList.toggle('is-stale',status.stale);
       label.dataset.freshness=status.state;
     };
-    const sync=()=>{const p=new URLSearchParams();if(query)p.set('q',query);if(position)p.set('position',position);if(selected)p.set('guide',selected.id);history.replaceState(null,'',`/builds${p.size?'?'+p:''}`);};
+    const sync=()=>{const p=new URLSearchParams();if(query)p.set('q',query);if(position)p.set('position',position);if(selected)p.set('guide',selected.id);if(meta){const preference=meta.preferences();p.set('rank',preference.rank);if(preference.basis!=='guide')p.set('basis',preference.basis);}history.replaceState(null,'',`/builds${p.size?'?'+p:''}`);};
+    meta=createBuildMeta(controller.signal,sync);
     const renderDetail=()=>{
       if(!selected){detail.innerHTML='<p class="empty-message">По этим условиям руководств пока нет. Попробуй другую позицию или имя.</p>';return;}
       const g=selected;
@@ -90,14 +93,32 @@ export async function mountBuilds(root) {
       const date=checkedDate(g.checked_at),freshness=buildFreshness(g,updatesResult.data);
       const samePatch=!freshness.stale,patchText=freshness.text;
       const depth=g.beginner_focus||g.advanced_focus?`<div class="build-depth">${g.beginner_focus?`<div><h3>Если осваиваешь героя</h3><p>${esc(g.beginner_focus)}</p></div>`:''}${g.advanced_focus?`<div><h3>Если база уже получается</h3><p>${esc(g.advanced_focus)}</p></div>`:''}</div>`:'';
-      detail.innerHTML=`<article class="build-guide" data-guide-id="${esc(g.id)}"><header class="build-guide-header">${picture('heroes',g.hero_slug,g.hero_name,'build-portrait')}<div><p class="eyebrow">Позиция ${esc(g.position)} · ${esc(positions[g.position])}</p><h2>${esc(g.hero_name)}</h2><p>${esc(g.title)}</p></div></header><p class="build-summary">${esc(g.summary)}</p><p class="build-patch${!samePatch?' is-stale':''}">${esc(patchText)}${date?` · Проверка ${esc(date)}`:''}</p>${g.applicability_note?`<p class="muted">${esc(g.applicability_note)}</p>`:''}${inventory(inventoryItems,selectedSlot,g.final_note)}<div class="build-cues"><h3>На что смотреть в матче</h3>${list(g.decision_cues)}</div>${depth}<section class="build-section"><h3>Старт и линия</h3>${items(g.starting_items)}${list(g.lane_plan)}</section><section class="build-section"><h3>Основной план покупки</h3><p class="muted">Проверь условие предмета перед тем, как продолжить сборку.</p>${items(g.core_items)}</section><section class="build-section"><h3>Когда поменять сборку</h3>${items(g.situational_items)}</section><div class="build-window"><p class="eyebrow">После ключевой покупки</p><p>${esc(g.power_window)}</p></div><details class="build-avoid"><summary>Каких ошибок избегать</summary>${list(g.avoid)}</details><section class="build-check"><h3>Проверка в следующей игре</h3><p>${esc(g.next_game_check)}</p><div class="button-row"><a class="button primary" href="/practice?position=${g.position}&topic=items">Потренировать решения →</a><a class="button subtle" href="/replays">Разобрать свой матч ↗</a></div></section><details class="build-sources"><summary>Основания руководства и источники</summary><p>Текст Narma объясняет выбор; источники ниже помогают проверить механику и изменения.</p><div>${sources(g.source_refs)}</div></details></article>`;
-      detail.querySelectorAll('[data-build-slot]').forEach(button=>button.addEventListener('click',()=>{
-        const index=Number(button.dataset.buildSlot);
-        if(!inventoryItems[index])return;
-        selectedSlots.set(g.id,index);
-        detail.querySelectorAll('[data-build-slot]').forEach(slot=>slot.setAttribute('aria-pressed',String(slot===button)));
-        detail.querySelector('#build-slot-detail').innerHTML=slotExplanation(inventoryItems[index]);
-      }));
+      detail.innerHTML=`<article class="build-guide" data-guide-id="${esc(g.id)}"><header class="build-guide-header">${picture('heroes',g.hero_slug,g.hero_name,'build-portrait')}<div><p class="eyebrow">Позиция ${esc(g.position)} · ${esc(positions[g.position])}</p><h2>${esc(g.hero_name)}</h2><p>${esc(g.title)}</p></div></header><p class="build-summary">${esc(g.summary)}</p><p class="build-patch${!samePatch?' is-stale':''}">${esc(patchText)}${date?` · Проверка ${esc(date)}`:''}</p>${g.applicability_note?`<p class="muted">${esc(g.applicability_note)}</p>`:''}<section id="build-statistics" class="build-statistics" aria-label="Статистика и подбор предметов"></section><div id="build-inventory-host"></div><div class="build-cues"><h3>На что смотреть в матче</h3>${list(g.decision_cues)}</div>${depth}<section class="build-section"><h3>Старт и линия</h3>${items(g.starting_items)}${list(g.lane_plan)}</section><section class="build-section"><h3>Основной план покупки</h3><p class="muted">Проверь условие предмета перед тем, как продолжить сборку.</p>${items(g.core_items)}</section><section class="build-section"><h3>Когда поменять сборку</h3>${items(g.situational_items)}</section><div class="build-window"><p class="eyebrow">После ключевой покупки</p><p>${esc(g.power_window)}</p></div><details class="build-avoid"><summary>Каких ошибок избегать</summary>${list(g.avoid)}</details><section class="build-check"><h3>Проверка в следующей игре</h3><p>${esc(g.next_game_check)}</p><div class="button-row"><a class="button primary" href="/practice?position=${g.position}&topic=items">Потренировать решения →</a><a class="button subtle" href="/replays">Разобрать свой матч ↗</a></div></section><details class="build-sources"><summary>Основания руководства и источники</summary><p>Текст Narma объясняет выбор; источники ниже помогают проверить механику и изменения.</p><div>${sources(g.source_refs)}</div></details></article>`;
+      let displayedRows=[],inventorySignature=null;
+      const paintInventory=(suggested,note,evidence)=>{
+        const rows=suggested||inventoryItems.map(item=>({...item,evidence:evidence?.items?.[item.id]}));
+        const host=detail.querySelector('#build-inventory-host');
+        const signature=JSON.stringify([rows,note||g.final_note]);
+        if(signature===inventorySignature)return;
+        inventorySignature=signature;
+        const sameSlots=displayedRows.length===rows.length&&rows.every((item,index)=>item.id===displayedRows[index]?.id);
+        displayedRows=rows;
+        if(sameSlots&&host.querySelector('#build-slot-detail')){
+          host.querySelector('.build-inventory-heading p').textContent=note||g.final_note;
+          host.querySelector('#build-slot-detail').innerHTML=slotExplanation(rows[selectedSlots.get(g.id)||0]);
+          return;
+        }
+        host.innerHTML=inventory(rows,selectedSlots.get(g.id)||0,note||g.final_note);
+        host.querySelectorAll('[data-build-slot]').forEach(button=>button.addEventListener('click',()=>{
+          const index=Number(button.dataset.buildSlot);
+          if(!displayedRows[index])return;
+          selectedSlots.set(g.id,index);
+          host.querySelectorAll('[data-build-slot]').forEach(slot=>slot.setAttribute('aria-pressed',String(slot===button)));
+          host.querySelector('#build-slot-detail').innerHTML=slotExplanation(displayedRows[index]);
+        }));
+        imageFallbacks(host);
+      };
+      meta.mount(detail.querySelector('#build-statistics'),g,paintInventory);
       imageFallbacks(detail);
       updatePatchLabel();
     };

@@ -77,12 +77,16 @@ jobs:
       - name: Validate source and build Docker image before provisioning
         env:
           HERMES_SOURCE_GITHUB_TOKEN: ${{ github.token }}
+          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
         run: |
           python3 -m compileall -q services/video/narma_video ops/timeweb
           bash -n ops/timeweb/bootstrap.sh
           python3 -m unittest discover -s ops/timeweb/tests -p 'test_*.py' -v
           docker build --tag narma-video-check services/video
           docker run --rm narma-video-check python -c "import narma_video.api, narma_video.worker, narma_video.db; print('Runtime imports passed')"
+          if [[ -n "${STRATZ_API_TOKEN:-}" ]]; then
+            docker run --rm --env STRATZ_API_TOKEN narma-video-check python -m narma_video.build_meta --check
+          fi
           docker build --tag narma-replay-check --file services/replay/Dockerfile .
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
             --user 10001:10001 --memory 3g --cpus 2 --pids-limit 128 \
@@ -122,6 +126,7 @@ jobs:
       - name: Create or reuse one hourly billed pilot and start private services
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ACTIVATE_HERMES: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_hermes && 'true' || 'false' }}
           PREPARE_CHATGPT_AUTH: ${{ (github.event_name == 'push' || inputs.prepare_chatgpt_auth) && 'true' || 'false' }}

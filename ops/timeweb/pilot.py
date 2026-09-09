@@ -269,6 +269,7 @@ def ensure_https(ssh,release,hostname,host):
                            ('/my-learning',b'pool-learning'),('/assets/portal.js',b'/api/session'),
                            ('/assets/portal.css',b'--surface'),('/practice',b'/assets/explore.js'),
                            ('/builds',b'/assets/builds.css'),('/assets/builds.js',b'build-inventory-grid'),
+                           ('/assets/build-meta.js',b'/api/explore/builds?guide='),
                            ('/assets/dota/items/hurricane_pike.png',b'\x89PNG\r\n\x1a\n')):
         with opener.open(portal_origin+path,timeout=20) as response:
             content=response.read(256*1024)
@@ -310,6 +311,21 @@ def ensure_https(ssh,release,hostname,host):
     event('public_experience_ready',anonymous_access=True,hero_count=len(heroes),
           news_count=len(news),lesson_count=len(lessons),guide_count=len(guides),
           six_slot_guide_count=len(guides),practice_scenario_count=len(scenarios),provider_calls_created=0)
+    if os.environ.get('STRATZ_API_TOKEN', '').strip():
+        for attempt in range(12):
+            with opener.open(portal_origin+'/api/explore/builds?guide=viper-mid-pressure&rank=HERALD_GUARDIAN',timeout=20) as response:
+                evidence=json.loads(response.read(1024*1024))
+            if evidence.get('status')=='ready' and evidence.get('items'):
+                break
+            time.sleep(3)
+        else:
+            raise CheckError('public_build_statistics_not_ready')
+        if evidence.get('joint_build_winrate') is not None:
+            raise CheckError('invalid_joint_build_winrate_claim')
+        event('public_build_statistics_ready',source='STRATZ',rank='HERALD_GUARDIAN',
+              item_count=len(evidence['items']),week=evidence.get('week'),
+              popular_slots=len(evidence.get('plans',{}).get('popular',[])),
+              winrate_slots=len(evidence.get('plans',{}).get('winrate',[])),ai_generation_requests=0)
 
 
 def selected_project(cloud):
@@ -555,6 +571,7 @@ runcmd:
             # Secrets cross SSH only; none enters cloud-init, the source archive,
             # GitHub artifacts, command arguments or public logs.
             secret_input = json.dumps({"gemini_key":key, "release":sha,
+                                      "stratz_token":os.environ.get("STRATZ_API_TOKEN", "").strip(),
                                       "prepare_chatgpt_auth":prepare_chatgpt_auth}).encode()
             command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
             event("installing_private_services", server_id=server_id, release=sha)

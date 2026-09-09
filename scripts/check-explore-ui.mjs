@@ -16,7 +16,7 @@ const {chromium}=dependency('playwright'),axe=dependency('axe-core');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
 const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
-for(const filename of ['explore.js','practice.js','builds.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
+for(const filename of ['explore.js','practice.js','builds.js','build-meta.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
 files.set('/assets/dota/items/hurricane_pike.png',['dota/items/hurricane_pike.png','image/png']);
 const server=createServer(async(request,response)=>{
   const file=files.get(new URL(request.url,'http://localhost').pathname);
@@ -75,7 +75,7 @@ try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
     const errors=[],unexpected=[],apiRequests=[];
-    let newsFailed=false,buildPatchOverride=null;
+    let newsFailed=false,buildPatchOverride=null,metaStale=false;
     page.on('pageerror',error=>errors.push(error.message));
     page.on('console',message=>{if(/Content Security Policy|Refused to (?:execute|apply|load)/i.test(message.text()))errors.push(message.text());});
     page.on('dialog',async dialog=>{errors.push('Unexpected dialog: '+dialog.message());await dialog.dismiss();});
@@ -91,6 +91,12 @@ try {
       if(request.method()!=='GET'){unexpected.push(`${request.method()} ${url.pathname}`);status=405;body={};}
       else if(url.pathname==='/api/explore/heroes')body=heroes;
       else if(url.pathname==='/api/explore/updates'){status=newsFailed?503:200;body=newsFailed?{detail:'Synthetic unavailable news feed'}:buildPatchOverride||updates;}
+      else if(url.pathname==='/api/explore/builds'){
+        const g=buildCatalog.guides.find(g=>g.id===url.searchParams.get('guide'));
+        const evidence=Object.fromEntries((g?.final_items||[]).map(item=>[item.id,{id:item.id,matches:200,wins:120,winrate:60,average_minute:22.5}]));
+        const plan=(g?.final_items||[]).map(item=>({...item,evidence:evidence[item.id]}));
+        body={schema_version:'narma.build-meta.v1',guide:g?.id,rank:url.searchParams.get('rank'),status:metaStale?'stale':'ready',stale:metaStale,checked_at:new Date().toISOString(),source_url:'https://stratz.com/heroes/47',patch_status:'after_patch_release',items:evidence,plans:metaStale?{}:{popular:plan,winrate:plan}};
+      }
       else if(url.pathname==='/api/explore/learning')body=catalog(Number(url.searchParams.get('position'))||null);
       else{unexpected.push(url.pathname);status=404;body={};}
       await route.fulfill({status,json:body});
@@ -207,6 +213,26 @@ try {
     await pikeImage.waitFor({state:'visible'});
     await page.waitForFunction(()=>{const img=document.querySelector('.build-inventory img[src="/assets/dota/items/hurricane_pike.png"]');return img?.complete&&img.naturalWidth>0;});
     assert.equal(await page.locator('#build-slot-detail h4').textContent(),'Hurricane Pike','The bundled original loads without an external CDN request.');
+
+    await page.locator('#build-basis').selectOption('popular');
+    await page.waitForFunction(()=>document.querySelector('.build-inventory-heading p')?.textContent.includes('Подбор по частоте покупки'));
+    assert.equal(await page.locator('[data-build-slot]').count(),6);
+    assert.equal(await page.locator('#build-slot-detail').count(),1);
+    assert.match(await page.locator('#build-slot-detail').textContent(),/60%/);
+    assert.match(await page.locator('#build-slot-detail').textContent(),/200/);
+    await page.locator('#build-rank').selectOption('DIVINE_IMMORTAL');
+    await page.waitForFunction(()=>document.querySelector('.build-inventory-heading p')?.textContent.includes('Divine / Immortal'));
+    assert.equal(new URL(page.url()).searchParams.get('rank'),'DIVINE_IMMORTAL');
+    await page.locator('#build-basis').selectOption('winrate');
+    assert.match(await page.locator('.build-inventory-heading p').textContent(),/размера выборки/);
+    await accessibility('builds-statistics');
+    metaStale=true;
+    await page.locator('#build-rank').selectOption('CRUSADER_ARCHON');
+    await page.waitForFunction(()=>document.querySelector('[data-meta-status]')?.textContent.includes('сохранённая статистика'));
+    assert.match(await page.locator('.build-inventory-heading p').textContent(),/показан учебный план/);
+    assert.equal(await page.locator('[data-build-slot]').count(),6,'A source failure keeps the authored inventory available.');
+    assert.equal(await page.locator('#build-slot-detail').count(),1);
+    metaStale=false;
 
     await open('/learn');
     assert.equal(await page.locator('[data-stage]').count(),6);

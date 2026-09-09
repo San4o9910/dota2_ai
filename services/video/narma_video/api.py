@@ -7,6 +7,7 @@ import re
 import shutil
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -17,8 +18,19 @@ from pydantic import BaseModel, ConfigDict, Field
 from .config import PART_BYTES, MAX_VIDEO_BYTES, job_directory, media_root, service_token
 from .db import database
 from . import budget
+from .build_meta import cache as build_cache, router as build_meta_router
 
-app = FastAPI(title="NARMA match analysis", docs_url=None, redoc_url=None, openapi_url=None)
+
+@asynccontextmanager
+async def lifespan(app):
+    build_cache.start()
+    try:
+        yield
+    finally:
+        build_cache.stop()
+
+app = FastAPI(title="NARMA match analysis", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+app.include_router(build_meta_router)
 
 @app.middleware("http")
 async def access_log(request: Request, call_next):
