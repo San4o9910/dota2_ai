@@ -70,10 +70,22 @@ def main():
     args = parser.parse_args()
     started = time.monotonic()
     item_rows = json.loads(read_fixed_url(ITEMS_URL))["result"]["data"]["itemabilities"]
-    items = {row["name"].removeprefix("item_"): w._safe_text(row["name_english_loc"])
-             for row in item_rows if row.get("neutral_item_tier") == -1
-             and re.fullmatch(r"item_[a-z0-9_]{1,80}", row.get("name", ""))}
+    items = {}
+    for row in item_rows:
+        name = row.get("name_english_loc")
+        # Valve also returns hidden/deprecated/internal entries without a
+        # localized player-facing name. They are not valid inventory choices.
+        if (row.get("neutral_item_tier") != -1
+                or not re.fullmatch(r"item_[a-z0-9_]{1,80}", row.get("name", ""))
+                or not isinstance(name, str) or not 0 < len(name.strip()) <= 180
+                or re.search(r"[<>\x00-\x1f\x7f]", name)):
+            continue
+        items[row["name"].removeprefix("item_")] = name.strip()
+    if len(items) < 100:
+        raise w.WorkshopError()
+    print(json.dumps({"event": "item_catalog_validated", "items": len(items), "source_rows": len(item_rows)}), flush=True)
     hero_rows = json.loads(read_fixed_url(HEROES_URL))["result"]["data"]["heroes"]
+    print(json.dumps({"event": "hero_catalog_received", "rows": len(hero_rows)}), flush=True)
     heroes = {row["name"].removeprefix("npc_dota_hero_"): w._safe_text(row["name_english_loc"])
               for row in hero_rows if re.fullmatch(r"npc_dota_hero_[a-z0-9_]{1,80}", row.get("name", ""))}
     patches = json.loads(read_fixed_url(PATCHES_URL))["patches"]
