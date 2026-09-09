@@ -1,7 +1,7 @@
 import {createBuildMeta,itemEvidence} from './build-meta.js';
 import {adaptationOptions,applyAdaptation} from './build-adaptations.js';
 import {roleGuidance} from './role-guidance.js';
-import {WORKSHOP_PHASES,validateWorkshopFeed,workshopMatchesPosition,workshopRoleLabel,workshopFreshness} from './workshop-builds.js';
+import {WORKSHOP_PHASES,validateWorkshopFeed,workshopMatchesPosition,workshopRoleLabel,workshopFreshness,sortWorkshopGuides} from './workshop-builds.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const positions = {1:'Керри',2:'Мидер',3:'Офлейнер',4:'Поддержка',5:'Полная поддержка'};
 const isWorkshop = guide => guide?.source === 'workshop';
@@ -274,7 +274,8 @@ export async function mountBuilds(root) {
     };
     const render=(preserveAuthoredDetail=false)=>{
       const normalized=query.trim().toLocaleLowerCase('ru-RU');
-      const rows=guides.filter(g=>matchesPosition(g,position)&&(sourceFilter==='all'||(sourceFilter==='workshop')===isWorkshop(g))&&`${g.hero_name} ${g.title} ${g.hero_slug} ${g.author||''}`.toLocaleLowerCase('ru-RU').includes(normalized));
+      const filtered=guides.filter(g=>matchesPosition(g,position)&&(sourceFilter==='all'||(sourceFilter==='workshop')===isWorkshop(g))&&`${g.hero_name} ${g.title} ${g.hero_slug} ${g.author||''}`.toLocaleLowerCase('ru-RU').includes(normalized));
+      const rows=[...filtered.filter(guide=>!isWorkshop(guide)),...sortWorkshopGuides(filtered.filter(isWorkshop),workshopStatusFeed(),position)];
       const previousId=selected?.id;
       selected=rows.find(guide=>guide.id===selected?.id)||rows[0]||null;
       content.querySelector('#build-count').textContent=`Руководств: ${rows.length}`;

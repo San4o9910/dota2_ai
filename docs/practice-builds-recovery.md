@@ -75,3 +75,11 @@ excludes it from the current-patch coverage count, and tells the player that
 the item list is incomplete. Stronger stale, patch_changed and unknown states
 are retained with an additional completeness message. IDs are validated and
 not shown as guessed item names. Native regression checks cover this behavior.
+
+## Follow-up: default ordering of community guides
+Previously the filtered Workshop list retained seed/author order, allowing an
+older-patch guide to become the default when a current-patch guide was present.
+Community guides now sort by freshness, exact selected position, newest valid
+author update and stable guide id. Existing authored guide ordering remains
+unchanged. Selection is still retained by id before choosing the sorted first
+row, so an explicit URL or selected card is not silently replaced.

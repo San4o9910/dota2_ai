@@ -59,7 +59,7 @@ export function workshopFreshness(guide, feed, now = Date.now()) {
   const incompleteItems = Array.isArray(guide.unknown_item_ids) && guide.unknown_item_ids.length > 0;
   const fetched = Date.parse(guide.fetched_at || '');
   const updated = Date.parse(guide.source_updated_at || '');
-  if (!Number.isFinite(fetched) || fetched > now + 300000 || now - fetched >= 24 * 60 * 60 * 1000) state = 'stale';
+  if (state === 'stale' || !Number.isFinite(fetched) || fetched > now + 300000 || now - fetched >= 24 * 60 * 60 * 1000) state = 'stale';
   else if (!/^\d{1,2}\.\d{1,3}[a-z]?$/.test(feed.latest_patch || '')) state = 'unknown';
   else if (feed.latest_patch && guide.source_patch !== feed.latest_patch) state = 'patch_changed';
   else if (state === 'current_patch' && (!Number.isFinite(updated) || updated > now + 300000 || now - updated > 30 * 24 * 60 * 60 * 1000)) state = 'review_due';
@@ -74,4 +74,25 @@ export function workshopFreshness(guide, feed, now = Date.now()) {
   }[state] || 'Не удалось подтвердить актуальность сборки.';
   if (incompleteItems && state !== 'review_due') text += ' Часть предметов автора не удалось распознать: показан неполный список. Сверь оригинал перед покупкой.';
   return { state, stale: state !== 'current_patch', text, incompleteItems };
+}
+
+export function sortWorkshopGuides(guides, feed, position, now = Date.now()) {
+  const stateOrder = { current_patch: 0, review_due: 1, unknown: 2, patch_changed: 3, stale: 4 };
+  const selectedPosition = Number(position);
+  const hasPosition = Number.isInteger(selectedPosition) && selectedPosition >= 1 && selectedPosition <= 5;
+  const keys = new Map(guides.map(guide => {
+    const updated = Date.parse(guide.source_updated_at || '');
+    return [guide, {
+      freshness: stateOrder[workshopFreshness(guide, feed, now).state] ?? 5,
+      exact: hasPosition && guide.position_exact === true && guide.position === selectedPosition ? 0 : 1,
+      updated: Number.isFinite(updated) && updated <= now + 300000 ? updated : -Infinity,
+    }];
+  }));
+  return guides.slice().sort((one, two) => {
+    const a = keys.get(one), b = keys.get(two);
+    if (a.freshness !== b.freshness) return a.freshness - b.freshness;
+    if (a.exact !== b.exact) return a.exact - b.exact;
+    if (a.updated !== b.updated) return a.updated > b.updated ? -1 : 1;
+    return String(one.id) < String(two.id) ? -1 : String(one.id) > String(two.id) ? 1 : 0;
+  });
 }
