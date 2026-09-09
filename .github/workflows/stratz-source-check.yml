@@ -7,6 +7,8 @@ on:
       - .github/workflows/stratz-source-check.yml
       - scripts/inspect-stratz-builds.py
       - scripts/check-stratz-build-data.py
+      - services/video/narma_video/build_meta.py
+      - services/video/narma_video/build_statistics.py
   workflow_dispatch:
 
 permissions:
@@ -38,3 +40,10 @@ jobs:
           fi
           python3 scripts/inspect-stratz-builds.py
           python3 scripts/check-stratz-build-data.py
+      - name: Verify the production adapter without server deployment
+        env:
+          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
+          PYTHONPATH: services/video
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet fastapi==0.141.1 httpx==0.28.1
+          python3 -m narma_video.build_meta --check

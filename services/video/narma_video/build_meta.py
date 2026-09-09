@@ -20,6 +20,9 @@ ENDPOINT = "https://api.stratz.com/graphql"
 HOUR = 3600
 WEEK = 604800
 MAX_BYTES = 2 * 1024 * 1024
+SAFE_ERRORS = {"source_unavailable","rate_limited","configuration","response_limit","invalid_source",
+               "cohort_mismatch","duplicate_bucket","mixed_weeks","empty_source",
+               "authentication_failed","access_denied","source_timeout","connection_error","network_error"}
 META_QUERY = """query NarmaBuildCatalog {
   constants { gameVersions { id name asOfDateTime }
     items(language:ENGLISH) { id name displayName shortName
@@ -48,7 +51,7 @@ def graphql(token, query, operation, variables=None):
                              "User-Agent": "NarmaVision-Builds/1.0"},
                     json={"query": query, "operationName": operation, "variables": variables or {}}) as response:
                 if response.status_code != 200:
-                    raise SourceError("rate_limited" if response.status_code == 429 else "source_unavailable")
+                    raise SourceError({401:"authentication_failed",403:"access_denied",429:"rate_limited"}.get(response.status_code,"source_unavailable"))
                 body = bytearray()
                 deadline = time.monotonic() + 15
                 for chunk in response.iter_bytes():
@@ -61,6 +64,12 @@ def graphql(token, query, operation, variables=None):
         return data["data"]
     except SourceError:
         raise
+    except httpx.TimeoutException:
+        raise SourceError("source_timeout") from None
+    except httpx.ConnectError:
+        raise SourceError("connection_error") from None
+    except httpx.RequestError:
+        raise SourceError("network_error") from None
     except Exception:
         raise SourceError("source_unavailable") from None
 
@@ -137,7 +146,7 @@ class BuildCache:
                     with self.lock:
                         self.errors.add(key)
                         self.due[key] = self.now() + 300
-                    code = str(exc) if isinstance(exc, SourceError) and str(exc) in {"source_unavailable","rate_limited","configuration","response_limit","invalid_source","cohort_mismatch","duplicate_bucket","mixed_weeks"} else "invalid_source"
+                    code = str(exc) if isinstance(exc, SourceError) and str(exc) in SAFE_ERRORS else "invalid_source"
                     print(json.dumps({"event":"build_statistics_refresh_failed","code":code}),flush=True)
                     if self.stop_event.wait(300):
                         break  # One global backoff prevents a provider outage from multiplying requests.
@@ -205,7 +214,7 @@ if __name__ == "__main__":
         if not row["items"]:
             raise SourceError("empty_source")
     except Exception as exc:
-        code = str(exc) if isinstance(exc,SourceError) and str(exc) in {"source_unavailable","rate_limited","configuration","response_limit","invalid_source","cohort_mismatch","duplicate_bucket","mixed_weeks","empty_source"} else "invalid_source"
+        code = str(exc) if isinstance(exc,SourceError) and str(exc) in SAFE_ERRORS else "invalid_source"
         print(json.dumps({"event":"stratz_adapter_check_failed","code":code}))
         raise SystemExit(1) from None
     print(json.dumps(receipt))
