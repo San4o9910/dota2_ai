@@ -54,6 +54,15 @@ def response(document, *, status=200, url=inspector.ENDPOINT, headers=None):
 
 
 class StratzPreflightTest(unittest.TestCase):
+    def test_format_validation_does_not_claim_authentication_or_query_schema(self):
+        output=io.StringIO()
+        with patch.dict(inspector.os.environ,{"STRATZ_API_TOKEN":SECRET}),redirect_stdout(output),patch.object(inspector,"inspect_schema") as query:
+            status=inspector.main(format_only=True)
+        self.assertEqual(status,0)
+        self.assertNotIn(SECRET,output.getvalue())
+        self.assertFalse(json.loads(output.getvalue())["authentication_checked"])
+        query.assert_not_called()
+
     def run_main(self, token=SECRET):
         output = io.StringIO()
         with patch.dict(inspector.os.environ, {"STRATZ_API_TOKEN": token}), redirect_stdout(output):

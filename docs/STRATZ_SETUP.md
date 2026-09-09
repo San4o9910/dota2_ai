@@ -77,9 +77,14 @@ a supported provider dataset with the missing dimensions.
 
 ## Checks and operations
 
-`STRATZ source verification` is a separate read-only GitHub workflow for schema and
-bounded aggregate diagnostics, without deployment or server credentials.
-The Timeweb deployment also runs the schema check and
+`STRATZ source verification` is a separate read-only GitHub workflow for bounded
+aggregate diagnostics, without deployment or server credentials. Full schema
+inspection is an explicit optional diagnostic, not a repeated release operation.
+The schema was already inspected successfully; later repeated introspection
+requests intermittently returned HTTP 403 while a purchase request succeeded.
+The release gate therefore validates the actual required data operation, rather
+than requiring unrelated full introspection access on every deployment.
+The Timeweb deployment validates credential format (explicitly not authentication), then runs
 `python -m narma_video.build_meta --check` in the built image, then verifies the
 anonymous live `/api/explore/builds` route after rollout. Offline tests exercise
 cohort validation, sample-size selection, compatibility, stale persistence,

@@ -198,7 +198,7 @@ def inspect_schema(token: str) -> dict:
             "types": inspected, "related_types_omitted": max(0, len(candidates) - len(selected))}
 
 
-def main() -> int:
+def main(format_only: bool = False) -> int:
     token = os.environ.get("STRATZ_API_TOKEN", "").strip()
     if not token:
         print(json.dumps({"event": "source_not_configured", "source": "stratz", "configured": False,
@@ -207,7 +207,9 @@ def main() -> int:
     try:
         if len(token) > 8192 or not TOKEN.fullmatch(token):
             raise CheckError("invalid_token_format")
-        result = inspect_schema(token)
+        result = ({"event":"stratz_credential_format_valid","configured":True,
+                   "authentication_checked":False,"schema_inspected":False,"popular_builds_ready":False}
+                  if format_only else inspect_schema(token))
     except CheckError as error:
         code = str(error) if str(error) in ERROR_CODES else "internal_error"
         print(json.dumps({"event": "stratz_preflight_failed", "source": "stratz", "code": code,
@@ -223,4 +225,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if sys.argv[1:] not in ([], ["--format-only"]):
+        sys.exit(2)
+    sys.exit(main(format_only=sys.argv[1:]==["--format-only"]))

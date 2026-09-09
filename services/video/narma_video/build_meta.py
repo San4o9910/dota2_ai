@@ -216,6 +216,7 @@ if __name__ == "__main__":
             raise SourceError("empty_source")
     except Exception as exc:
         code = str(exc) if isinstance(exc,SourceError) and str(exc) in SAFE_ERRORS else "invalid_source"
-        print(json.dumps({"event":"stratz_adapter_check_failed","code":code}))
+        print(json.dumps({"event":"stratz_adapter_check_failed","code":code,
+                          "validated_context":getattr(exc,"context",None) if code=="cohort_mismatch" else None}))
         raise SystemExit(1) from None
     print(json.dumps(receipt))

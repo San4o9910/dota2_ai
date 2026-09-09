@@ -69,7 +69,11 @@ def purchases(rows, items, hero, position, rank):
         if integer(row.get("heroId"), 1, 1000) != hero:
             raise SourceError("cohort_mismatch")
         if row.get("position") not in {None, "FILTERED", f"POSITION_{position}"} or row.get("bracketBasicIds") not in {None, "FILTERED", rank}:
-            raise SourceError("cohort_mismatch")
+            error=SourceError("cohort_mismatch")
+            error.context={"hero_id":hero,
+                "position":row.get("position") if row.get("position") in {None,"ALL","UNKNOWN","FILTERED",*(f"POSITION_{n}" for n in range(1,6))} else "UNRECOGNIZED",
+                "rank":row.get("bracketBasicIds") if row.get("bracketBasicIds") in {None,"ALL","UNCALIBRATED","FILTERED",*RANKS} else "UNRECOGNIZED"}
+            raise error
         week = integer(row.get("week"), 2000, 10000)
         weeks.add(week)
         instance = integer(row.get("instance"), 0, 100)
