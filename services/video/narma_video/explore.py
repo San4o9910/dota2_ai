@@ -19,6 +19,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Response
 
 from .curriculum import get_catalog
+from .learning_lessons import get_lessons
 
 
 SCHEMA = "narma.explore.v1"
@@ -331,4 +332,12 @@ def learning(response: Response, position: str | None = Query(default=None)):
     if position is not None and not re.fullmatch(r"[1-5]", position):
         raise HTTPException(422, "Выбери позицию от 1 до 5.")
     response.headers["Cache-Control"] = "public, max-age=300"
-    return get_catalog(int(position) if position is not None else None)
+    role = int(position) if position is not None else None
+    return {**get_catalog(role), **get_lessons(role)}
+
+
+@router.get("/workshop-builds")
+def workshop_builds(response: Response):
+    from .workshop_builds import get_payload as workshop_payload
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return workshop_payload(get_payload("updates"))

@@ -860,6 +860,7 @@ function learningExerciseCard(exercise,{hero,position,jobId,suggestion,currentPl
   const details=node('details',undefined,'learning-details');details.append(node('summary','Когда применять и как тренировать'));
   for(const [label,value] of [['Сигнал',exercise.signal],['Упражнение',exercise.drill],['Как проверить',exercise.measurement],['Пример',exercise.mini_lesson]])if(value){const part=node('div',undefined,'learning-instruction');part.append(node('strong',label),node('p',value,'help'));details.append(part);}
   card.append(details);
+  if(position && exercise.stage_id){const link=node('a','Разобрать тему подробнее →','quiet');link.href='/learn?position='+encodeURIComponent(position)+'&stage='+encodeURIComponent(exercise.stage_id);card.append(link);}
   if(suggestion?.evidence_ids?.length&&jobId===state.selected){const links=node('div',undefined,'evidence-links');for(const id of suggestion.evidence_ids.slice(0,2)){const ref=state.evidence.get(id);if(!ref)continue;const button=node('button',`${stamp(ref.time)} · ${eventLabels[ref.type]??'Эпизод'}`,'quiet');button.type='button';button.addEventListener('click',()=>focusEvidence(id));links.append(button);}card.append(links);}
   if(hero&&position&&jobId)learningStartButton(card,exercise,jobId,currentPlan);
   else card.append(node('p',hero?position?'Для сохранения практики нужен разбор этого героя на выбранной позиции.':'Укажи позицию в матче, чтобы сохранить практику.':'Для сохранения практики выбери героя и позицию. Упражнения можно изучать без реплея.','help'));

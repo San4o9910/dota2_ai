@@ -17,7 +17,7 @@ const {chromium}=dependency('playwright'),axe=dependency('axe-core');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
 const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
-for(const filename of ['explore.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
+for(const filename of ['explore.js','learning-chapter.js','workshop-builds.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
 files.set('/assets/dota/items/hurricane_pike.png',['dota/items/hurricane_pike.png','image/png']);
 const server=createServer(async(request,response)=>{
   const file=files.get(new URL(request.url,'http://localhost').pathname);
@@ -77,7 +77,7 @@ const updates={schema_version:'narma.explore.v1',source_url:'https://www.dota2.c
   {id:'qa-lookalike',title:'Поддельный адрес Valve',category:'news',url:'https://store.steampowered.com.evil.example.test/news',published_at:stamp},
 ]};
 // Exercise content comes from the actual dependency-free production catalog.
-const catalogByPosition=JSON.parse(execFileSync(process.env.NARMA_TEST_PYTHON||'python3',['-c',"import json,sys; sys.path.insert(0,sys.argv[1]); from narma_video import curriculum as module; print(json.dumps([module.get_catalog(position or None) for position in range(6)],ensure_ascii=False))",path.resolve(root,'..','..')],{encoding:'utf8'}));
+const catalogByPosition=JSON.parse(execFileSync(process.env.NARMA_TEST_PYTHON||'python3',['-c',"import json,sys; sys.path.insert(0,sys.argv[1]); from narma_video import curriculum as module; from narma_video.learning_lessons import get_lessons; print(json.dumps([{**module.get_catalog(position or None), **get_lessons(position or None)} for position in range(6)],ensure_ascii=False))",path.resolve(root,'..','..')],{encoding:'utf8'}));
 const realExercises=new Map(catalogByPosition.flatMap(catalog=>catalog.exercises).map(exercise=>[exercise.id,exercise]));
 assert.equal(realExercises.size,13,'The full authored curriculum is available to the public learning test.');
 const catalog=position=>{const value=structuredClone(catalogByPosition[position||0]);value.sources.push({id:'qa-unsafe',title:'Небезопасный тестовый источник',url:'javascript:alert(1)'});for(const exercise of value.exercises)exercise.source_refs.push('qa-unsafe');return value;};
@@ -324,6 +324,12 @@ try {
       assert.equal(await page.locator('#learning-library .role-guidance > p').first().textContent(),catalogByPosition[Number(position)].role_context.lane_priority);
       for(const stage of catalogByPosition[Number(position)].stages){
         await page.locator(`[data-stage="${stage.id}"]`).click();
+        const chapter=catalogByPosition[Number(position)].lessons.find(row=>row.stage_ids.includes(stage.id));
+        assert.ok(chapter);
+        assert.equal(await page.locator('.learning-chapter').getAttribute('data-lesson'),chapter.id);
+        assert.equal(await page.locator('.chapter-example ol li').count(),chapter.worked_example.steps.length);
+        assert.equal(await page.locator('.chapter-self-check details').count(),chapter.self_check.length);
+        assert.equal(await page.locator('.chapter-self-check details[open]').count(),0,'Self-check answers start hidden.');
         for(const card of await page.locator('#lesson-content [data-exercise]').all()){
           const id=await card.getAttribute('data-exercise'),exercise=catalogByPosition[Number(position)].exercises.find(item=>item.id===id);assert.ok(exercise);
           assert.equal(await card.locator('h3').textContent(),exercise.title);
@@ -374,9 +380,11 @@ try {
     await practice.locator('[data-practice-filter="topic"]').selectOption('lane');
     assert.equal(await practice.locator('[data-practice-filter="difficulty"]').inputValue(),'foundations');
     const shortCount=scenarios.filter(scenario=>scenario.difficulty==='foundations'&&scenario.topic==='lane'&&scenario.positions.includes(5)).length;
-    assert.ok(shortCount>0&&shortCount<5);
-    assert.match(await practice.locator('[data-practice-availability]').textContent(),new RegExp(`В серии будет ${shortCount}`),'A short selection advertises its actual length.');
+    assert.ok(shortCount>=5,'The introductory support lane topic must include at least five meaningful cases.');
+    assert.equal(await practice.locator('[data-practice-filter="length"]').inputValue(),'10','The default session has ten questions.');
+    assert.match(await practice.locator('[data-practice-availability]').textContent(),new RegExp(`В серии будет ${Math.min(shortCount,10)}`),'A short selection advertises its actual length.');
     await practice.locator('[data-practice-reset-filters]').click();
+    await practice.locator('[data-practice-filter="length"]').selectOption('5');
     await practice.locator('[data-practice-start]').focus();await practice.locator('[data-practice-start]').press('Enter');
     const seen=new Set();
     for(let index=0;index<5;index++){
@@ -400,10 +408,10 @@ try {
     await accessibility('practice-result');
     await practice.locator('[data-practice-retry]').focus();await practice.locator('[data-practice-retry]').press('Enter');
     await practice.locator('[data-scenario-id]').waitFor();
-    assert.equal(await practice.locator('[data-choice-id]:enabled').count(),3,'Retry starts a fresh, unanswered question.');
+    assert.ok([3,4].includes(await practice.locator('[data-choice-id]:enabled').count()),'Retry starts a fresh, unanswered question.');
     assert.equal(await practice.locator('[data-practice-retry]').count(),0);
     for(const difficulty of ['application','advanced']){
-      await open('/practice?difficulty='+difficulty);
+      await open('/practice?difficulty='+difficulty+'&length=5');
       await practice.locator('[data-practice-start]').waitFor();
       assert.equal(await practice.locator('[data-practice-filter="difficulty"]').inputValue(),difficulty,'A direct training link preserves its selected depth.');
       await practice.locator('[data-practice-start]').click();
