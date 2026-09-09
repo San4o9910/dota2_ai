@@ -87,7 +87,7 @@ try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
     const errors=[],unexpected=[],apiRequests=[];
-    let newsFailed=false,buildPatchOverride=null,metaStale=false,authoredMode=true,metaFailed=false;
+    let newsFailed=false,buildPatchOverride=null,metaStale=false,authoredMode=true,metaFailed=false,workshopEnabled=false;
     page.on('pageerror',error=>errors.push(error.message));
     page.on('console',message=>{if(/Content Security Policy|Refused to (?:execute|apply|load)/i.test(message.text()))errors.push(message.text());});
     page.on('dialog',async dialog=>{errors.push('Unexpected dialog: '+dialog.message());await dialog.dismiss();});
@@ -103,6 +103,7 @@ try {
       if(request.method()!=='GET'){unexpected.push(`${request.method()} ${url.pathname}`);status=405;body={};}
       else if(url.pathname==='/api/explore/heroes')body=heroes;
       else if(url.pathname==='/api/explore/updates'){status=newsFailed?503:200;body=newsFailed?{detail:'Synthetic unavailable news feed'}:buildPatchOverride||updates;}
+      else if(url.pathname==='/api/explore/workshop-builds')body=workshopEnabled?workshopFixture():{schema_version:'narma.workshop-builds.v1',checked_at:new Date().toISOString(),stale:false,latest_patch:'7.41e',refresh_interval_seconds:86400,source_review_days:30,coverage:{heroes:0,total_heroes:127,guides:0,current_patch_guides:0},guides:[],errors:[]};
       else if(url.pathname==='/api/explore/build-reviews')body={schema_version:'narma.build-reviews.v1',guides:Object.fromEntries(buildCatalog.guides.map(g=>[g.id,{patch_notes:g.patch_notes||[]}]))};
       else if(url.pathname==='/api/explore/builds'){
         if(metaFailed){await route.fulfill({status:503,json:{detail:'Synthetic outage'}});return;}
@@ -461,6 +462,28 @@ try {
         assert.equal(await practice.locator('.practice-score').textContent(),'1 из 1');
         assert.equal(await practice.locator('[data-practice-repeat-missed]').count(),0,'Correct focused retry does not invent remaining mistakes.');
       }
+    }
+    for(const length of [10,15]){
+      await open('/practice?length='+length);
+      await practice.locator('[data-practice-start]').waitFor();
+      assert.equal(await practice.locator('[data-practice-filter="length"]').inputValue(),String(length));
+      await practice.locator('[data-practice-start]').click();
+      const roundIds=new Set();
+      for(let index=0;index<length;index++){
+        const card=practice.locator('[data-scenario-id]');await card.waitFor();
+        const id=await card.getAttribute('data-scenario-id'),scenario=scenarios.find(row=>row.id===id);
+        assert.ok(scenario);assert.equal(roundIds.has(id),false);roundIds.add(id);
+        if(index===0)await practice.locator('[data-practice-rationale]').fill('Личная проверка рассуждения: не сохранять эту фразу.');
+        await practice.locator('[data-choice-id="'+scenario.correctChoiceId+'"]').click();
+        await practice.locator('[data-practice-next]').waitFor();
+        assert.ok(await practice.locator('[data-practice-teaching]').count()>0,'Feedback teaches a decision process, not just a correct choice.');
+        await practice.locator('[data-practice-next]').click();
+      }
+      await practice.locator('[data-practice-retry]').waitFor();
+      assert.equal(await practice.locator('.practice-score').textContent(),length+' из '+length);
+      const history=await page.evaluate(()=>localStorage.getItem('narma.practice.v1.history'));
+      assert.equal(history.includes('Личная проверка рассуждения'),false);
+      assert.equal(JSON.parse(history).sessions.at(-1).total,length);
     }
     assert.ok(apiRequests.every(request=>request.path.startsWith('/api/explore/')&&request.method==='GET'),'Public visitors never invoke auth, replay, Hermes, or model APIs.');
     assert.deepEqual(unexpected,[],'The synthetic public UI run never contacts live sources or providers.');
