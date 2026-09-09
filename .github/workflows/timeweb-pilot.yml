@@ -48,6 +48,10 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python3 ops/timeweb/gemini_preflight.py
+      - name: Inspect optional STRATZ schema without fetching matches
+        env:
+          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
+        run: python3 ops/timeweb/check_stratz.py
       - name: Verify pinned existing server before building
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}

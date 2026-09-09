@@ -25,6 +25,27 @@ or a promise to reach a rank.
   alternatives and discuss information or conditions that change the decision.
 - Background motion is subtle and stops for reduced-motion preferences.
 
+## Build inventory and freshness
+
+Each of the 12 editorial guides has six final inventory items, displayed as two
+rows of three. Selecting a slot changes one explanation panel. This is a possible
+late-game plan, not a mandatory purchase sequence or measured winning build.
+Starting purchases and situational alternatives remain separate. Support guides
+preserve the priority of detection, vision and buyback over filling inventory.
+
+While the builds page is visible, it rechecks the cached official patch feed once
+per minute and when the player returns to the tab. A new patch, unavailable or
+stale feed, or an editorial check older than seven days removes the recently
+checked state. These checks update the freshness label; they do not rewrite item
+choices automatically or establish statistical popularity. Item mechanics have
+their own final_checked_at date, separate from the full guide review date.
+
+An authorized statistical source remains required for popular/high-win-rate
+collections. See STRATZ_SETUP.md for the prepared credential and schema check.
+No guide win rates, global pick rates, or winning combinations are synthesized
+from the individual items. News freshness alone never makes a build statistically
+meta-current.
+
 ## What is still required for a paid service
 
 1. Finish the owner's ChatGPT authorization and verify one real review with

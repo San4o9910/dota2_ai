@@ -3,6 +3,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 
 // Browser regression fixtures only. Production never imports or serves this file.
@@ -30,6 +31,21 @@ const scenarios=JSON.parse(await readFile(path.join(root,'practice-scenarios.jso
 const buildCatalog=JSON.parse(await readFile(path.join(root,'build-guides.json'),'utf8'));
 assert.equal(buildCatalog.schema_version,'narma.build-guides.v1');
 assert.ok(buildCatalog.guides.length>=2,'Build selection uses the actual authored library.');
+for(const guide of buildCatalog.guides){
+  assert.equal(guide.final_items?.length,6,`${guide.id}: a complete inventory has six items.`);
+  assert.equal(new Set(guide.final_items.map(item=>item.id)).size,6,`${guide.id}: no accidental duplicate slots.`);
+  assert.ok(guide.final_items.every(item=>/^[a-z0-9_]{1,80}$/.test(item.id)&&item.name&&item.why));
+}
+const {buildFreshness}=await import(pathToFileURL(path.join(root,'builds.js')));
+const freshnessNow=Date.parse('2026-09-09T12:00:00Z');
+const checkedGuide={verified_patch:'7.41e',checked_at:'2026-09-09'};
+const currentFeed={latest_patch:{version:'7.41e'},checked_at:'2026-09-09T11:59:00Z',stale:false,errors:[]};
+assert.equal(buildFreshness(checkedGuide,currentFeed,freshnessNow).state,'reviewed');
+assert.equal(buildFreshness(checkedGuide,{...currentFeed,stale:true},freshnessNow).state,'unknown','A cached matching patch is not proof of currentness.');
+assert.equal(buildFreshness(checkedGuide,{...currentFeed,checked_at:'2026-09-08'},freshnessNow).state,'unknown');
+assert.equal(buildFreshness(checkedGuide,{...currentFeed,latest_patch:{version:'7.42'}},freshnessNow).state,'patch_changed');
+assert.equal(buildFreshness({...checkedGuide,checked_at:'2026-08-01'},currentFeed,freshnessNow).state,'review_due','A long-lived patch does not keep an old guide current forever.');
+assert.equal(buildFreshness(checkedGuide,undefined,freshnessNow).state,'unknown');
 assert.ok(scenarios.length>=5,'The actual authored trainer must contain enough distinct questions.');
 assert.equal(scenarios.find(row=>row.id==='lane-last-hit')?.correctChoiceId,'b','The known last-hit scenario must reward timing damage after the allied projectile.');
 const malicious='<img src=x onerror=alert(1)>',stamp='2026-01-02T12:00:00Z';
@@ -57,7 +73,7 @@ try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
     const errors=[],unexpected=[],apiRequests=[];
-    let newsFailed=false;
+    let newsFailed=false,buildPatchOverride=null;
     page.on('pageerror',error=>errors.push(error.message));
     page.on('console',message=>{if(/Content Security Policy|Refused to (?:execute|apply|load)/i.test(message.text()))errors.push(message.text());});
     page.on('dialog',async dialog=>{errors.push('Unexpected dialog: '+dialog.message());await dialog.dismiss();});
@@ -72,7 +88,7 @@ try {
       let body,status=200;
       if(request.method()!=='GET'){unexpected.push(`${request.method()} ${url.pathname}`);status=405;body={};}
       else if(url.pathname==='/api/explore/heroes')body=heroes;
-      else if(url.pathname==='/api/explore/updates'){status=newsFailed?503:200;body=newsFailed?{detail:'Synthetic unavailable news feed'}:updates;}
+      else if(url.pathname==='/api/explore/updates'){status=newsFailed?503:200;body=newsFailed?{detail:'Synthetic unavailable news feed'}:buildPatchOverride||updates;}
       else if(url.pathname==='/api/explore/learning')body=catalog(Number(url.searchParams.get('position'))||null);
       else{unexpected.push(url.pathname);status=404;body={};}
       await route.fulfill({status,json:body});
@@ -138,6 +154,28 @@ try {
     const selectedGuide=page.locator('#build-detail .build-guide');
     assert.equal(await selectedGuide.getAttribute('data-guide-id'),initialGuide.id);
     assert.equal(await selectedGuide.locator('h2').textContent(),initialGuide.hero_name);
+    const slots=selectedGuide.locator('[data-build-slot]');
+    assert.equal(await slots.count(),6);
+    assert.deepEqual(await slots.locator('img').evaluateAll(images=>images.map(img=>img.getAttribute('src'))),initialGuide.final_items.map(item=>`https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${item.id}.png`));
+    assert.equal(await selectedGuide.locator('#build-slot-detail h4').textContent(),initialGuide.final_items[0].name);
+    await slots.nth(5).focus();await slots.nth(5).press('Enter');
+    assert.equal(await selectedGuide.locator('[data-build-slot][aria-pressed="true"]').count(),1);
+    assert.equal(await slots.nth(5).getAttribute('aria-pressed'),'true');
+    assert.equal(await selectedGuide.locator('#build-slot-detail h4').count(),1);
+    assert.equal(await selectedGuide.locator('#build-slot-detail h4').textContent(),initialGuide.final_items[5].name);
+    const slotBoxes=await slots.evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect();return {x:Math.round(b.x),y:Math.round(b.y)};}));
+    assert.equal(new Set(slotBoxes.map(b=>b.x)).size,3,'Inventory keeps three columns.');
+    assert.equal(new Set(slotBoxes.map(b=>b.y)).size,2,'Inventory keeps two rows.');
+    buildPatchOverride={...updates,stale:false,errors:[],checked_at:new Date().toISOString(),latest_patch:{version:'7.999'}};
+    await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+    await page.waitForFunction(()=>document.querySelector('.build-patch')?.textContent.includes('7.999'));
+    assert.equal(await selectedGuide.locator('.build-patch').getAttribute('data-freshness'),'patch_changed');
+    assert.equal(await selectedGuide.locator('#build-slot-detail h4').textContent(),initialGuide.final_items[5].name,'A patch refresh preserves the selected item.');
+    newsFailed=true;
+    await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+    await page.waitForFunction(()=>document.querySelector('.build-patch')?.dataset.freshness==='unknown');
+    assert.equal(await selectedGuide.locator('#build-slot-detail h4').textContent(),initialGuide.final_items[5].name,'A feed outage preserves useful guide content.');
+    newsFailed=false;buildPatchOverride=null;
     const expectedItems=[...initialGuide.starting_items,...initialGuide.core_items,...initialGuide.situational_items];
     assert.ok(expectedItems.length>0);
     assert.deepEqual(await selectedGuide.locator('.build-item h4').allTextContents(),expectedItems.map(item=>item.name));

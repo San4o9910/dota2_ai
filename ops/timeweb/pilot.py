@@ -268,7 +268,7 @@ def ensure_https(ssh,release,hostname,host):
     for path,signature in (('/',b'NARMA VISION'),('/replays',b'/assets/portal.js'),
                            ('/my-learning',b'pool-learning'),('/assets/portal.js',b'/api/session'),
                            ('/assets/portal.css',b'--surface'),('/practice',b'/assets/explore.js'),
-                           ('/builds',b'/assets/builds.css')):
+                           ('/builds',b'/assets/builds.css'),('/assets/builds.js',b'build-inventory-grid')):
         with opener.open(portal_origin+path,timeout=20) as response:
             content=response.read(256*1024)
             if signature not in content or b'opendota' in content.lower():
@@ -302,12 +302,13 @@ def ensure_https(ssh,release,hostname,host):
         scenarios=json.loads(response.read(1024*1024)).get('scenarios',[])
     if (len(heroes)<100 or not news or not lessons
             or len(guides)<10 or len(scenarios)<25
+            or any(len(guide.get('final_items',[]))!=6 for guide in guides)
             or not public_data['heroes'].get('checked_at')
             or not public_data['updates'].get('checked_at')):
         raise CheckError('public_experience_content_invalid')
     event('public_experience_ready',anonymous_access=True,hero_count=len(heroes),
           news_count=len(news),lesson_count=len(lessons),guide_count=len(guides),
-          practice_scenario_count=len(scenarios),provider_calls_created=0)
+          six_slot_guide_count=len(guides),practice_scenario_count=len(scenarios),provider_calls_created=0)
 
 
 def selected_project(cloud):
