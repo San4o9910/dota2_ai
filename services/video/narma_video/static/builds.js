@@ -104,8 +104,12 @@ export async function mountBuilds(root) {
       const statusFeed=workshopStatusFeed();
       const heroCount=new Set(workshopFeed.guides.map(guide=>guide.hero_slug)).size;
       const currentCount=workshopFeed.guides.filter(guide=>workshopFreshness(guide,statusFeed).state==='current_patch').length;
+      const samePatchCount=statusFeed.latest_patch?workshopFeed.guides.filter(guide=>guide.source_patch===statusFeed.latest_patch).length:0;
+      const sourceFresh=!workshopFailed&&workshopFeed.stale===false;
+      const patchSummary=statusFeed.latest_patch?`${samePatchCount} для патча ${esc(statusFeed.latest_patch)}`:'Текущий патч не подтверждён';
+      const recentSummary=sourceFresh&&statusFeed.latest_patch?` · ${currentCount} обновлены авторами за последние 30 дней`:'';
       const checked=checkedDate(workshopFeed.checked_at);
-      const markup=`<strong>Сборки сообщества · ${heroCount} из ${workshopFeed.coverage.total_heroes} героев</strong><span>${workshopFeed.guides.length} руководств · ${currentCount} с отметкой текущего патча${statusFeed.latest_patch?` ${esc(statusFeed.latest_patch)}`:''}${checked?` · Проверка ${esc(checked)}`:''}</span><span>${workshopFailed||workshopFeed.stale?'Показана сохранённая подборка. Обновление источника задерживается.':'Проверяем обновления авторов каждый день. После нового патча устаревшие сборки получают отметку.'} Винрейт и популярность готовых сборок этими источниками не подтверждены.</span>`;
+      const markup=`<strong>Сборки сообщества · ${heroCount} из ${workshopFeed.coverage.total_heroes} героев</strong><span>${workshopFeed.guides.length} руководств · ${patchSummary}${recentSummary}${checked?` · Проверка ${esc(checked)}`:''}</span><span>${workshopFailed||workshopFeed.stale?'Показана сохранённая подборка. Обновление источника задерживается.':'Проверяем обновления авторов каждый день. После нового патча устаревшие сборки получают отметку.'} Винрейт и популярность готовых сборок этими источниками не подтверждены.</span>`;
       if(host.innerHTML!==markup)host.innerHTML=markup;
     };
     const roleHost=content.querySelector('#build-role-context'),roleCache=new Map();
