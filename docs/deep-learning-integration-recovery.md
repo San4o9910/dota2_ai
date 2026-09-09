@@ -1,6 +1,6 @@
 # Deep learning and Workshop builds — integration checkpoint
 
-Status: WORK IN PROGRESS. Not deployed. Do not merge this branch independently.
+Status: INTEGRATED CANDIDATE. Not deployed. Full release verification is running on codex/deep-learning-workshop-builds.
 
 The local execution environment disconnected with environment_offline / HTTP409 during development on 2026-09-09. This branch preserves integration code reconstructed against exact base525cd5e593c27cbdf1b10cc2597cdcdf033ce389 from the implementation contracts and recorded edits. It is not a byte-for-byte verified copy of the inaccessible workspace.
 

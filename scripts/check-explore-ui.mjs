@@ -38,7 +38,8 @@ function workshopFixture() {
   const base={author:'Проверочный автор',source_patch:'7.41e',source_updated_at:at,fetched_at:at,status:'current_patch',starting_items:[item('tango','Tango')],early_items:[core[0]],core_items:core,extension_items:extensions,situational_items:[],luxury_items:[],final_items:[...core,...extensions],final_note:'Синтетическая сборка для проверки интерфейса.'};
   const guide={...base,id:'steam-999999991',workshop_id:'999999991',hero_slug:'meepo',hero_name:'Meepo',title:'Meepo · Position 2',position:2,positions:[2],position_exact:true,role:'core',source_url:'https://steamcommunity.com/sharedfiles/filedetails/?id=999999991'};
   const support={...base,id:'steam-999999992',workshop_id:'999999992',hero_slug:'crystal_maiden',hero_name:'Crystal Maiden',title:'Crystal Maiden · Support',position:null,positions:[4,5],position_exact:false,role:'support',source_url:'https://steamcommunity.com/sharedfiles/filedetails/?id=999999992',final_items:core,extension_items:[]};
-  return {schema_version:'narma.workshop-builds.v1',checked_at:at,stale:false,latest_patch:'7.41e',refresh_interval_seconds:86400,source_review_days:30,coverage:{heroes:2,total_heroes:127,guides:2,current_patch_guides:2},guides:[guide,support],errors:[]};
+  const older={...guide,id:'steam-999999990',workshop_id:'999999990',source_url:'https://steamcommunity.com/sharedfiles/filedetails/?id=999999990',source_patch:'7.40b',status:'patch_changed',source_updated_at:'2026-08-01T00:00:00Z'};
+  return {schema_version:'narma.workshop-builds.v1',checked_at:at,stale:false,latest_patch:'7.41e',refresh_interval_seconds:86400,source_review_days:30,coverage:{heroes:2,total_heroes:127,guides:3,current_patch_guides:2},guides:[older,guide,support],errors:[]};
 }
 const itemIcon=id=>id==='hurricane_pike'?'/assets/dota/items/hurricane_pike.png':`https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/${id}.png`;
 assert.equal(buildCatalog.schema_version,'narma.build-guides.v1');
@@ -308,6 +309,12 @@ try {
 
     workshopEnabled=true;
     buildPatchOverride={...updates,checked_at:new Date().toISOString(),stale:false,errors:[],latest_patch:{version:'7.41e',url:'https://www.dota2.com/patches/7.41e',published_at:stamp}};
+    await open('/builds?source=workshop&q=Meepo&position=2');
+    await page.locator('[data-guide-id="steam-999999991"]').waitFor();
+    assert.equal(await page.locator('#build-list [data-guide]').first().getAttribute('data-guide'),'steam-999999991','Current guides precede old source order.');
+    await open('/builds?source=workshop&q=Meepo&position=2&guide=steam-999999990');
+    await page.locator('[data-guide-id="steam-999999990"]').waitFor();
+    assert.equal(await page.locator('.build-guide').getAttribute('data-guide-id'),'steam-999999990','Explicitly selected old guide is retained while current alternatives load.');
     await open('/builds?source=workshop&q=Meepo&position=2&guide=steam-999999991');
     await page.locator('[data-guide-id="steam-999999991"]').waitFor();
     assert.equal(await page.locator('#build-source').inputValue(),'workshop');
@@ -331,7 +338,7 @@ try {
     assert.equal(await page.locator('.build-slot--empty').count(),3,'Missing source items stay visibly unfilled.');
     assert.equal(await page.locator('#build-role-context .role-guidance').getAttribute('data-position'),'5');
     await accessibility('builds-workshop-support');
-    workshopEnabled=false;
+    workshopEnabled=false;buildPatchOverride=null;
 
     await open('/learn');
     assert.equal(await page.locator('[data-stage]').count(),6);

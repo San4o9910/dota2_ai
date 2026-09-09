@@ -108,6 +108,8 @@ jobs:
             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777 \
             narma-hermes-check /opt/hermes-venv/bin/python /app/smoke.py
           python3 ops/timeweb/check_hermes_network.py
+      - name: Verify public Steam metadata and guide parsing without keys
+        run: docker run --rm narma-video-check python -m narma_video.workshop_builds --check-source
       - name: Require live STRATZ data before deploying enabled statistics
         if: env.NARMA_BUILD_STATS_SOURCE == 'stratz'
         env:
@@ -162,3 +164,5 @@ jobs:
             pilot_args+=(--prepare-chatgpt-auth)
           fi
           python3 ops/timeweb/pilot.py "${pilot_args[@]}"
+      - name: Verify published deep learning and all-hero catalog
+        run: python3 ops/timeweb/check_learning_release.py --origin https://narma-72-56-98-68.sslip.io

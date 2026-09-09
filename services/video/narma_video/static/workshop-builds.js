@@ -29,6 +29,7 @@ export function validateWorkshopFeed(payload) {
         || !Array.isArray(guide.positions) || guide.positions.length > 5 || new Set(guide.positions).size !== guide.positions.length
         || guide.positions.some(position => !Number.isInteger(position) || position < 1 || position > 5)
         || typeof guide.position_exact !== 'boolean') return false;
+    if (guide.unknown_item_ids !== undefined && (!Array.isArray(guide.unknown_item_ids) || guide.unknown_item_ids.length > 512 || guide.unknown_item_ids.some(id => typeof id !== 'string' || !/^[a-z0-9_]{1,80}$/.test(id)) || new Set(guide.unknown_item_ids).size !== guide.unknown_item_ids.length)) return false;
     if (guide.position_exact && (!Number.isInteger(guide.position) || guide.positions.length !== 1 || guide.positions[0] !== guide.position)) return false;
     if ((guide.role === 'core' && guide.positions.some(position => position > 3)) || (guide.role === 'support' && guide.positions.some(position => position < 4))) return false;
     if (!Object.keys(WORKSHOP_PHASES).every(key => Array.isArray(guide[key]) && guide[key].length <= 24 && guide[key].every(validItem))) return false;
@@ -55,19 +56,43 @@ export function workshopRoleLabel(guide) {
 
 export function workshopFreshness(guide, feed, now = Date.now()) {
   let state = guide.status;
+  const incompleteItems = Array.isArray(guide.unknown_item_ids) && guide.unknown_item_ids.length > 0;
   const fetched = Date.parse(guide.fetched_at || '');
   const updated = Date.parse(guide.source_updated_at || '');
-  if (!Number.isFinite(fetched) || fetched > now + 300000 || now - fetched >= 24 * 60 * 60 * 1000) state = 'stale';
+  if (state === 'stale' || !Number.isFinite(fetched) || fetched > now + 300000 || now - fetched >= 24 * 60 * 60 * 1000) state = 'stale';
   else if (!/^\d{1,2}\.\d{1,3}[a-z]?$/.test(feed.latest_patch || '')) state = 'unknown';
   else if (feed.latest_patch && guide.source_patch !== feed.latest_patch) state = 'patch_changed';
   else if (state === 'current_patch' && (!Number.isFinite(updated) || updated > now + 300000 || now - updated > 30 * 24 * 60 * 60 * 1000)) state = 'review_due';
+  if (state === 'current_patch' && incompleteItems) state = 'review_due';
   const patch = guide.source_patch || 'не указан';
-  const text = {
+  let text = {
     current_patch: `Автор указал текущий патч ${patch}. Сверяй выбор предметов с условиями своего матча.`,
     patch_changed: `Сборка автора для ${patch}; текущий известный патч — ${feed.latest_patch || 'не подтверждён'}. После обновления нужна повторная проверка.`,
-    review_due: `Указан патч ${patch}, но автор давно не обновлял руководство. Сборку нужно перепроверить.`,
+    review_due: incompleteItems ? 'В руководстве есть новые или недоступные предметы. Список покупок показан не полностью; перед игрой сверь оригинал автора.' : `Указан патч ${patch}, но автор давно не обновлял руководство. Сборку нужно перепроверить.`,
     stale: `Сохранена сборка для ${patch}. Проверка обновлений источника задерживается.`,
     unknown: `Автор указал патч ${patch}. Соответствие текущей версии игры сейчас не подтверждено.`,
   }[state] || 'Не удалось подтвердить актуальность сборки.';
-  return { state, stale: state !== 'current_patch', text };
+  if (incompleteItems && state !== 'review_due') text += ' Часть предметов автора не удалось распознать: показан неполный список. Сверь оригинал перед покупкой.';
+  return { state, stale: state !== 'current_patch', text, incompleteItems };
+}
+
+export function sortWorkshopGuides(guides, feed, position, now = Date.now()) {
+  const stateOrder = { current_patch: 0, review_due: 1, unknown: 2, patch_changed: 3, stale: 4 };
+  const selectedPosition = Number(position);
+  const hasPosition = Number.isInteger(selectedPosition) && selectedPosition >= 1 && selectedPosition <= 5;
+  const keys = new Map(guides.map(guide => {
+    const updated = Date.parse(guide.source_updated_at || '');
+    return [guide, {
+      freshness: stateOrder[workshopFreshness(guide, feed, now).state] ?? 5,
+      exact: hasPosition && guide.position_exact === true && guide.position === selectedPosition ? 0 : 1,
+      updated: Number.isFinite(updated) && updated <= now + 300000 ? updated : -Infinity,
+    }];
+  }));
+  return guides.slice().sort((one, two) => {
+    const a = keys.get(one), b = keys.get(two);
+    if (a.freshness !== b.freshness) return a.freshness - b.freshness;
+    if (a.exact !== b.exact) return a.exact - b.exact;
+    if (a.updated !== b.updated) return a.updated > b.updated ? -1 : 1;
+    return String(one.id) < String(two.id) ? -1 : String(one.id) > String(two.id) ? 1 : 0;
+  });
 }

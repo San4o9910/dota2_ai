@@ -154,6 +154,17 @@ class WorkshopBuildTests(unittest.TestCase):
         self.assertEqual(len(result["guides"]), len(data["guides"]))
         self.assertEqual(result["guides"][0]["source_error"], "access_denied")
 
+    def test_intermediate_components_do_not_displace_completed_items_in_six_slots(self):
+        groups = {key: [] for key in w.GROUP_KEYS}
+        groups["core_items"] = [{"id": key, "name": key} for key in
+                                ("power_treads", "ring_of_health", "mage_slayer", "desolator",
+                                 "ultimate_scepter", "black_king_bar", "greater_crit")]
+        projected = w.inventory_projection(groups)
+        self.assertEqual(len(projected), 6)
+        self.assertNotIn("ring_of_health", [x["id"] for x in projected])
+        self.assertEqual(projected[-1]["id"], "greater_crit")
+        self.assertEqual(groups["core_items"][1]["id"], "ring_of_health")
+
     def test_unknown_items_preserve_facts_but_never_claim_a_complete_current_plan(self):
         source = BUILD.replace(b'"Extension Items" {', b'"Extension Items" { "item" "item_future_artifact"')
         row = w.parse_guide(metadata(), source, HEROES, ITEMS, AUTHORS, w._iso(NOW))

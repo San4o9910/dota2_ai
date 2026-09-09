@@ -1,7 +1,7 @@
 import {createBuildMeta,itemEvidence} from './build-meta.js';
 import {adaptationOptions,applyAdaptation} from './build-adaptations.js';
 import {roleGuidance} from './role-guidance.js';
-import {WORKSHOP_PHASES,validateWorkshopFeed,workshopMatchesPosition,workshopRoleLabel,workshopFreshness} from './workshop-builds.js';
+import {WORKSHOP_PHASES,validateWorkshopFeed,workshopMatchesPosition,workshopRoleLabel,workshopFreshness,sortWorkshopGuides} from './workshop-builds.js';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const positions = {1:'Керри',2:'Мидер',3:'Офлейнер',4:'Поддержка',5:'Полная поддержка'};
 const isWorkshop = guide => guide?.source === 'workshop';
@@ -104,8 +104,12 @@ export async function mountBuilds(root) {
       const statusFeed=workshopStatusFeed();
       const heroCount=new Set(workshopFeed.guides.map(guide=>guide.hero_slug)).size;
       const currentCount=workshopFeed.guides.filter(guide=>workshopFreshness(guide,statusFeed).state==='current_patch').length;
+      const samePatchCount=statusFeed.latest_patch?workshopFeed.guides.filter(guide=>guide.source_patch===statusFeed.latest_patch).length:0;
+      const sourceFresh=!workshopFailed&&workshopFeed.stale===false;
+      const patchSummary=statusFeed.latest_patch?`${samePatchCount} для патча ${esc(statusFeed.latest_patch)}`:'Текущий патч не подтверждён';
+      const recentSummary=sourceFresh&&statusFeed.latest_patch?` · ${currentCount} обновлены авторами за последние 30 дней`:'';
       const checked=checkedDate(workshopFeed.checked_at);
-      const markup=`<strong>Сборки сообщества · ${heroCount} из ${workshopFeed.coverage.total_heroes} героев</strong><span>${workshopFeed.guides.length} руководств · ${currentCount} с отметкой текущего патча${statusFeed.latest_patch?` ${esc(statusFeed.latest_patch)}`:''}${checked?` · Проверка ${esc(checked)}`:''}</span><span>${workshopFailed||workshopFeed.stale?'Показана сохранённая подборка. Обновление источника задерживается.':'Проверяем обновления авторов каждый день. После нового патча устаревшие сборки получают отметку.'} Винрейт и популярность готовых сборок этими источниками не подтверждены.</span>`;
+      const markup=`<strong>Сборки сообщества · ${heroCount} из ${workshopFeed.coverage.total_heroes} героев</strong><span>${workshopFeed.guides.length} руководств · ${patchSummary}${recentSummary}${checked?` · Проверка ${esc(checked)}`:''}</span><span>${workshopFailed||workshopFeed.stale?'Показана сохранённая подборка. Обновление источника задерживается.':'Проверяем обновления авторов каждый день. После нового патча устаревшие сборки получают отметку.'} Винрейт и популярность готовых сборок этими источниками не подтверждены.</span>`;
       if(host.innerHTML!==markup)host.innerHTML=markup;
     };
     const roleHost=content.querySelector('#build-role-context'),roleCache=new Map();
@@ -274,7 +278,8 @@ export async function mountBuilds(root) {
     };
     const render=(preserveAuthoredDetail=false)=>{
       const normalized=query.trim().toLocaleLowerCase('ru-RU');
-      const rows=guides.filter(g=>matchesPosition(g,position)&&(sourceFilter==='all'||(sourceFilter==='workshop')===isWorkshop(g))&&`${g.hero_name} ${g.title} ${g.hero_slug} ${g.author||''}`.toLocaleLowerCase('ru-RU').includes(normalized));
+      const filtered=guides.filter(g=>matchesPosition(g,position)&&(sourceFilter==='all'||(sourceFilter==='workshop')===isWorkshop(g))&&`${g.hero_name} ${g.title} ${g.hero_slug} ${g.author||''}`.toLocaleLowerCase('ru-RU').includes(normalized));
+      const rows=[...filtered.filter(guide=>!isWorkshop(guide)),...sortWorkshopGuides(filtered.filter(isWorkshop),workshopStatusFeed(),position)];
       const previousId=selected?.id;
       selected=rows.find(guide=>guide.id===selected?.id)||rows[0]||null;
       content.querySelector('#build-count').textContent=`Руководств: ${rows.length}`;

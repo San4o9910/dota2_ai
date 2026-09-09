@@ -76,6 +76,9 @@ jobs:
             sleep 2
           done
           test "${ready:-0}" = 1
+          docker run --rm --network narma-video-ci_default \
+            --volume "$PWD/ops/timeweb/check_learning_release.py:/app/check_learning_release.py:ro" \
+            narma-video-check python /app/check_learning_release.py --origin http://api:8080
           docker run --rm --user root --network narma-video-ci_default \
             --env TEST_DATABASE_URL="$DATABASE_URL" \
             --env NARMA_EXPLORE_REFRESH_ENABLED=0 --env NARMA_WORKSHOP_REFRESH_ENABLED=0 \
