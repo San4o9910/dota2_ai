@@ -20,7 +20,11 @@ def inspect(token):
         matchId completed averageRank
       } }
       itemSchema: __type(name:"ItemType") { name fields { name type { %s } } }
-    }''' % check.TYPE_REF
+      statsSchema: __type(name:"HeroStatsQuery") { fields { name description args { name description defaultValue } } }
+      itemStatSchema: __type(name:"ItemStatType") { fields { name type { %s } } }
+      itemLanguageSchema: __type(name:"ItemLanguageType") { fields { name type { %s } } }
+      itemComponentSchema: __type(name:"ItemComponentType") { fields { name type { %s } } }
+    }''' % (check.TYPE_REF, check.TYPE_REF, check.TYPE_REF, check.TYPE_REF)
     data = check.graphql(token, query)
     rows = data["heroStats"]["itemFullPurchase"] or []
     if not isinstance(rows, list) or len(rows) > 10000:
@@ -45,6 +49,10 @@ def inspect(token):
             "top_rows":sorted(clean,key=lambda r:r["matchCount"],reverse=True)[:20],
             "recent_versions":sorted(versions,key=lambda v:v["asOfDateTime"],reverse=True)[:8],
             "completed_public_matches":matches, "item_fields":check.fields(data["itemSchema"]["fields"]),
+            "item_stat_fields":check.fields(data["itemStatSchema"]["fields"]),
+            "item_language_fields":check.fields(data["itemLanguageSchema"]["fields"]),
+            "item_component_fields":check.fields(data["itemComponentSchema"]["fields"]),
+            "purchase_documentation":[r for r in data["statsSchema"]["fields"] if r["name"] in {"stats","itemFullPurchase"}],
             "provider_requests":1, "private_account_requests":0}
 
 
