@@ -154,6 +154,15 @@ class WorkshopBuildTests(unittest.TestCase):
         self.assertEqual(len(result["guides"]), len(data["guides"]))
         self.assertEqual(result["guides"][0]["source_error"], "access_denied")
 
+    def test_background_refresh_respects_offline_flags(self):
+        for flag in ("NARMA_WORKSHOP_REFRESH_ENABLED", "NARMA_EXPLORE_REFRESH_ENABLED"):
+            with tempfile.TemporaryDirectory() as directory:
+                instance = w.WorkshopCache(Path(directory) / "absent.json")
+                instance.snapshot = snapshot()
+                with patch.dict(w.os.environ, {flag: "0"}), patch.object(w.threading, "Thread") as thread:
+                    instance.start()
+                thread.assert_not_called()
+
     def test_download_url_cannot_redirect_to_arbitrary_hosts_or_include_credentials(self):
         self.assertEqual(w._cdn_url(metadata()["file_url"]), metadata()["file_url"])
         for url in ("http://cdn.steamusercontent.com/ugc/1/AB/", "https://127.0.0.1/ugc/1/AB/",

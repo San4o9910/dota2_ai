@@ -1,0 +1,39 @@
+name: Workshop public-source recovery
+on:
+  push:
+    branches:
+      - codex/workshop-recovery-20260909
+    paths:
+      - .github/workflows/workshop-recovery.yml
+      - services/video/narma_video/workshop_builds.py
+      - services/video/narma_video/data/workshop-guide-ids.json
+      - services/video/tests/test_workshop_builds.py
+      - scripts/import-workshop-builds.py
+permissions:
+  contents: read
+concurrency:
+  group: workshop-public-source-recovery
+  cancel-in-progress: false
+jobs:
+  public-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project dependencies
+        run: python -m pip install -r services/video/requirements.txt pytest
+      - name: Focused factual-source tests
+        env:
+          PYTHONPATH: services/video
+        run: python -m pytest services/video/tests/test_workshop_builds.py -q
+      - name: Import public guide facts without credentials
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/import-workshop-builds.py --emit-json
+      - name: Check the actual production source transport
+        env:
+          PYTHONPATH: services/video
+        run: python -m narma_video.workshop_builds --check-source

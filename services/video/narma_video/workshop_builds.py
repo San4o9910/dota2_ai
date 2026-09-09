@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 
@@ -211,9 +212,13 @@ def parse_guide(metadata, content, heroes, items, authors, fetched_at=None):
 
 def _cdn_url(url):
     if not isinstance(url, str): raise WorkshopError()
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        raise WorkshopError() from None
     if (parsed.scheme != "https" or parsed.hostname not in CDN_HOSTS or parsed.username or parsed.password
-            or parsed.port not in (None, 443) or not re.fullmatch(r"/ugc/[0-9]+/[A-Fa-f0-9]+/", parsed.path)
+            or port not in (None, 443) or not re.fullmatch(r"/ugc/[0-9]+/[A-Fa-f0-9]+/", parsed.path)
             or parsed.query or parsed.fragment):
         raise WorkshopError()
     return url
@@ -221,6 +226,7 @@ def _cdn_url(url):
 
 def _request(url, data=None):
     if url != METADATA_URL: _cdn_url(url)
+    started = time.monotonic()
     try:
         with httpx.Client(timeout=httpx.Timeout(12, connect=4), follow_redirects=False, trust_env=False) as client:
             with client.stream("POST" if data is not None else "GET", url, data=data,
@@ -229,6 +235,7 @@ def _request(url, data=None):
                 if response.status_code != 200: raise WorkshopError("source_unavailable")
                 result = bytearray()
                 for chunk in response.iter_bytes():
+                    if time.monotonic() - started > 18: raise WorkshopError("source_unavailable")
                     result.extend(chunk)
                     if len(result) > MAX_BYTES: raise WorkshopError("source_too_large")
                 return bytes(result)
@@ -363,6 +370,9 @@ class WorkshopCache:
             pass
 
     def start(self):
+        if (os.environ.get("NARMA_WORKSHOP_REFRESH_ENABLED", "1") != "1"
+                or os.environ.get("NARMA_EXPLORE_REFRESH_ENABLED", "1") != "1"):
+            return
         with self.lock:
             if self.thread is not None or not self.snapshot["guides"]: return
             self.stop_event.clear()
@@ -407,3 +417,34 @@ cache = WorkshopCache()
 
 def get_payload(updates):
     return cache.get(updates)
+
+
+def check_source():
+    """Two public, credential-free requests through the production transport."""
+    snapshot = cache.snapshot
+    candidates = snapshot.get("guides", [])
+    if not candidates: raise WorkshopError()
+    selected = max(candidates, key=lambda g: g.get("source_updated_at", ""))
+    rows = fetch_metadata([selected["workshop_id"]])
+    if len(rows) != 1 or str(rows[0].get("publishedfileid")) != selected["workshop_id"]:
+        raise WorkshopError()
+    row = rows[0]
+    if (row.get("visibility") != 0 or row.get("result") != 1 or row.get("banned")
+            or str(row.get("creator")) not in snapshot["authors"] or row.get("consumer_app_id") != 570):
+        raise WorkshopError()
+    parsed = parse_guide(row, _request(_cdn_url(row.get("file_url"))), snapshot["heroes"], snapshot["items"], snapshot["authors"])
+    return {"status": "ok", "workshop_id": parsed["workshop_id"], "patch": parsed["source_patch"],
+            "item_count": sum(len(parsed[key]) for key in GROUP_KEYS), "final_slots": len(parsed["final_items"])}
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Validate the public Steam guide source without credentials.")
+    parser.add_argument("--check-source", action="store_true")
+    args = parser.parse_args()
+    if args.check_source:
+        try:
+            print(json.dumps(check_source(), sort_keys=True))
+        except (WorkshopError, ValueError, KeyError, TypeError) as error:
+            print(json.dumps({"status": "error", "code": error.code if isinstance(error, WorkshopError) else "invalid_source"}))
+            raise SystemExit(1) from None
