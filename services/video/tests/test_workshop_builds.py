@@ -154,6 +154,17 @@ class WorkshopBuildTests(unittest.TestCase):
         self.assertEqual(len(result["guides"]), len(data["guides"]))
         self.assertEqual(result["guides"][0]["source_error"], "access_denied")
 
+    def test_unknown_items_preserve_facts_but_never_claim_a_complete_current_plan(self):
+        source = BUILD.replace(b'"Extension Items" {', b'"Extension Items" { "item" "item_future_artifact"')
+        row = w.parse_guide(metadata(), source, HEROES, ITEMS, AUTHORS, w._iso(NOW))
+        self.assertEqual(row["unknown_item_ids"], ["future_artifact"])
+        self.assertTrue(row["core_items"])
+        data = snapshot()
+        data["guides"] = [row]
+        result = w.public_payload(data, feed(), NOW)
+        self.assertEqual(result["guides"][0]["status"], "review_due")
+        self.assertEqual(result["coverage"]["current_patch_guides"], 0)
+
     def test_background_refresh_respects_offline_flags(self):
         for flag in ("NARMA_WORKSHOP_REFRESH_ENABLED", "NARMA_EXPLORE_REFRESH_ENABLED"):
             with tempfile.TemporaryDirectory() as directory:

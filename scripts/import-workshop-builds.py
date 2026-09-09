@@ -23,13 +23,14 @@ ITEMS_URL = "https://www.dota2.com/datafeed/itemlist?language=english"
 HEROES_URL = "https://www.dota2.com/datafeed/herolist?language=english"
 PATCHES_URL = "https://www.dota2.com/datafeed/patchnoteslist?language=english"
 PUBLIC_COLLECTION = "https://steamcommunity.com/id/ImmortalFaith/myworkshopfiles/?section=guides&numperpage=30&p="
+PUBLIC_SEARCH = "https://steamcommunity.com/app/570/guides/?searchText=Torte+de+Lini&browsefilter=trend&filetype=12&requiredtags%5B%5D=Largo&numperpage=30"
 AUTHORS = {"76561198064078512": "ImmortalFaith", "76561197997348592": "Torte de Lini"}
 CATALOG = ROOT / "services/video/narma_video/data/workshop_builds.json"
 CANDIDATES = ROOT / "services/video/narma_video/data/workshop-guide-ids.json"
 
 
 def read_fixed_url(url):
-    allowed = {ITEMS_URL, HEROES_URL, PATCHES_URL} | {PUBLIC_COLLECTION + str(page) for page in range(1, 9)}
+    allowed = {ITEMS_URL, HEROES_URL, PATCHES_URL, PUBLIC_SEARCH} | {PUBLIC_COLLECTION + str(page) for page in range(1, 9)}
     if url not in allowed:
         raise w.WorkshopError()
     started = time.monotonic()
@@ -59,6 +60,12 @@ def discover_public_ids():
         print(json.dumps({"event": "public_collection_page", "page": page, "ids": len(found)}), flush=True)
         if len(found) < 30:
             break
+    # The new Largo guide did not exist in the old public ID lists. Search
+    # Valve's ordinary global public Hero Build index, never a private profile.
+    html = read_fixed_url(PUBLIC_SEARCH).decode("utf-8")
+    found = set(re.findall(r'sharedfiles/filedetails/\?id=([0-9]{1,20})', html))
+    ids.update(found)
+    print(json.dumps({"event": "global_public_hero_search", "hero": "largo", "candidate_ids": len(found)}), flush=True)
     if not 1 <= len(ids) <= 450:
         raise w.WorkshopError()
     return sorted(ids)

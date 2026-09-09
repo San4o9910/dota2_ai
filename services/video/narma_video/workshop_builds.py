@@ -186,6 +186,7 @@ def parse_guide(metadata, content, heroes, items, authors, fetched_at=None):
         role = "support" if position >= 4 else "offlane" if position == 3 else "core"
     positions = [position] if position else [4, 5] if role == "support" else [3] if role == "offlane" else [1, 2, 3] if role == "core" else []
     groups = {key: [] for key in GROUP_KEYS}
+    unknown_item_ids = set()
     source_items = _get(_get(data, "ItemBuild"), "Items")
     if not isinstance(source_items, list):
         raise WorkshopError()
@@ -196,7 +197,10 @@ def parse_guide(metadata, content, heroes, items, authors, fetched_at=None):
         for key, value in values:
             if key != "item" or not isinstance(value, str): continue
             identifier = value.removeprefix("item_")
-            if identifier not in items: continue
+            if identifier not in items:
+                if not re.fullmatch(r"[a-z0-9_]{1,80}", identifier): raise WorkshopError()
+                unknown_item_ids.add(identifier)
+                continue
             if len(groups[group]) >= 24: break
             groups[group].append({"id": identifier, "name": items[identifier]})
     if not groups["core_items"]:
@@ -206,7 +210,7 @@ def parse_guide(metadata, content, heroes, items, authors, fetched_at=None):
             "position_exact": position is not None, "role": role, "author": authors[creator],
             "creator_id": creator, "source_url": "https://steamcommunity.com/sharedfiles/filedetails/?id=" + guide_id,
             "source_patch": patch, "source_updated_at": _iso(updated), "fetched_at": fetched_at or _iso(_now()),
-            **groups, "final_items": inventory_projection(groups),
+            **groups, "unknown_item_ids": sorted(unknown_item_ids), "final_items": inventory_projection(groups),
             "final_note": "План слотов Narma из основных покупок автора. Это не обязательный порядок покупок: условия матча важнее заполненного инвентаря. Шард и расходуемые улучшения показаны в этапах, отдельно от слотов."}
 
 
@@ -327,7 +331,7 @@ def public_payload(snapshot, updates, now=None):
         if source_error or not fetched or now - fetched >= timedelta(seconds=REFRESH_SECONDS): status = "stale"
         elif not feed_fresh or not re.fullmatch(r"\d{1,2}\.\d{1,3}[a-z]?", str(patch)): status = "unknown"
         elif guide.get("source_patch") != patch: status = "patch_changed"
-        elif not updated or now - updated > timedelta(days=SOURCE_REVIEW_DAYS): status = "review_due"
+        elif guide.get("unknown_item_ids") or not updated or now - updated > timedelta(days=SOURCE_REVIEW_DAYS): status = "review_due"
         else: status = "current_patch"
         guide["status"] = status
         guides.append(guide)
