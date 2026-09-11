@@ -1,8 +1,52 @@
 # Испытания тренера на собственной модели
 
 Это стенд проверки. Он не меняет провайдер рабочего сайта и не запускает Hermes
-для клиентов. Команды генерации требуют уже доступного собственного GPU-сервера.
-Стоимость нового сервера должна быть отдельно согласована.
+для клиентов. Компактный Qwen можно проверить на CPU; GPU не является общим
+требованием стенда. Новый платный сервер в эти испытания не входит.
+
+## Компактный Qwen на CPU
+
+Первый кандидат — `unsloth/Qwen3.5-4B-GGUF`, файл `Qwen3.5-4B-Q4_K_M.gguf`.
+Ревизия: `e87f176479d0855a907a41277aca2f8ee7a09523`.
+Размер: 2 740 937 888 байт. SHA-256:
+`00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4`.
+Это размер весов, а не полная RAM процесса.
+
+Использован официальный CPU runtime `llama.cpp b10909`, commit `a2878d30d`.
+Архив `llama-b10909-bin-ubuntu-x64.tar.gz`:
+SHA-256 `d0361742fa55787aa00fedb30e8ce88d6249cc9070429afa18befe73fbccebfb`.
+Исходные ссылки и результаты: [протокол CPU-пробы](../../docs/QWEN_CPU_TRIAL_2026-09-11.md).
+
+После загрузки и проверки этих файлов запустите сервер в отдельном терминале:
+
+```bash
+./llama-server -m /absolute/path/Qwen3.5-4B-Q4_K_M.gguf \
+  --host 127.0.0.1 --port 18080 --alias qwen35-4b-q4km \
+  -t 4 -tb 4 -c 8192 -np 1 -ngl 0 --fit off --cache-ram 0 \
+  --no-context-shift --reasoning off --no-webui --no-slots --poll 0
+```
+
+В том же сетевом пространстве, из корня Narma:
+
+```bash
+mkdir -p evals/open_coach/runs
+python scripts/evaluate-open-coach.py \
+  --model qwen35-4b-q4km \
+  --model-revision e87f176479d0855a907a41277aca2f8ee7a09523 \
+  --endpoint http://127.0.0.1:18080/v1/chat/completions \
+  --case r1-delivery-before-use \
+  --case r4-low-lh-is-not-failure \
+  --case r5-untrusted-text-and-missing-context \
+  --max-tokens 2048 --timeout 300 \
+  --output evals/open_coach/runs/qwen4b-cpu.json --run
+```
+
+После пробы завершите сервер. В средах, где каждый запуск команды получает
+свой сетевой namespace, запускайте сервер и Python-клиент в одном процессе
+оркестрации либо одной shell-сессии. Это не изменение endpoint на публичный.
+Для памяти проверяйте принадлежность `/proc/<pid>` модели: PID из дочернего
+namespace может указывать в смонтированном `/proc` на другой процесс.
+Прохождение нескольких синтетических случаев не разрешает клиентский запуск.
 
 ## Подготовка без генерации
 

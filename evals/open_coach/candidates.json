@@ -1,9 +1,26 @@
 {
   "version": "narma.open-coach-candidates.v1",
   "verified_at": "2026-09-11",
-  "status": "not_evaluated_not_enabled",
-  "metadata_source": "Public Hugging Face model API and publisher model cards; weights were not downloaded",
+  "status": "cpu_screen_failed_not_enabled",
+  "metadata_source": "Public publisher metadata; compact Qwen GGUF downloaded and verified against publisher LFS SHA-256. Large candidate weights not downloaded.",
   "candidates": [
+    {
+      "id": "qwen35-4b-q4km",
+      "model": "unsloth/Qwen3.5-4B-GGUF",
+      "base_model": "Qwen/Qwen3.5-4B",
+      "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+      "filename": "Qwen3.5-4B-Q4_K_M.gguf",
+      "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "size_bytes": 2740937888,
+      "license": "apache-2.0",
+      "source": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF",
+      "purpose": "first_cpu_candidate",
+      "weights_hash_verified": true,
+      "human_quality_evaluated": false,
+      "production_enabled": false,
+      "report": "docs/QWEN_CPU_TRIAL_2026-09-11.md",
+      "screen_status": "three_contract_failures_and_one_thinking_timeout"
+    },
     {
       "id": "qwen36-27b-fp8",
       "model": "Qwen/Qwen3.6-27B-FP8",
