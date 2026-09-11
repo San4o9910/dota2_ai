@@ -1,0 +1,41 @@
+{
+  "version": "narma.open-coach-candidates.v1",
+  "verified_at": "2026-09-11",
+  "status": "not_evaluated_not_enabled",
+  "metadata_source": "Public Hugging Face model API and publisher model cards; weights were not downloaded",
+  "candidates": [
+    {
+      "id": "qwen36-27b-fp8",
+      "model": "Qwen/Qwen3.6-27B-FP8",
+      "revision": "e89b16ebf1988b3d6befa7de50abc2d76f26eb09",
+      "license": "apache-2.0",
+      "source": "https://huggingface.co/Qwen/Qwen3.6-27B-FP8",
+      "purpose": "primary_quality_candidate",
+      "test_vram_gb_estimate": 48,
+      "memory_estimate_is_verified_requirement": false,
+      "quality_measured": false
+    },
+    {
+      "id": "qwen36-35b-a3b-fp8",
+      "model": "Qwen/Qwen3.6-35B-A3B-FP8",
+      "revision": "95a723d08a9490559dae23d0cff1d9466213d989",
+      "license": "apache-2.0",
+      "source": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8",
+      "purpose": "quality_throughput_candidate",
+      "test_vram_gb_estimate": 48,
+      "memory_estimate_is_verified_requirement": false,
+      "quality_measured": false
+    },
+    {
+      "id": "gpt-oss-20b",
+      "model": "openai/gpt-oss-20b",
+      "revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+      "license": "apache-2.0",
+      "source": "https://huggingface.co/openai/gpt-oss-20b",
+      "purpose": "compact_text_control",
+      "publisher_memory_gb": 16,
+      "narma_memory_or_quality_verified": false,
+      "quality_measured": false
+    }
+  ]
+}
