@@ -13,16 +13,27 @@ production release has been activated.
   [`d1d9d03a9cf844df169948699ce88049f3b880d4`](https://github.com/San4o9910/dota2_ai/actions/runs/34404352510),
   completed 2026-09-09. This is recorded deployment evidence, not a fresh SSH health
   probe of the server on September 12.
-- The September 12 [scheduled backup run](https://github.com/San4o9910/dota2_ai/actions/runs/34682426796)
-  failed with the sanitized code `backup_ssh_unavailable`. This does not establish
-  database corruption; a new deployment must verify current SSH connectivity and
-  the operator should obtain a fresh backup/restore result before production work.
+- The September 12 [backup retry, attempt 3](https://github.com/San4o9910/dota2_ai/actions/runs/34682426796/attempts/3)
+  passed SSH, downloaded the database backup and restored it in an isolated
+  container. Validation then failed with `backup_provider_restore_invariants_failed`.
+  That run checked out `8305600893cf7dbe9c81b8d96b31383f052428e4`; its provider
+  validator rejects every legitimate Hermes call added by migration 011. This is
+  a confirmed validator defect, not proof that it is the only live inconsistency.
+  Run `timeweb-backup-daily.yml` after its pinned checkout is updated to the
+  reviewed correction, and obtain a successful restore result before production
+  deployment. Re-running the old attempt keeps its old validator.
 - No `OPENAI_API_KEY` or Timeweb credential was available in the local work
   environment. Repository secret values and their presence cannot be inspected
   through the installed GitHub connector. This is not proof that a repository
   secret is absent. No private values or raw provider logs were exported.
-- Offline operational tests pass. Publication, remote CI, successful API use,
-  real-game quality and measured average cost require their own release evidence.
+- The owner authorized a cumulative OpenAI allowance of **$5** and reported adding
+  `OPENAI_API_KEY` to Actions secrets. Prepared deployment inputs are
+  `build_stats_source=authored`, `prepare_openai_api=true`,
+  `openai_limit_microusd=5000000`, `openai_expires_at=2026-09-19T23:59:59Z`, with
+  `prepare_chatgpt_auth=false` and `activate_hermes=false`. The allowance has not
+  yet been applied on the server.
+- Exact-commit CI receipts are recorded in PR #3. Successful API use, real-game
+  quality and measured average cost require their own release evidence.
 
 ## Server-side configuration
 
@@ -152,8 +163,14 @@ answer can still have incurred cost; usage accounting must reflect the attempt.
    workflow runs operational unit tests, PostgreSQL migrations/application tests
    and browser flows including `check-video-workspace.mjs`. It has no provider key
    and performs no production deployment. Local emulation is not a replacement
-   for these native PostgreSQL and container gates.
-2. Run **Timeweb pilot deployment** on the reviewed exact release, with
+   for these native PostgreSQL and container gates. Then run
+   `timeweb-backup-daily.yml` with the corrected pinned checkout and require
+   `backup_complete` with `restore_verified=true` before continuing. The restore validator freezes
+   paid allowances only in its isolated copy and preserves live billing history.
+2. Register the reviewed `timeweb-pilot.yml` on the default branch without
+   changing its triggers or job conditions; GitHub requires this for manual
+   dispatch. The default branch itself does not pass the deployment job guard.
+   Run **Timeweb pilot deployment** on `codex/openai-video-coach`, with
    `prepare_openai_api=true`. `prepare_chatgpt_auth` and `activate_hermes` must remain
    false; the modes are mutually exclusive. Supply the API secret or keep the same
    already installed secret. A missing key fails with `missing_openai_secret`
