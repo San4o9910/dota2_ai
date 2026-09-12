@@ -1,0 +1,189 @@
+name: Timeweb pilot deployment
+
+on:
+  push:
+    branches: [codex/replay-map-hardening-8ea829a]
+    paths:
+      - .github/workflows/timeweb-pilot.yml
+      - ops/timeweb/**
+      - services/video/**
+      - services/replay/**
+      - services/hermes/**
+      - scripts/check-portal-ui.mjs
+      - scripts/check-explore-ui.mjs
+      - scripts/check-video-workspace.mjs
+      - .dockerignore
+  workflow_dispatch:
+    inputs:
+      build_stats_source:
+        description: Authored guides, or STRATZ statistics with mandatory live source verification
+        type: choice
+        options: [authored, stratz]
+        required: true
+        default: authored
+      prepare_chatgpt_auth:
+        description: Prepare owner ChatGPT authorization and Hermes, without a generation smoke
+        type: boolean
+        required: false
+        default: false
+      activate_hermes:
+        description: Explicitly activate Hermes using the existing allowance and all review/network gates
+        type: boolean
+        required: false
+        default: false
+      prepare_openai_api:
+        description: Select owner-funded OpenAI API and selective video; no generation smoke
+        type: boolean
+        required: false
+        default: false
+      openai_limit_microusd:
+        description: Optional explicit total OpenAI ceiling in micro-USD (maximum 10000000); blank preserves
+        type: string
+        required: false
+        default: ''
+      openai_expires_at:
+        description: Required with ceiling, UTC YYYY-MM-DDTHH:MM:SSZ no later than 2026-11-21T00:00:00Z
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timeweb-pilot-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.repository == 'San4o9910/dota2_ai' &&
+      (github.ref == 'refs/heads/codex/replay-map-hardening-8ea829a' ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/openai-video-coach'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      NARMA_BUILD_STATS_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_stats_source || 'authored' }}
+    steps:
+      - name: Check out exact release
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Verify Gemini key without generation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 ops/timeweb/gemini_preflight.py
+      - name: Validate explicitly selected build statistics source
+        run: |
+          python3 -c 'import os, sys; sys.path.insert(0, "ops/timeweb"); from stratz_secrets import build_stats_source; build_stats_source(os.environ["NARMA_BUILD_STATS_SOURCE"])'
+      - name: Validate enabled STRATZ credential before the mandatory live adapter gate
+        if: env.NARMA_BUILD_STATS_SOURCE == 'stratz'
+        env:
+          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
+        run: |
+          python3 -c 'import os, sys; sys.path.insert(0, "ops/timeweb"); from stratz_secrets import build_stats_payload; build_stats_payload(os.environ)'
+          python3 ops/timeweb/check_stratz.py --format-only
+      - name: Verify pinned existing server before building
+        env:
+          TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+        run: python3 ops/timeweb/pilot.py --preflight
+      - name: Verify interactive report on mobile and desktop without provider calls
+        env:
+          PLAYWRIGHT_NODE_MODULES: ${{ runner.temp }}/narma-portal-qa/node_modules
+          NARMA_PORTAL_SCREENSHOTS: ${{ runner.temp }}/narma-portal-screenshots
+          NARMA_EXPLORE_SCREENSHOTS: ${{ runner.temp }}/narma-portal-screenshots/explore
+        run: |
+          npm install --prefix "$RUNNER_TEMP/narma-portal-qa" --no-audit --no-fund playwright@1.62.1 axe-core@4.10.3
+          "$RUNNER_TEMP/narma-portal-qa/node_modules/.bin/playwright" install --with-deps chromium
+          node scripts/check-portal-ui.mjs
+          node scripts/check-explore-ui.mjs
+          node scripts/check-video-workspace.mjs
+      - name: Preserve synthetic report screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: portal-visual-qa
+          path: ${{ runner.temp }}/narma-portal-screenshots
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Validate source and build Docker image before provisioning
+        env:
+          HERMES_SOURCE_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m compileall -q services/video/narma_video ops/timeweb
+          bash -n ops/timeweb/bootstrap.sh
+          python3 -m unittest discover -s ops/timeweb/tests -p 'test_*.py' -v
+          docker build --tag narma-video-check services/video
+          docker run --rm narma-video-check python -c "import narma_video.api, narma_video.worker, narma_video.db; print('Runtime imports passed')"
+          docker build --tag narma-replay-check --file services/replay/Dockerfile .
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user 10001:10001 --memory 3g --cpus 2 --pids-limit 128 \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777 \
+            narma-replay-check python -m narma_video.replay_runtime_check
+          docker build --secret id=github_token,env=HERMES_SOURCE_GITHUB_TOKEN --tag narma-hermes-check --file services/hermes/Dockerfile .
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user 10002:10002 --memory 1g --cpus 1 --pids-limit 128 \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777 \
+            narma-hermes-check /opt/hermes-venv/bin/python /app/smoke.py
+          python3 ops/timeweb/check_hermes_network.py
+      - name: Verify public Steam metadata and guide parsing without keys
+        run: docker run --rm narma-video-check python -m narma_video.workshop_builds --check-source
+      - name: Require live STRATZ data before deploying enabled statistics
+        if: env.NARMA_BUILD_STATS_SOURCE == 'stratz'
+        env:
+          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
+        run: |
+          docker run --rm --env STRATZ_API_TOKEN --env NARMA_BUILD_STATS_SOURCE \
+            narma-video-check python -m narma_video.build_meta --check
+      - name: Start PostgreSQL and private API in an isolated local test
+        env:
+          POSTGRES_PASSWORD: narma_ci_only
+          DATABASE_URL: postgresql://narma:narma_ci_only@db:5432/narma
+          VIDEO_SERVICE_TOKEN: local_ci_fixture_token_0000000000000000000000000000000000000000
+          GEMINI_API_KEY: unused_offline_ci_fixture
+          GEMINI_MODEL: gemini-3.8-flash
+        run: |
+          compose=(docker compose --project-name narma-video-ci --file services/video/compose.yaml)
+          trap 'docker compose --project-name narma-video-ci --file services/video/compose.yaml down --volumes >/dev/null' EXIT
+          "${compose[@]}" up --build -d db migrate api
+          for attempt in {1..30}; do
+            if "${compose[@]}" exec -T api python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=15).close()"; then
+              echo 'PostgreSQL, migrations and private API passed'
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "${ready:-0}" = 1
+          docker run --rm --user root --network narma-video-ci_default \
+            --env TEST_DATABASE_URL="$DATABASE_URL" \
+            --env NARMA_EXPLORE_REFRESH_ENABLED=0 \
+            --volume "$PWD:/repo:ro" narma-video-check \
+            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest /repo/services/video/tests -q -p no:cacheprovider'
+      - name: Create or reuse one hourly billed pilot and start private services
+        env:
+          TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+          STRATZ_API_TOKEN: ${{ env.NARMA_BUILD_STATS_SOURCE == 'stratz' && secrets.STRATZ_API_TOKEN || '' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ACTIVATE_HERMES: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_hermes && 'true' || 'false' }}
+          # Ordinary releases inspect and preserve the selected server provider.
+          # Personal OAuth is never implicitly selected by a push event.
+          PREPARE_CHATGPT_AUTH: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_chatgpt_auth && 'true' || 'false' }}
+          PREPARE_OPENAI_API: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_openai_api && 'true' || 'false' }}
+          OPENAI_API_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_openai_api && secrets.OPENAI_API_KEY || '' }}
+          OPENAI_LIMIT_MICROUSD: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_limit_microusd || '' }}
+          OPENAI_EXPIRES_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_expires_at || '' }}
+        run: |
+          pilot_args=()
+          if [[ "$ACTIVATE_HERMES" == "true" ]]; then
+            pilot_args+=(--activate-hermes)
+          fi
+          if [[ "$PREPARE_CHATGPT_AUTH" == "true" ]]; then
+            pilot_args+=(--prepare-chatgpt-auth)
+          fi
+          if [[ "$PREPARE_OPENAI_API" == "true" ]]; then
+            pilot_args+=(--prepare-openai-api)
+          fi
+          python3 ops/timeweb/pilot.py "${pilot_args[@]}"
+      - name: Verify published deep learning and all-hero catalog
+        run: python3 ops/timeweb/check_learning_release.py --origin https://narma-72-56-98-68.sslip.io
