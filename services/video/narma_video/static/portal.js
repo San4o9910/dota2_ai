@@ -1,4 +1,5 @@
 import { roleGuidance } from './role-guidance.js';
+import { createVideoWorkspace } from './video-workspace.js';
 const $ = id => document.getElementById(id);
 const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set(),chatgpt:null,chatgptRequest:0,chatgptController:null,chatgptTimer:null,chatgptClock:null};
 if (state.token) history.replaceState(null, '', location.pathname);
@@ -28,7 +29,8 @@ async function api(path, method='GET', body) {
   if(!response.ok) { if(response.status===401 && state.user) { state.user=null; await session(); } throw Error(typeof data.detail==='string'?data.detail:'Не удалось выполнить запрос.'); }
   return data;
 }
-const tabPaths={review:'/replays','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account'};
+const videoWorkspace=createVideoWorkspace({api,onPlayer:()=>switchTab('review')});
+const tabPaths={review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account'};
 function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'review';}
 function switchTab(tab,{historyMode='push'}={}) {
   if(!Object.hasOwn(tabPaths,tab)||!$(tab)) return;
@@ -38,6 +40,7 @@ function switchTab(tab,{historyMode='push'}={}) {
   // Keep the current report and unsaved forms in the DOM when changing sections.
   if(tab==='hero-pool'&&state.user&&(!state.pool||state.poolDirty)) void loadPool();
   if(tab==='learning'&&state.user) void loadLearning({preserveView:true});
+  videoWorkspace.setVisible(tab==='videos');
   stopChatgptPolling();
   if(tab==='account'&&state.user) void loadChatgpt();
 }
@@ -57,14 +60,20 @@ function profileView() {
   if(profile) { const box=node('div',undefined,'player-card'); box.append(node('strong',profile.nickname),node('p',`Steam ID: ${profile.account_id} · Матч: ${profile.match_id}`,'help')); summary.append(box); }
   else summary.append(node('p','Загрузи первый матч и укажи свой ник. Игрок закрепится автоматически после чтения реплея.','muted'));
   buttons();
+  videoWorkspace.setSession(state.user,profile);
 }
 async function session() {
   const data=await api('/api/session'); state.setup=data.setup_required===true; state.user=data.authenticated?data.user:null;
+  state.coaching=data.coaching??{};
+  $('chatgpt-integration').hidden=state.coaching.personal_connect!==true;
+  $('platform-coach').hidden=!state.user||state.coaching.mode!=='platform';
+  $('platform-coach-status').textContent=state.coaching.available===true?'Тренер подключён к платформе. Личная подписка ChatGPT для разбора не нужна.':'Подключение тренера временно недоступно. Сохранённые разборы и практика остаются доступны.';
   $('loading').hidden=true; $('workspace').hidden=!state.user; $('auth').hidden=!!state.user; $('logout').hidden=!state.user;
   if(!state.user) {
     stopChatgptPolling();state.chatgpt=null;$('chatgpt-content').replaceChildren();$('chatgpt-status').textContent='';
     state.pool=null; state.poolRequest++; state.poolDrafts.clear(); state.poolJournalOpen.clear(); state.poolSignature=''; state.poolVisible=20;
     state.profile=null; state.selected=null; state.detail=null; state.showArchived=false; $('result').hidden=true; $('pool-content').hidden=true;
+    videoWorkspace.setSession(null,null);
     state.learning=null;state.reportLearning=null;state.learningRequest++;state.reportLearningRequest++;state.learningDrafts.clear();state.learningMatches.clear();state.learningStage=null;state.learningExercise=null;state.reportExercise=null;$('report-learning').replaceChildren();$('pool-learning').replaceChildren();
     $('pool-hero').replaceChildren(new Option('Все герои','')); $('pool-position').value=''; $('pool-period').value='all'; $('pool-favorites-only').checked=false; $('pool-refresh').disabled=false;
     if($('learning-hero'))$('learning-hero').replaceChildren(new Option('Все герои',''));if($('learning-position'))$('learning-position').value='';
@@ -98,7 +107,7 @@ function stopChatgptPolling() {
   state.chatgptTimer=null;state.chatgptClock=null;state.chatgptController?.abort();state.chatgptController=null;
   $('chatgpt-integration').setAttribute('aria-busy','false');
 }
-function chatgptVisible() {return !!state.user&&!$('account').hidden&&!document.hidden;}
+function chatgptVisible() {return !!state.user&&state.coaching?.personal_connect===true&&!$('account').hidden&&!document.hidden;}
 function chatgptDevice(data) {
   const pending=data?.pending;
   if(data?.status!=='pending'||!pending||pending.verification_url!=='https://auth.openai.com/codex/device'||typeof pending.user_code!=='string'||!/^[A-Za-z0-9 -]{4,32}$/.test(pending.user_code)||typeof data.auth_generation!=='string')return null;
@@ -490,7 +499,7 @@ function renderDetail() {
   const coach=report.coaching; $('coaching-section').hidden=false;
   if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points); }
   else {
-    const needsConnection=coach?.failure_code==='CHATGPT_NOT_CONNECTED';
+    const needsConnection=coach?.failure_code==='CHATGPT_NOT_CONNECTED'&&state.coaching?.personal_connect===true;
     $('coaching-summary').textContent=coach?.status==='context_changed'?'Контекст разбора обновлён. Упражнение выше учитывает текущую позицию; прежний тренерский комментарий больше не применяется.':needsConnection?'Статистика матча готова. Подключи ChatGPT в аккаунте, чтобы использовать тренера Narma.':'Тренерский комментарий временно недоступен. Статистика и эпизоды из реплея доступны.';
     $('coaching').replaceChildren();
     if(needsConnection){

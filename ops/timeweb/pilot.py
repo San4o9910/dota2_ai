@@ -22,6 +22,7 @@ from uuid import UUID
 from preflight import CheckError, NoRedirect, ORIGIN
 from prebuilt_images import ImageError, prepare_bundle
 from stratz_secrets import build_stats_payload, build_stats_source
+from openai_secrets import validate_key as validate_openai_key
 
 NAME = "narma-vision-pilot-01"
 MARKER = "NARMA managed pilot San4o9910/dota2_ai 2026-09-06"
@@ -455,9 +456,61 @@ def validate_chatgpt_preparation(state):
         gemini_ledger_preserved=True)
 
 
-def main(*, activate_hermes=False, prepare_chatgpt_auth=False):
-    if activate_hermes and prepare_chatgpt_auth:
+def provider_modes(existing, *, activate_hermes=False, prepare_chatgpt_auth=False, prepare_openai_api=False):
+    """Explicit changes win; ordinary releases preserve an existing API provider."""
+    if sum((bool(activate_hermes), bool(prepare_chatgpt_auth), bool(prepare_openai_api))) > 1:
         raise CheckError('conflicting_provider_activation_modes')
+    if activate_hermes or prepare_chatgpt_auth or prepare_openai_api:
+        return prepare_chatgpt_auth, prepare_openai_api
+    if not isinstance(existing, dict) or set(existing) != {'replay', 'hermes'}:
+        raise CheckError('existing_provider_configuration_invalid')
+    values = set(existing.values())
+    if not values <= {'gemini', 'chatgpt_subscription', 'openai_api', None}:
+        raise CheckError('existing_provider_configuration_invalid')
+    if 'openai_api' in values:
+        if values != {'openai_api'}:
+            raise CheckError('existing_provider_configuration_mixed')
+        return False, True
+    # This preserves a previously selected personal-provider deployment. It never
+    # opts a Gemini/disabled installation into owner OAuth just because of push.
+    if 'chatgpt_subscription' in values:
+        if values != {'chatgpt_subscription'}:
+            raise CheckError('existing_provider_configuration_mixed')
+        return True, False
+    return False, False
+
+
+def validate_openai_preparation(state):
+    if (not isinstance(state, dict) or state.get('event') != 'openai_api_ready'
+            or state.get('provider') != 'openai_api' or state.get('configured') is not True
+            or state.get('video_mode') != 'selective_v1'
+            or state.get('network_isolation_verified') is not True
+            or state.get('resource_lock_available') is not True
+            or state.get('generation_smoke_performed') is not False
+            or state.get('provider_calls_created_by_preflight') != 0
+            or state.get('existing_ledgers_preserved') is not True):
+        raise CheckError('openai_preparation_unverified')
+    event('openai_api_ready', configured=True, provider='openai_api', video_mode='selective_v1',
+        generation_smoke_performed=False, provider_calls_created_by_preflight=0,
+        provider_access_verified=False, existing_ledgers_preserved=True,
+        explicit_allowance_configured=state.get('explicit_allowance_configured') is True)
+
+
+def main(*, activate_hermes=False, prepare_chatgpt_auth=False, prepare_openai_api=False):
+    # Reject conflicting CLI calls and invalid budget inputs before cloud access.
+    provider_modes({'replay': None, 'hermes': None}, activate_hermes=activate_hermes,
+        prepare_chatgpt_auth=prepare_chatgpt_auth, prepare_openai_api=prepare_openai_api)
+    from prepare_openai_api import allowance_input
+    try:
+        openai_allowance = allowance_input(os.getenv('OPENAI_LIMIT_MICROUSD'), os.getenv('OPENAI_EXPIRES_AT'))
+        if openai_allowance and not prepare_openai_api:
+            raise RuntimeError('openai_explicit_allowance_mode_required')
+        incoming_openai_key = os.getenv('OPENAI_API_KEY', '') if prepare_openai_api else ''
+        if incoming_openai_key:
+            validate_openai_key(incoming_openai_key)
+    except RuntimeError as error:
+        raise CheckError(str(error)) from None
+    explicit_openai = prepare_openai_api
     try:
         statistics_payload = build_stats_payload(os.environ)
     except ValueError:
@@ -587,6 +640,20 @@ runcmd:
                 technical=[d.get('fqdn') for d in domains.get('domains',[]) if d.get('is_technical') is True and d.get('linked_ip')==host]
                 hostname=technical[0] if len(technical)==1 else 'narma-'+host.replace('.','-')+'.sslip.io'
             release = "/opt/narma/releases/" + sha
+            existing_code = '''import json,pathlib
+p=pathlib.Path('/opt/narma/secrets/video.env')
+v=dict(line.split('=',1) for line in p.read_text().splitlines()) if p.is_file() else {}
+allowed={'gemini','chatgpt_subscription','openai_api',None}
+providers={'replay':v.get('REPLAY_COACH_PROVIDER'),'hermes':v.get('HERMES_PROVIDER')}
+assert set(providers.values())<=allowed
+print(json.dumps({'providers':providers,'openai_key_present':bool(v.get('OPENAI_API_KEY'))}))
+'''
+            existing_modes = json.loads(command(ssh + ['python3 -c ' + shlex.quote(existing_code)], timeout=30))
+            prepare_chatgpt_auth, prepare_openai_api = provider_modes(existing_modes.get('providers'),
+                activate_hermes=activate_hermes, prepare_chatgpt_auth=prepare_chatgpt_auth,
+                prepare_openai_api=prepare_openai_api)
+            if prepare_openai_api and not incoming_openai_key and existing_modes.get('openai_key_present') is not True:
+                raise CheckError('missing_openai_secret')
             command(ssh+["mkdir -p " + release], timeout=30, phase="release_directory")
             archive = temporary/"source.tar.gz"
             with tarfile.open(archive, "w:gz") as bundle:
@@ -607,14 +674,32 @@ runcmd:
             # GitHub artifacts, command arguments or public logs.
             secret_input = json.dumps({"gemini_key":key, "release":sha,
                                       **statistics_payload,
-                                      "prepare_chatgpt_auth":prepare_chatgpt_auth}).encode()
-            command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
-            event("installing_private_services", server_id=server_id, release=sha)
-            command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
-            if not activate_hermes and not prepare_chatgpt_auth:
-                # Fail before stopping/changing services if this update would
-                # silently disable a previously active Hermes runtime.
-                deploy_hermes(ssh, release, sha)
+                                      "prepare_chatgpt_auth":prepare_chatgpt_auth,
+                                      "prepare_openai_api":prepare_openai_api,
+                                      "openai_activation_explicit":explicit_openai,
+                                      **({"openai_key":incoming_openai_key} if incoming_openai_key else {})}).encode()
+            try:
+                command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
+                event("installing_private_services", server_id=server_id, release=sha)
+                command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
+                if not activate_hermes and not prepare_chatgpt_auth and not prepare_openai_api:
+                    # Fail before stopping/changing services if this update would
+                    # silently disable a previously active Hermes runtime.
+                    deploy_hermes(ssh, release, sha)
+            except Exception:
+                # A failure before bootstrap must also restore provider selection.
+                # This invokes only settings rollback; it never stops live services
+                # or removes a first-installed API/encryption key.
+                rollback_code = ('import sys; sys.path.insert(0,' + repr(release + '/ops/timeweb') + '); '
+                    'from chatgpt_secrets import restore_settings; '
+                    'from openai_secrets import restore_settings as restore_openai; '
+                    'restore_settings(' + repr(sha) + '); restore_openai(' + repr(sha) + ')')
+                try:
+                    command(ssh + ['python3 -c ' + shlex.quote(rollback_code)], timeout=30)
+                    event('provider_settings_restored_before_bootstrap')
+                except Exception:
+                    event('provider_settings_restore_unconfirmed')
+                raise
             try:
                 transfer_image_archive(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py receive " + sha], image_archive)
                 command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py install " + sha], timeout=1000)
@@ -645,6 +730,11 @@ runcmd:
                 # Learning/schema/owner checks run before starting the replay
                 # worker. Their failure restores the API as well as workers.
                 auth_option = ' --prepare-chatgpt-auth' if prepare_chatgpt_auth else ''
+                if prepare_openai_api:
+                    auth_option = ' --prepare-openai-api'
+                    if openai_allowance:
+                        auth_option += ' --openai-limit-microusd ' + str(openai_allowance['limit_microusd'])
+                        auth_option += ' --openai-expires-at ' + shlex.quote(openai_allowance['expires_at'])
                 output=command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+auth_option],timeout=540)
                 activated=json.loads(output)
                 if (activated.get('event')!='replay_pipeline_ready'
@@ -652,10 +742,14 @@ runcmd:
                         or activated.get('synthetic_paid_calls')!=0):
                     raise CheckError('replay_pipeline_not_ready')
                 event('replay_pipeline_ready',worker_enabled=True,fresh_worker_heartbeat=True,
-                    video_worker_stopped=True,synthetic_paid_calls=0,
+                    video_worker_stopped=activated.get('video_worker_stopped'),synthetic_paid_calls=0,
                     hero_pool=activated.get('hero_pool'), learning=activated.get('learning'))
                 if prepare_chatgpt_auth:
                     validate_chatgpt_preparation(activated.get('chatgpt'))
+                elif prepare_openai_api:
+                    if activated.get('video_worker_fresh') is not True or activated.get('video_worker_stopped') is not False:
+                        raise CheckError('economic_video_worker_not_ready')
+                    validate_openai_preparation(activated.get('openai'))
                 else:
                     deploy_hermes(ssh, release, sha, activate=activate_hermes)
             except Exception:
@@ -706,6 +800,8 @@ if __name__ == "__main__":
             main(activate_hermes=True)
         elif sys.argv[1:] == ['--prepare-chatgpt-auth']:
             main(prepare_chatgpt_auth=True)
+        elif sys.argv[1:] == ['--prepare-openai-api']:
+            main(prepare_openai_api=True)
         else:
             raise CheckError("invalid_pilot_arguments")
     except CheckError as error:

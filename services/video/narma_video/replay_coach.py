@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import budget as ai_budget
 from . import chatgpt_auth, chatgpt_provider
+from . import openai_provider, openai_budget
 from .db import database
 from .gemini import generate_usage
 from .replay_hero_context import build_hero_context
@@ -127,6 +128,10 @@ _SAFE_FAILURES = frozenset({
     'VIDEO_GLOBAL_BUDGET_INVALID', 'VIDEO_BUDGET_PRICE_POLICY_EXPIRED',
     'VIDEO_REQUEST_BUDGET_EXCEEDED', 'VIDEO_BUDGET_CALL_KIND_INVALID',
     'VIDEO_BUDGET_RECONCILIATION_REQUIRED', 'VIDEO_BUDGET_ACCOUNTING_FAILED',
+    'OPENAI_BUDGET_DISABLED', 'OPENAI_BUDGET_EXCEEDED', 'OPENAI_BUDGET_INVALID',
+    'OPENAI_BUDGET_PRICE_POLICY_EXPIRED', 'OPENAI_BUDGET_BOUND_INVALID',
+    'OPENAI_BUDGET_USAGE_INVALID', 'OPENAI_BUDGET_ACCOUNTING_FAILED',
+    'OPENAI_BUDGET_RECONCILIATION_REQUIRED',
 })
 
 
@@ -268,6 +273,18 @@ def failure_category(error, code):
         return 'lease'
     if code.startswith('CHATGPT_'):
         return 'provider_unavailable'
+    if code in ('OPENAI_AUTHENTICATION_FAILED',):
+        return 'authentication'
+    if code in ('OPENAI_RATE_LIMITED', 'OPENAI_DAILY_LIMIT'):
+        return 'rate_limited'
+    if code == 'OPENAI_NOT_CONFIGURED':
+        return 'configuration'
+    if code == 'OPENAI_TIMEOUT':
+        return 'timeout'
+    if code == 'OPENAI_TRANSPORT_ERROR':
+        return 'transport'
+    if code == 'OPENAI_LEASE_LOST':
+        return 'lease'
     if 'BUDGET' in code or code == 'GEMINI_USAGE_UNSUPPORTED':
         return 'budget'
     if code == 'REPLAY_COACH_NOT_CONFIGURED':
@@ -276,6 +293,8 @@ def failure_category(error, code):
         return 'lease'
     if code in _SAFE_FAILURES and code != 'REPLAY_COACH_UNAVAILABLE':
         return 'validation'
+    if code.startswith('OPENAI_'):
+        return 'provider_unavailable'
     return 'unknown'
 
 
@@ -538,6 +557,64 @@ def analyze_subscription_replay(job, factual_report, context, encoded, evidence_
     return result, str(row['id']), generation
 
 
+def reserve_api_replay(job, factual_report, context, encoded):
+    """Paid calls retain the same source, player, manual role and exercise fences."""
+    player, coverage = factual_report.get('player') or {}, factual_report.get('coverage') or {}
+    if (not all(job.get(key) is not None for key in
+                ('id', 'owner_id', 'account_id', 'match_id', 'source_sha256', 'lease_token'))
+            or coverage.get('complete') is not True
+            or player.get('account_id') != job['account_id']
+            or str(factual_report.get('match_id')) != job['match_id']
+            or coverage.get('source_sha256') != job['source_sha256']):
+        raise ValueError('REPLAY_COACH_INPUT_INVALID')
+    schema = ReplayCoaching.model_json_schema()
+    digest = openai_provider.request_digest(SYSTEM, encoded, schema)
+    with database() as connection:
+        connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (job['owner_id'],))
+        connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))', (job['owner_id'],))
+        active = connection.execute('''SELECT r.id,CASE WHEN m.match_id IS NOT NULL THEN m.position
+                ELSE r.requested_position END AS position,r.requested_mmr,r.training_level
+            FROM replay_jobs r
+            JOIN portal_dota_profiles p ON p.owner_id=r.owner_id AND p.account_id=r.account_id
+            LEFT JOIN hero_pool_matches m ON m.owner_id=r.owner_id
+                AND m.account_id=r.account_id AND m.match_id=r.match_id
+            WHERE r.id=%s AND r.owner_id=%s AND r.account_id=%s AND r.match_id=%s
+                AND r.source_sha256=%s AND r.state='processing' AND r.lease_token=%s
+                AND r.lease_expires_at>clock_timestamp() FOR UPDATE OF r''',
+            (job['id'], job['owner_id'], job['account_id'], job['match_id'],
+             job['source_sha256'], job['lease_token'])).fetchone()
+        if not active:
+            raise ValueError('REPLAY_COACH_LEASE_LOST')
+        position = active['position'] if type(active['position']) is int and 1 <= active['position'] <= 5 else None
+        exercise_id = (resolve_active_exercise(connection, job['owner_id'], job['account_id'],
+                        player.get('hero'), position) if position is not None else None)
+        preferences = training_context(active.get('requested_mmr'), active.get('training_level'))
+        if (position != context['position'] or exercise_id != context['exercise_id']
+                or any(preferences[key] != context.get(key) for key in ('mmr', 'training_level'))):
+            raise ValueError('REPLAY_COACH_INPUT_INVALID')
+        return openai_provider.reserve_call(connection, owner_id=job['owner_id'],
+            request_key=f"replay:{job['id']}:{digest}", instructions=SYSTEM, input_data=encoded,
+            schema=schema, kind='replay', job_id=job['id'], lease_token=job['lease_token'])
+
+
+def analyze_api_replay(job, factual_report, context, encoded, evidence_ids):
+    row = reserve_api_replay(job, factual_report, context, encoded)
+    if row['state'] == 'succeeded':
+        output = row['output_text']
+    elif row['state'] == 'reserved':
+        response = openai_provider.perform_reserved(row['id'], job['owner_id'], SYSTEM,
+            encoded, ReplayCoaching.model_json_schema())
+        output = response['text']
+    else:
+        raise openai_provider.ProviderError('OPENAI_CALL_ALREADY_ATTEMPTED')
+    try:
+        value = json.loads(output)
+    except (TypeError, ValueError):
+        raise ValueError('REPLAY_COACH_RESPONSE_INVALID') from None
+    # Accounting has already committed; bad advice cannot release a paid attempt.
+    return validate_coaching(value, evidence_ids), str(row['id'])
+
+
 def enrich_report(job, factual_report, coach=None):
     """Keep the parser report intact; failed optional coaching never hides the facts.
 
@@ -560,6 +637,10 @@ def enrich_report(job, factual_report, coach=None):
             model = chatgpt_provider.MODEL
             provenance = {'provider': 'openai-codex', 'usage_kind': 'chatgpt_subscription',
                           'connection_generation': generation}
+        elif owned_coach and selected == 'openai_api':
+            result, call_id = analyze_api_replay(job, factual_report, context, encoded, ids)
+            model = openai_provider.MODEL
+            provenance = {'provider': 'openai', 'usage_kind': 'openai_api', 'call_id': call_id}
         else:
             if owned_coach and selected != 'gemini':
                 raise ValueError('REPLAY_COACH_NOT_CONFIGURED')
@@ -576,7 +657,7 @@ def enrich_report(job, factual_report, coach=None):
                               **provenance, **result.model_dump()}
         print(json.dumps({'event': 'replay_coaching_ready', 'job_id': str(job['id']), 'call_id': call_id}), flush=True)
     except Exception as error:
-        if isinstance(error, (chatgpt_provider.ProviderError, chatgpt_auth.AuthError)):
+        if isinstance(error, (chatgpt_provider.ProviderError, chatgpt_auth.AuthError, openai_provider.ProviderError)):
             code = error.code
         else:
             code = str(error) if isinstance(error, ValueError) and str(error) in _SAFE_FAILURES else 'REPLAY_COACH_UNAVAILABLE'

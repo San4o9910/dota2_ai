@@ -11,6 +11,7 @@ on:
       - services/hermes/**
       - scripts/check-portal-ui.mjs
       - scripts/check-explore-ui.mjs
+      - scripts/check-video-workspace.mjs
       - .dockerignore
   workflow_dispatch:
     inputs:
@@ -30,6 +31,21 @@ on:
         type: boolean
         required: false
         default: false
+      prepare_openai_api:
+        description: Select owner-funded OpenAI API and selective video; no generation smoke
+        type: boolean
+        required: false
+        default: false
+      openai_limit_microusd:
+        description: Optional explicit total OpenAI ceiling in micro-USD (maximum 10000000); blank preserves
+        type: string
+        required: false
+        default: ''
+      openai_expires_at:
+        description: Required with ceiling, UTC YYYY-MM-DDTHH:MM:SSZ no later than 2026-11-21T00:00:00Z
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -42,7 +58,8 @@ jobs:
   deploy:
     if: >-
       github.repository == 'San4o9910/dota2_ai' &&
-      github.ref == 'refs/heads/codex/replay-map-hardening-8ea829a'
+      (github.ref == 'refs/heads/codex/replay-map-hardening-8ea829a' ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/openai-video-coach'))
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     env:
@@ -80,6 +97,7 @@ jobs:
           "$RUNNER_TEMP/narma-portal-qa/node_modules/.bin/playwright" install --with-deps chromium
           node scripts/check-portal-ui.mjs
           node scripts/check-explore-ui.mjs
+          node scripts/check-video-workspace.mjs
       - name: Preserve synthetic report screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -148,20 +166,23 @@ jobs:
           STRATZ_API_TOKEN: ${{ env.NARMA_BUILD_STATS_SOURCE == 'stratz' && secrets.STRATZ_API_TOKEN || '' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ACTIVATE_HERMES: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_hermes && 'true' || 'false' }}
-          # Preserve the already prepared live Hermes/ChatGPT state on ordinary
-          # releases. This existing preparation path performs no generation smoke.
-          PREPARE_CHATGPT_AUTH: ${{ (github.event_name == 'push' || inputs.prepare_chatgpt_auth) && 'true' || 'false' }}
+          # Ordinary releases inspect and preserve the selected server provider.
+          # Personal OAuth is never implicitly selected by a push event.
+          PREPARE_CHATGPT_AUTH: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_chatgpt_auth && 'true' || 'false' }}
+          PREPARE_OPENAI_API: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_openai_api && 'true' || 'false' }}
+          OPENAI_API_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_openai_api && secrets.OPENAI_API_KEY || '' }}
+          OPENAI_LIMIT_MICROUSD: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_limit_microusd || '' }}
+          OPENAI_EXPIRES_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_expires_at || '' }}
         run: |
           pilot_args=()
-          if [[ "$ACTIVATE_HERMES" == "true" && "$PREPARE_CHATGPT_AUTH" == "true" ]]; then
-            echo 'Choose one explicit provider preparation mode'
-            exit 1
-          fi
           if [[ "$ACTIVATE_HERMES" == "true" ]]; then
             pilot_args+=(--activate-hermes)
           fi
           if [[ "$PREPARE_CHATGPT_AUTH" == "true" ]]; then
             pilot_args+=(--prepare-chatgpt-auth)
+          fi
+          if [[ "$PREPARE_OPENAI_API" == "true" ]]; then
+            pilot_args+=(--prepare-openai-api)
           fi
           python3 ops/timeweb/pilot.py "${pilot_args[@]}"
       - name: Verify published deep learning and all-hero catalog

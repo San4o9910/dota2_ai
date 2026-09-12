@@ -14,7 +14,7 @@ function dependency(name) {
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const files=Object.fromEntries(['/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
-Object.assign(files,{'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
+Object.assign(files,{'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type',file[1]); response.end(await readFile(path.join(root,file[0])));
@@ -113,7 +113,7 @@ try {
       let body, status=200, responseHeaders={};
       if(endpoint==='/api/auth/login') { authenticated=true; body={authenticated:true}; }
       else if(endpoint==='/api/auth/logout') {authenticated=false;body={authenticated:false};}
-      else if(endpoint==='/api/session') body={authenticated,setup_required:false,user:authenticated?{email:'fixture@example.test'}:null};
+      else if(endpoint==='/api/session') body={authenticated,setup_required:false,user:authenticated?{email:'fixture@example.test'}:null,coaching:{mode:'personal',personal_connect:true,available:false}};
       else if(endpoint.startsWith('/api/integrations/chatgpt')) {
         integrationRequests.push({method,endpoint,body:request.postDataJSON()});
         if(chatgptRejectSession){status=401;authenticated=false;responseHeaders={'X-Narma-Error':'PORTAL_SIGN_IN'};body={detail:malicious};}

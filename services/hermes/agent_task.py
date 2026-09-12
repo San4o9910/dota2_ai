@@ -9,7 +9,7 @@ import sys
 
 REVISION = "9fd44b4dfc44138b9e5d5689acb56c438364ff7b"
 MODEL = "gemini-3.8-flash"
-ALLOWED_MODELS = frozenset({MODEL, "gpt-5.4"})
+ALLOWED_MODELS = frozenset({MODEL, "gpt-5.4", "gpt-5.6-sol"})
 MAX_OUTPUT_BYTES = 32 * 1024
 SAFE_ERROR_CODES = frozenset({
     "HERMES_UPSTREAM_INIT_FAILED", "HERMES_UPSTREAM_CALL_FAILED", "HERMES_OUTPUT_EMPTY",

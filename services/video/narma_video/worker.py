@@ -12,6 +12,7 @@ from .config import job_directory
 from .db import database
 from .frames import probe, decode, batches
 from .gemini import GeminiVision
+from .resource_lock import media_slot
 from . import budget as ai_budget
 
 def heartbeat(model):
@@ -74,6 +75,14 @@ def reserve_provider_call(job, frames, model):
         return ai_budget.reserve(connection,job,frames,model)
 
 def run_job(job, vision):
+    if job.get('analysis_mode') == 'selective_v1':
+        from .video_analysis import run_selective
+        return run_selective(job, vision if hasattr(vision, 'analyze_overview') else None)
+    with media_slot(lambda: renew(job)):
+        return run_full_frames(job, vision)
+
+
+def run_full_frames(job, vision):
     source=job_directory(job["id"])/"source"
     with source.open("rb") as stream:
         if hashlib.file_digest(stream,"sha256").hexdigest()!=job["source_sha256"]:
@@ -112,12 +121,20 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument("--once",action="store_true");parser.add_argument('--job-id',type=UUID);args=parser.parse_args()
     if args.job_id and not args.once:
         parser.error('--job-id requires --once')
-    vision=GeminiVision()  # Fail before claiming jobs when credentials are absent.
+    from .video_analysis import configured_mode
+    if configured_mode() == 'selective_v1':
+        from .video_native import GeminiVideo
+        vision = GeminiVideo()
+    else:
+        vision = GeminiVision()  # Fail before claiming jobs when credentials are absent.
     while True:
         cleanup_deleted(); heartbeat(vision.model); job=claim(args.job_id)
         if job:
             try:
-                run_job(job,vision)
+                if job.get('analysis_mode') != 'selective_v1' and hasattr(vision, 'analyze_overview'):
+                    run_job(job, GeminiVision())
+                else:
+                    run_job(job,vision)
             except Exception as error:
                 # Provider errors may contain request data. Never log raw exceptions.
                 known=isinstance(error,ValueError) and str(error).startswith(("VIDEO_","GEMINI_"))

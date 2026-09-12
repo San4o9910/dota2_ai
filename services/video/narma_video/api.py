@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -66,8 +66,9 @@ def ready():
             connection.execute("SELECT 1 FROM replay_jobs LIMIT 1")
             connection.execute("SELECT 1 FROM hero_pool_match_notes LIMIT 1")
             migrated = connection.execute("""SELECT count(*) AS n FROM video_schema_migrations
-                WHERE name IN ('010_hero_pool_progress.sql','008_replay_coaching_history.sql','009_hermes_reviews.sql','011_hermes_runtime.sql','012_learning_curriculum.sql','013_chatgpt_auth.sql','014_chatgpt_calls.sql','015_hermes_chatgpt_provider.sql')""").fetchone()
-            if migrated["n"] != 8:
+                WHERE name IN ('010_hero_pool_progress.sql','008_replay_coaching_history.sql','009_hermes_reviews.sql','011_hermes_runtime.sql','012_learning_curriculum.sql','013_chatgpt_auth.sql','014_chatgpt_calls.sql','015_hermes_chatgpt_provider.sql',
+                    '018_openai_api.sql','019_selective_video.sql','020_hermes_openai.sql','021_portal_multiple_accounts.sql')""").fetchone()
+            if migrated["n"] != 12:
                 raise RuntimeError("Progress schema not ready")
         with tempfile.TemporaryFile(dir=media_root()) as handle:
             handle.write(b"ready"); handle.flush()
@@ -93,6 +94,10 @@ class CreateVideo(BaseModel):
     size_bytes: int = Field(ge=16, le=MAX_VIDEO_BYTES)
     account_id: int = Field(ge=1, le=4294967294)
     nickname: str = Field(min_length=1, max_length=128)
+    hero: str | None = Field(default=None, min_length=1, max_length=80)
+    position: int | None = Field(default=None, ge=1, le=5)
+    mmr: int | None = Field(default=None, ge=0, le=20000)
+    training_level: Literal['foundations','application','advanced'] | None = None
 
 def owned(connection, owner, job_id, lock=False):
     row = connection.execute("SELECT * FROM video_jobs WHERE id=%s AND owner_id=%s AND state<>'deleted'" + (" FOR UPDATE" if lock else ""), (job_id, owner)).fetchone()
@@ -101,20 +106,27 @@ def owned(connection, owner, job_id, lock=False):
     return row
 
 def public(row):
-    return {**{key: row[key] for key in ("id", "filename", "size_bytes", "state", "nickname", "frame_count", "processed_frames", "duration_seconds", "failure_code", "created_at")},"identity_status":"nickname_only"}
+    fields = ("id", "filename", "size_bytes", "state", "nickname", "frame_count", "processed_frames", "duration_seconds", "failure_code", "created_at",
+        "hero", "position", "mmr", "training_level", "analysis_mode", "analysis_phase", "completed_stages", "total_stages")
+    return {**{key: row.get(key) for key in fields},"identity_status":"nickname_only"}
 
 @app.get("/v1/videos")
 def videos(owner: Owner):
+    from .video_analysis import configured_mode, coach_available
     with database() as connection:
         rows = connection.execute("SELECT * FROM video_jobs WHERE owner_id=%s AND state<>'deleted' ORDER BY created_at DESC LIMIT 30", (owner,)).fetchall()
         worker = connection.execute("SELECT 1 FROM video_workers WHERE last_seen>now()-interval '5 minutes' LIMIT 1").fetchone()
+        coach_ready = coach_available(connection, owner)
     allowance=budget.status()
     return {"videos": [public(row) for row in rows], "worker_ready": bool(worker), "max_bytes": MAX_VIDEO_BYTES,
         "frame_budget":int(os.environ.get('VIDEO_FRAME_BUDGET','3600')),
-        "budget_available":allowance['enabled'] and allowance['available_microusd']>=budget.RESERVATION}
+        "analysis_mode": configured_mode(), "coach_available": coach_ready,
+        "budget_available":bool(allowance['enabled'] and allowance['available_microusd']>=budget.RESERVATION
+            and (configured_mode() != 'selective_v1' or coach_ready))}
 
 @app.post("/v1/videos", status_code=201)
 def create_video(body: CreateVideo, owner: Owner):
+    from .video_analysis import configured_mode, coach_available
     if not re.fullmatch(r"[^\x00-\x1f\x7f/\\]+\.(?:mp4|mkv|webm|mov)", body.filename, re.I):
         raise HTTPException(400, "Выберите MP4, MKV, WebM или MOV.")
     with database() as connection:
@@ -123,16 +135,24 @@ def create_video(body: CreateVideo, owner: Owner):
         if existing:
             if existing["owner_id"] != owner or existing["filename"] != body.filename or existing["size_bytes"] != body.size_bytes or existing["account_id"] != body.account_id:
                 raise HTTPException(409, "Этот запрос уже относится к другому файлу.")
+            if existing['nickname'] != body.nickname or any(existing.get(key) != getattr(body, key)
+                    for key in ('hero','position','mmr','training_level')):
+                raise HTTPException(409, "Контекст этого разбора уже сохранён. Начните новую загрузку.")
             if existing["state"] == "deleted":
                 raise HTTPException(409, "Видео удалено. Начните новую загрузку.")
             return {"video": public(existing), "part_bytes": PART_BYTES}
         allowance=budget.status(connection)
         if not allowance['enabled'] or allowance['available_microusd']<budget.RESERVATION:
             raise HTTPException(503, "Тестовый бюджет видеоанализа исчерпан или приостановлен. Сохранённые результаты доступны.")
+        mode = configured_mode()
+        if mode == 'selective_v1' and not coach_available(connection, owner):
+            raise HTTPException(503, "Разбор с тренером временно недоступен. Сохранённые результаты доступны.")
         limits = connection.execute("SELECT count(*) FILTER (WHERE created_at>now()-interval '1 day') AS daily, coalesce(sum(size_bytes) FILTER(WHERE storage_deleted_at IS NULL),0) AS stored FROM video_jobs WHERE owner_id=%s", (owner,)).fetchone()
         if limits["daily"] >= 4 or limits["stored"] + body.size_bytes > 8 * 1024**3:
             raise HTTPException(429, "Лимит видео исчерпан. Удалите ненужные файлы или повторите позже.")
-        row = connection.execute("INSERT INTO video_jobs(id,owner_id,account_id,nickname,filename,size_bytes) VALUES (%s,%s,%s,%s,%s,%s) RETURNING *", (body.id,owner,body.account_id,body.nickname,body.filename,body.size_bytes)).fetchone()
+        row = connection.execute("""INSERT INTO video_jobs(id,owner_id,account_id,nickname,filename,size_bytes,
+            analysis_mode,hero,position,mmr,training_level) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (body.id,owner,body.account_id,body.nickname,body.filename,body.size_bytes,mode,body.hero,body.position,body.mmr,body.training_level)).fetchone()
         directory = job_directory(body.id)
         if directory.exists():
             # A rolled-back initialization may leave an empty directory only.
@@ -144,11 +164,14 @@ def create_video(body: CreateVideo, owner: Owner):
 
 @app.get("/v1/videos/{job_id}")
 def get_video(job_id: UUID, owner: Owner, after: int = -1):
+    from .video_analysis import public_analysis
     with database() as connection:
         row = owned(connection, owner, job_id)
         parts = connection.execute("SELECT part_number FROM video_parts WHERE job_id=%s ORDER BY part_number", (job_id,)).fetchall()
         batches = connection.execute("SELECT first_frame,last_frame,first_pts_seconds,last_pts_seconds,payload FROM video_batches WHERE job_id=%s AND first_frame>%s ORDER BY first_frame LIMIT 30", (job_id, max(-1,after))).fetchall()
+        analysis = public_analysis(connection, row)
     return {"video": public(row), "parts": [p["part_number"] for p in parts], "batches": batches,
+            "analysis": analysis,
             "next_cursor": batches[-1]["first_frame"] if len(batches)==30 else None}
 
 @app.put("/v1/videos/{job_id}/parts/{part_number}")
@@ -219,11 +242,16 @@ def source(job_id: UUID, owner: Owner):
 
 @app.delete("/v1/videos/{job_id}")
 def delete_video(job_id: UUID, owner: Owner):
+    from .openai_provider import forget_output
     with database() as connection:
+        connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))', (owner,))
         row=connection.execute("SELECT id FROM video_jobs WHERE id=%s AND owner_id=%s FOR UPDATE",(job_id,owner)).fetchone()
         if not row:
             raise HTTPException(404,"Видео не найдено.")
-        connection.execute("UPDATE video_jobs SET state='deleted',lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=%s", (job_id,))
+        connection.execute("""UPDATE video_jobs SET state='deleted',lease_token=NULL,lease_expires_at=NULL,
+            video_plan=NULL,video_coaching=NULL,updated_at=now() WHERE id=%s""", (job_id,))
+        forget_output(connection, owner_id=owner, video_job_id=job_id)
+        connection.execute('DELETE FROM video_analysis_steps WHERE job_id=%s', (job_id,))
         connection.execute("DELETE FROM video_batches WHERE job_id=%s", (job_id,))
         connection.execute("DELETE FROM video_parts WHERE job_id=%s", (job_id,))
     try:
