@@ -83,6 +83,7 @@ def stub_dispatch(task, monkeypatch, *, usage=True, before_response=None, output
             "output": [{"type": "message", "role": "assistant", "status": "completed",
                 "content": [{"type": "output_text", "text": text}]}],
             "usage": {"input_tokens": 100, "output_tokens": 100, "total_tokens": 200,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
                 "output_tokens_details": {"reasoning_tokens": 50}} if usage else None}
     monkeypatch.setattr(openai_provider, "_generate", generate)
     return text, calls

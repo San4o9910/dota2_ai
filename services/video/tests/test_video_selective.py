@@ -339,12 +339,14 @@ def test_coach_reuses_exact_paid_response_without_second_dispatch(job, monkeypat
         return {'status': 'completed', 'model': openai_provider.MODEL, 'service_tier': 'default',
             'output': [{'type': 'message', 'role': 'assistant', 'status': 'completed',
                         'content': [{'type': 'output_text', 'text': json.dumps(valid_coaching())}]}],
-            'usage': {'input_tokens': 100, 'output_tokens': 30, 'total_tokens': 130}}
+            'usage': {'input_tokens': 100, 'output_tokens': 30, 'total_tokens': 130,
+                      'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}}}
     monkeypatch.setattr(openai_provider, '_generate', generate)
     first = analysis.coach(job, [episode_result()])
     second = analysis.coach(job, [episode_result()])
     assert first == second and first['status'] == 'ready' and len(seen) == 1
-    value = json.loads(seen[0]['input'][0]['content'][0]['text'])
+    evidence_message, = [item for item in seen[0]['input'] if item['role'] == 'user']
+    value = json.loads(evidence_message['content'][0]['text'])
     assert value['training_context']['position'] == 5
     with database() as connection:
         calls = connection.execute('SELECT * FROM openai_api_calls WHERE owner_id=%s', (job['owner_id'],)).fetchall()
