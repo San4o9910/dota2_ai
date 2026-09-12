@@ -158,8 +158,8 @@ jobs:
           docker run --rm --user root --network narma-video-ci_default \
             --env TEST_DATABASE_URL="$DATABASE_URL" \
             --env NARMA_EXPLORE_REFRESH_ENABLED=0 \
-            --volume "$PWD/services/video/tests:/app/tests:ro" narma-video-check \
-            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest tests -q'
+            --volume "$PWD:/repo:ro" narma-video-check \
+            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest /repo/services/video/tests -q -p no:cacheprovider'
       - name: Create or reuse one hourly billed pilot and start private services
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
