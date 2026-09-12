@@ -92,8 +92,15 @@ def request_payload(instructions, input_data, schema, *, max_output_tokens=5000,
             for value in (instructions, input_data))
             or type(max_output_tokens) is not int or not 256 <= max_output_tokens <= budget.MAX_OUTPUT_TOKENS):
         raise ProviderError('OPENAI_REQUEST_INVALID')
-    payload = {'model': model, 'instructions': instructions,
-        'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': input_data}]}],
+    # Cache only the reusable instructions. The explicit-only mode prevents the
+    # provider's implicit breakpoint from writing unique customer evidence.
+    # https://developers.openai.com/api/docs/guides/prompt-caching
+    payload = {'model': model,
+        'prompt_cache_options': {'mode': 'explicit'},
+        'input': [
+            {'role': 'developer', 'content': [{'type': 'input_text', 'text': instructions,
+                'prompt_cache_breakpoint': {'mode': 'explicit'}}]},
+            {'role': 'user', 'content': [{'type': 'input_text', 'text': input_data}]}],
         'tools': [], 'tool_choice': 'none', 'parallel_tool_calls': False,
         'reasoning': {'effort': 'low'}, 'store': False, 'stream': False,
         'service_tier': 'default', 'max_output_tokens': max_output_tokens,

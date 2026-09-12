@@ -1,7 +1,9 @@
 """Durable owner-funded OpenAI allowance; integer micro-USD, no resets.
 
 Standard GPT-5.6 Sol text pricing verified 2026-09-12: $4/M input,
-$20/M output, including reasoning. Cached input is conservatively charged full.
+$0.40/M cache reads, $5/M cache writes and $20/M output, including reasoning.
+Reservations cover cache writes; settlement rounds fractional micro-USD upward.
+Missing cache-write telemetry is conservatively priced as writes, never as free.
 The promotional tariff must be reviewed before this policy expires.
 """
 import hashlib
@@ -13,7 +15,7 @@ from psycopg.types.json import Jsonb
 from .db import database
 
 MODEL = 'gpt-5.6-sol'
-POLICY = 'gpt-5.6-sol-standard-2026-09-12'
+POLICY = 'gpt-5.6-sol-standard-cache-v2-2026-09-12'
 PRICE_EXPIRES = '2026-11-21T00:00:00Z'
 MAX_ALLOWANCE = 10_000_000
 MAX_INPUT_TOKENS = 240000
@@ -24,7 +26,9 @@ def estimate_reservation(input_token_bound, max_output_tokens):
     if (type(input_token_bound) is not int or not 1 <= input_token_bound <= MAX_INPUT_TOKENS
             or type(max_output_tokens) is not int or not 256 <= max_output_tokens <= MAX_OUTPUT_TOKENS):
         raise ValueError('OPENAI_BUDGET_BOUND_INVALID')
-    return 4 * input_token_bound + 20 * max_output_tokens
+    # An uncached prompt may be written to the cache at 1.25x ordinary input.
+    # Reserve the largest possible bucket without assuming a cache hit.
+    return 5 * input_token_bound + 20 * max_output_tokens
 
 
 def lock_allowance(connection, amount):
@@ -56,18 +60,29 @@ def normalize_usage(usage):
         result[name] = value
     if result['total_tokens'] != result['input_tokens'] + result['output_tokens']:
         raise ValueError('OPENAI_BUDGET_USAGE_INVALID')
-    for field, detail, total in (
-            ('input_tokens_details', 'cached_tokens', 'input_tokens'),
-            ('output_tokens_details', 'reasoning_tokens', 'output_tokens')):
+    for field, details, total in (
+            ('input_tokens_details', ('cached_tokens', 'cache_write_tokens'), 'input_tokens'),
+            ('output_tokens_details', ('reasoning_tokens',), 'output_tokens')):
         values = usage.get(field)
         if values is None:
             continue
-        if (not isinstance(values, dict) or set(values) - {detail}
-                or type(values.get(detail)) is not int or not 0 <= values[detail] <= result[total]):
+        if (not isinstance(values, dict) or not values or set(values) - set(details)
+                or any(type(value) is not int or not 0 <= value <= result[total]
+                       for value in values.values())
+                or sum(values.values()) > result[total]):
             raise ValueError('OPENAI_BUDGET_USAGE_INVALID')
-        result[field] = {detail: values[detail]}
+        result[field] = dict(values)
+    inputs = result.get('input_tokens_details', {})
+    cached = inputs.get('cached_tokens', 0)
+    # Older response shapes may omit write telemetry. In that case all input
+    # outside a reported cache read could have incurred the write premium.
+    written = inputs.get('cache_write_tokens', result['input_tokens'] - cached)
+    ordinary = result['input_tokens'] - cached - written
     # Reasoning is already included in output_tokens: never charge it twice.
-    return result, 4 * result['input_tokens'] + 20 * result['output_tokens']
+    # Cache reads cost 0.4 micro-USD/token. Use tenths and one upward rounding
+    # per call so the allowance never understates a fractional provider charge.
+    tenths = 40 * ordinary + 4 * cached + 50 * written + 200 * result['output_tokens']
+    return result, (tenths + 9) // 10
 
 
 def settle(call_id, owner_id, usage, *, text=None, error_code=None):

@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 import os
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -21,7 +22,7 @@ def response(text=TEXT, **changes):
             {'type': 'message', 'role': 'assistant', 'status': 'completed',
              'content': [{'type': 'output_text', 'text': text}]}],
         'usage': {'input_tokens': 100, 'output_tokens': 50, 'total_tokens': 150,
-                  'input_tokens_details': {'cached_tokens': 75},
+                  'input_tokens_details': {'cached_tokens': 75, 'cache_write_tokens': 0},
                   'output_tokens_details': {'reasoning_tokens': 30}}, **changes}
 
 
@@ -128,10 +129,40 @@ def test_unusable_output_rejected(mutate, code):
         provider._text(value)
 
 
-def test_reasoning_not_double_charged_and_cache_full_price():
+def test_reasoning_not_double_charged_and_cache_read_discount():
     values, cost = budget.normalize_usage(response()['usage'])
-    assert cost == 1400 and values['output_tokens_details']['reasoning_tokens'] == 30
+    assert cost == 1130 and values['output_tokens_details']['reasoning_tokens'] == 30
     assert budget.normalize_usage(None) == (None, None)
+
+
+@pytest.mark.parametrize('details,cost', [
+    ({'cached_tokens': 60, 'cache_write_tokens': 20}, 1204),
+    ({'cached_tokens': 0, 'cache_write_tokens': 100}, 1500),
+    ({'cache_write_tokens': 100}, 1500),
+    ({'cached_tokens': 100, 'cache_write_tokens': 0}, 1040),
+    ({'cached_tokens': 75}, 1155),
+    (None, 1500),
+])
+def test_cache_buckets_are_disjoint_and_charged_once(details, cost):
+    usage = {**response()['usage'], 'input_tokens_details': details}
+    before = deepcopy(usage)
+    assert budget.normalize_usage(usage)[1] == cost
+    assert usage == before
+
+
+@pytest.mark.parametrize('tokens,cost', [(1, 1), (2, 1), (3, 2), (5, 2), (6, 3)])
+def test_fractional_cache_read_cost_rounds_up_once(tokens, cost):
+    usage = {'input_tokens': tokens, 'output_tokens': 0, 'total_tokens': tokens,
+             'input_tokens_details': {'cached_tokens': tokens, 'cache_write_tokens': 0}}
+    assert budget.normalize_usage(usage)[1] == cost
+
+
+def test_reservation_covers_all_input_being_written_to_cache():
+    usage = {'input_tokens': budget.MAX_INPUT_TOKENS, 'output_tokens': 5000,
+             'total_tokens': budget.MAX_INPUT_TOKENS + 5000,
+             'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': budget.MAX_INPUT_TOKENS}}
+    assert budget.estimate_reservation(budget.MAX_INPUT_TOKENS, 5000) == 1300000
+    assert budget.normalize_usage(usage)[1] == budget.estimate_reservation(budget.MAX_INPUT_TOKENS, 5000)
 
 
 @pytest.mark.parametrize('usage', [
@@ -139,6 +170,13 @@ def test_reasoning_not_double_charged_and_cache_full_price():
     {'input_tokens': 100, 'output_tokens': 1, 'total_tokens': 100},
     {**response()['usage'], 'output_tokens_details': {'reasoning_tokens': 51}},
     {**response()['usage'], 'input_tokens_details': {'cached_tokens': 101}},
+    {**response()['usage'], 'input_tokens_details': {'cached_tokens': 80, 'cache_write_tokens': 21}},
+    {**response()['usage'], 'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 101}},
+    {**response()['usage'], 'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': True}},
+    {**response()['usage'], 'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': -1}},
+    {**response()['usage'], 'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 1.5}},
+    {**response()['usage'], 'input_tokens_details': {'cached_tokens': 0, 'unpriced_tokens': 20}},
+    {**response()['usage'], 'input_tokens_details': {}},
     {**response()['usage'], 'unpriced_audio_tokens': 200},
 ])
 def test_invalid_usage_never_free(usage):
@@ -207,10 +245,10 @@ def test_settle_once_reuse_after_worker_reclaim(sql):
     row = reserve(job)
     sql.setattr(provider, '_generate', lambda payload: calls.append(payload) or response())
     result = perform(row)
-    assert result['cost_microusd'] == 1400 and len(calls) == 1
-    assert budget.status()['spent_microusd'] == 1400 and budget.status()['reserved_microusd'] == 0
+    assert result['cost_microusd'] == 1130 and len(calls) == 1
+    assert budget.status()['spent_microusd'] == 1130 and budget.status()['reserved_microusd'] == 0
     budget.settle(row['id'], row['owner_id'], response()['usage'], text=TEXT)
-    assert budget.status()['spent_microusd'] == 1400
+    assert budget.status()['spent_microusd'] == 1130
     with database() as connection:
         job = connection.execute('UPDATE video_jobs SET lease_token=%s WHERE id=%s RETURNING *',
                                  (uuid4(), job['id'])).fetchone()
@@ -218,6 +256,21 @@ def test_settle_once_reuse_after_worker_reclaim(sql):
     with pytest.raises(provider.ProviderError, match='ALREADY_ATTEMPTED'):
         perform(row)
     assert len(calls) == 1
+
+
+def test_cache_write_response_settles_within_ceiling_without_freezing(sql):
+    row = reserve(video())
+    usage = {'input_tokens': row['input_token_bound'], 'output_tokens': row['max_output_tokens'],
+        'total_tokens': row['input_token_bound'] + row['max_output_tokens'],
+        'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': row['input_token_bound']},
+        'output_tokens_details': {'reasoning_tokens': 30}}
+    sql.setattr(provider, '_generate', lambda payload: response(usage=usage))
+    value = perform(row)
+    assert value['cost_microusd'] == row['reserved_microusd']
+    assert lookup(row)['usage']['input_tokens_details'] == usage['input_tokens_details']
+    assert budget.status()['enabled'] and budget.status()['frozen_reason'] is None
+    assert budget.status()['reserved_microusd'] == 0
+    assert budget.status()['spent_microusd'] == row['reserved_microusd']
 
 
 @pytest.mark.parametrize('failure', ['timeout', 'missing_usage', 'incomplete', 'invalid_json'])
@@ -236,20 +289,21 @@ def test_failures_keep_cost_or_unknown_hold_and_never_retry(sql, failure):
     charged = failure in ('incomplete', 'invalid_json')
     value = lookup(row)
     assert value['billing_status'] == ('settled' if charged else 'unknown')
-    assert value['charged_microusd'] == (1400 if charged else None)
+    assert value['charged_microusd'] == (1130 if charged else None)
     assert budget.status()['reserved_microusd'] == (0 if charged else row['reserved_microusd'])
     with pytest.raises(provider.ProviderError, match='ALREADY_ATTEMPTED'):
         perform(row)
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize('bad', ['invalid_usage', 'above_cap', 'wrong_model'])
+@pytest.mark.parametrize('bad', ['invalid_usage', 'above_cap', 'wrong_model', 'overlapping_cache_buckets'])
 def test_usage_violation_freezes_durably(sql, bad):
     row = reserve(video())
     value = response()
     if bad == 'invalid_usage': value['usage']['total_tokens'] = 1
     elif bad == 'above_cap': value['usage'] = {'input_tokens': 100, 'output_tokens': 8193, 'total_tokens': 8293}
-    else: value['model'] = 'gpt-6-astra'
+    elif bad == 'wrong_model': value['model'] = 'gpt-6-astra'
+    else: value['usage']['input_tokens_details'] = {'cached_tokens': 80, 'cache_write_tokens': 21}
     sql.setattr(provider, '_generate', lambda payload: value)
     with pytest.raises(ValueError, match='RECONCILIATION_REQUIRED'):
         perform(row)
@@ -286,8 +340,8 @@ def test_delete_during_call_charges_without_restoring_private_output(sql):
     with pytest.raises(provider.ProviderError):
         perform(row)
     value = lookup(row)
-    assert value['state'] == 'failed' and value['output_text'] is None and value['charged_microusd'] == 1400
-    assert budget.status()['spent_microusd'] == 1400
+    assert value['state'] == 'failed' and value['output_text'] is None and value['charged_microusd'] == 1130
+    assert budget.status()['spent_microusd'] == 1130
 
 
 def test_operator_config_preserves_holds_and_spend_never_unfreezes(sql):
@@ -302,6 +356,63 @@ def test_operator_config_preserves_holds_and_spend_never_unfreezes(sql):
         connection.execute("UPDATE openai_api_budget SET frozen_reason='needs-review' WHERE id=1")
     with pytest.raises(ValueError, match='RECONCILIATION_REQUIRED'):
         budget.configure(limit_microusd=2000000, expires_at=budget.PRICE_EXPIRES, enable=True)
+
+
+def cache_pricing_migration(connection):
+    path = Path(__file__).parent.parent / 'migrations' / '022_openai_cache_pricing.sql'
+    connection.execute(path.read_text())
+
+
+@pytest.mark.parametrize('enabled,frozen', [(True, None), (False, None), (False, 'needs-review')])
+def test_cache_policy_migration_preserves_spend_history_and_authorization(sql, enabled, frozen):
+    row = reserve(video())
+    sql.setattr(provider, '_generate', lambda payload: response())
+    perform(row)
+    old_policy = 'gpt-5.6-sol-standard-2026-09-12'
+    with database() as connection:
+        connection.execute('UPDATE openai_api_calls SET price_policy=%s WHERE id=%s', (old_policy, row['id']))
+        connection.execute('UPDATE openai_api_budget SET price_policy=%s,enabled=%s,frozen_reason=%s WHERE id=1',
+                           (old_policy, enabled, frozen))
+        before = connection.execute('SELECT * FROM openai_api_budget WHERE id=1').fetchone()
+        historical = connection.execute('SELECT * FROM openai_api_calls WHERE id=%s', (row['id'],)).fetchone()
+        cache_pricing_migration(connection)
+        after = connection.execute('SELECT * FROM openai_api_budget WHERE id=1').fetchone()
+        assert after['price_policy'] == budget.POLICY
+        for name in ('spent_microusd', 'reserved_microusd', 'limit_microusd', 'enabled', 'frozen_reason', 'expires_at'):
+            assert after[name] == before[name]
+        assert connection.execute('SELECT * FROM openai_api_calls WHERE id=%s', (row['id'],)).fetchone() == historical
+
+
+@pytest.mark.parametrize('state,billing', [('reserved', 'reserved'), ('calling', 'reserved'),
+    ('unknown', 'unknown'), ('failed', 'breach')])
+def test_cache_policy_migration_cannot_reprice_unresolved_obligations(sql, state, billing):
+    row = reserve(video())
+    old_policy = 'gpt-5.6-sol-standard-2026-09-12'
+    with database() as connection:
+        connection.execute('UPDATE openai_api_calls SET price_policy=%s,state=%s,billing_status=%s,'
+                           'started_at=now(),finished_at=now() WHERE id=%s', (old_policy, state, billing, row['id']))
+        connection.execute('UPDATE openai_api_budget SET price_policy=%s,spent_microusd=777 WHERE id=1', (old_policy,))
+        before = connection.execute('SELECT * FROM openai_api_calls WHERE id=%s', (row['id'],)).fetchone()
+        cache_pricing_migration(connection)
+        after = connection.execute('SELECT * FROM openai_api_budget WHERE id=1').fetchone()
+        assert after['price_policy'] == old_policy and not after['enabled']
+        assert after['frozen_reason'] == 'PRICE_POLICY_UPGRADE_REQUIRES_RECONCILIATION'
+        assert after['spent_microusd'] == 777 and after['reserved_microusd'] == row['reserved_microusd']
+        assert connection.execute('SELECT * FROM openai_api_calls WHERE id=%s', (row['id'],)).fetchone() == before
+    sql.setattr(provider, '_generate', lambda payload: pytest.fail('Old reservation must not dispatch'))
+    with pytest.raises(ValueError):
+        perform(row)
+
+
+def test_cache_policy_migration_preserves_existing_freeze_and_unattributed_hold(sql):
+    with database() as connection:
+        connection.execute("""UPDATE openai_api_budget SET price_policy='gpt-5.6-sol-standard-2026-09-12',
+            enabled=false,spent_microusd=777,reserved_microusd=123,frozen_reason='existing-freeze' WHERE id=1""")
+        cache_pricing_migration(connection)
+        after = connection.execute('SELECT * FROM openai_api_budget WHERE id=1').fetchone()
+        assert after['price_policy'] == 'gpt-5.6-sol-standard-2026-09-12'
+        assert not after['enabled'] and after['frozen_reason'] == 'existing-freeze'
+        assert after['spent_microusd'] == 777 and after['reserved_microusd'] == 123
 
 
 def test_disabled_budget_blocks_before_inference_and_keeps_gemini_ledger(sql):

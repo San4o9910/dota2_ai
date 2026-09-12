@@ -49,7 +49,8 @@ assert openai_provider.configured()
 with database() as c:
  assert c.execute('SHOW transaction_read_only').fetchone()['transaction_read_only']=='on'
  names={r['name'] for r in c.execute('SELECT name FROM video_schema_migrations').fetchall()}
- assert {'018_openai_api.sql','020_hermes_openai.sql','021_portal_multiple_accounts.sql'}<=names
+ assert {'018_openai_api.sql','019_selective_video.sql','020_hermes_openai.sql',
+         '021_portal_multiple_accounts.sql','022_openai_cache_pricing.sql'}<=names
  queries=(
   'SELECT row_to_json(t)::text AS value FROM video_ai_budget t ORDER BY id',
   'SELECT id,billing_status,reserved_microusd,charged_microusd FROM video_provider_calls ORDER BY id',

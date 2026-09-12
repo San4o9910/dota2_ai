@@ -47,9 +47,9 @@ migration service receive no OpenAI key. The runner stays on the internal
 `hermes-private` Docker network and reaches the provider through the broker only.
 Personal ChatGPT OAuth is not a fallback for the shared platform API.
 
-The new migrations include `018_openai_api.sql`, `020_hermes_openai.sql` and
-`021_portal_multiple_accounts.sql`; the selective video migration accompanies the
-application. The portal's former singleton account database constraint is removed
+The new migrations include `018_openai_api.sql`, `019_selective_video.sql`,
+`020_hermes_openai.sql`, `021_portal_multiple_accounts.sql` and
+`022_openai_cache_pricing.sql`. The portal's former singleton account database constraint is removed
 for customer isolation. This does not create public registration. See
 [Hermes API integration](HERMES_OPENAI_API.md).
 
@@ -84,6 +84,28 @@ The existing pilot workflow can also install the first key during explicit API
 cutover, so the support workflow is optional.
 
 ## Allowances and cost controls
+
+The reviewed Sol tariff separates ordinary input ($4/M tokens), cache reads
+($0.40/M), cache writes ($5/M) and output including reasoning ($20/M).
+Reservations allow for the highest input rate. Actual usage is settled with
+integer micro-USD accounting, rounding upward once per call; reasoning tokens
+are already included in output tokens. If write telemetry is omitted, the ledger
+conservatively prices non-cached input at the write rate; that is an upper bound,
+not a measured invoice amount. See the official
+[model pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) and
+[cache accounting](https://developers.openai.com/api/docs/guides/prompt-caching).
+
+Explicit prompt caching marks only the reusable developer instructions. Each
+match's evidence follows the breakpoint and is not requested as a cache write.
+This keeps the selected model and coaching evidence intact. Cache reuse is not
+guaranteed, and actual savings require real usage measurements.
+
+Migration `022_openai_cache_pricing.sql` changes the allowance policy only when
+there are no unsettled calls or reservations. It preserves previous charges,
+limits, expiry and freezes. With outstanding obligations it disables new spending
+and retains the old policy and holds for reconciliation. Existing request hashes
+are not rewritten to match the new caching payload. Resolve outstanding requests
+before this upgrade; an old saved request must not be silently sent again.
 
 `openai_api_budget` is a separate durable monetary ledger. Its migration starts
 disabled with a zero ceiling. Neither an API key nor an environment flag enables
