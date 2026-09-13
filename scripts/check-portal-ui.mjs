@@ -275,10 +275,10 @@ try {
     assert.equal(await page.locator('.episode-choice').count(),0,'Totals do not manufacture missing event timestamps.');
     assert.match(await page.locator('.episode-detail').textContent(),/нет таймкодов/);
     await page.getByRole('button',{name:'Ключевые предметы · 2',exact:true}).click();
-    await page.getByRole('button',{name:'21:40 · Покупка · Blink',exact:true}).click();
+    await page.locator('#combat-strip').getByRole('button',{name:'21:40 · Покупка · Blink',exact:true}).click();
     assert.equal(await page.locator('#timeline-value').textContent(),'21:40');
     await page.getByRole('button',{name:'Смерти · 1',exact:true}).click();
-    await page.getByRole('button',{name:'10:00 · Смерть',exact:true}).first().click();
+    await page.locator('#findings').getByRole('button',{name:'10:00 · Смерть',exact:true}).click();
     assert.equal(await page.locator('#timeline-value').textContent(),'10:00');
     assert.equal(await page.locator('#gold-chart .chart-cursor').getAttribute('x1'),await page.locator('#xp-chart .chart-cursor').getAttribute('x1'));
     assert.match(await page.locator('#gold-value').textContent(),/4\s?000/);
@@ -345,7 +345,7 @@ try {
     assert.equal(await selectedCard.getByRole('button',{name:'Первое применение: 22:10',exact:true}).textContent(),'22:10');
     const singleCardLayout=await page.locator('#item-cards').evaluate(element=>({width:element.getBoundingClientRect().width,card:element.querySelector('.item-card:not([hidden])').getBoundingClientRect().width}));
     assert.ok(Math.abs(singleCardLayout.width-singleCardLayout.card)<1,'The selected item fills the available row.');
-    await page.getByRole('button',{name:'10:00 · Смерть',exact:true}).first().click();
+    await page.locator('#findings').getByRole('button',{name:'10:00 · Смерть',exact:true}).click();
     assert.equal(await selectedCard.locator('h4').textContent(),'Blink','Seeking another event does not replace the chosen item.');
     await page.locator('#item-rail .item-chip').first().click();
     assert.equal(await itemCard.getByLabel('Личная цель, мин:сек',{exact:true}).inputValue(),'10:00','Unsaved goals survive switching items.');
@@ -378,9 +378,9 @@ try {
     assert.match(await page.locator('#hero-context').textContent(),/Контекст сохранённого разбора/);
     assert.match(await page.locator('#hero-context .hero-abilities').textContent(),/7 применений/);
     assert.match(await page.locator('#metrics').textContent(),/9 \/ 16 \/ 20/);
-    await page.getByRole('button',{name:'8:20 · Смерть',exact:true}).click();
+    await page.locator('#coaching').getByRole('button',{name:'8:20 · Смерть',exact:true}).click();
     assert.equal(await page.locator('#timeline-value').textContent(),'8:20');
-    assert.equal(await page.locator('#events [data-evidence-id=old-death]').count(),1);
+    assert.equal(await page.locator('#events [data-evidence-id=old-death].selected-event').count(),1);
     await page.locator('#item-rail .item-chip').nth(1).click();
     await page.getByRole('button',{name:'Вернуться к текущему разбору',exact:true}).click();
     assert.equal(await page.locator('#item-cards .item-card:visible h4').textContent(),'Radiance','Current-report selection never inherits the archived selection.');
