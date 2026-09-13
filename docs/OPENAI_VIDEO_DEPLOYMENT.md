@@ -203,6 +203,11 @@ only as that legacy mode, never expanded to a shared all-customer subscription.
 
 ## Readiness and rollback
 
+The deployment validates provider checkboxes and the explicit allowance before
+building images or contacting the server. A ceiling requires a future
+`openai_expires_at`; leaving only that field blank is an error. To correct inputs,
+start a new **Run workflow**: **Re-run jobs** retains the original inputs.
+
 `--status-only` is available on the installed release:
 
 ```bash
@@ -223,6 +228,13 @@ budget ledger entries and any explicit allowance change already committed. No
 rollback deletes customer data or refunds a potentially billed request. Failure
 to confirm rollback must be reported honestly with the installed SHA and safe
 status code.
+
+Repeated deployments of the same SHA capture a fresh settings baseline. A unique
+attempt marker prevents an early secret-write failure from restoring an older
+attempt's provider settings. An existing pair of video/replay workers is accepted
+only when both installed containers prove the OpenAI/selective configuration,
+same release, shared media-lock bindings and identical database connection
+identity. Legacy worker configurations keep the single-worker restriction.
 
 The old `activate_video.py` full-frame synthetic paid smoke is not used by the new
 selective release path. Installing an API key alone does not run that script.

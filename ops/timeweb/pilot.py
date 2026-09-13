@@ -17,7 +17,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from preflight import CheckError, NoRedirect, ORIGIN
 from prebuilt_images import ImageError, prepare_bundle
@@ -496,6 +496,17 @@ def validate_openai_preparation(state):
         explicit_allowance_configured=state.get('explicit_allowance_configured') is True)
 
 
+def prebootstrap_rollback_code(release, sha, attempt, *, prepare_chatgpt_auth=False, prepare_openai_api=False):
+    """Undo only this attempt's selected provider; an earlier snapshot is stale."""
+    code = 'import sys; sys.path.insert(0,' + repr(release + '/ops/timeweb') + '); '
+    if prepare_openai_api:
+        return (code + 'from openai_secrets import restore_settings; '
+            'restore_settings(' + repr(sha) + ',attempt=' + repr(attempt) + ')')
+    if prepare_chatgpt_auth:
+        return code + 'from chatgpt_secrets import restore_settings; restore_settings(' + repr(sha) + ')'
+    return code + 'pass'
+
+
 def main(*, activate_hermes=False, prepare_chatgpt_auth=False, prepare_openai_api=False):
     # Reject conflicting CLI calls and invalid budget inputs before cloud access.
     provider_modes({'replay': None, 'hermes': None}, activate_hermes=activate_hermes,
@@ -672,7 +683,9 @@ print(json.dumps({'providers':providers,'openai_key_present':bool(v.get('OPENAI_
             command(ssh+["tar --no-same-owner -xzf - -C " + release], input=archive.read_bytes(), timeout=120, phase="source_transfer")
             # Secrets cross SSH only; none enters cloud-init, the source archive,
             # GitHub artifacts, command arguments or public logs.
+            deployment_attempt = uuid4().hex
             secret_input = json.dumps({"gemini_key":key, "release":sha,
+                                      "deployment_attempt":deployment_attempt,
                                       **statistics_payload,
                                       "prepare_chatgpt_auth":prepare_chatgpt_auth,
                                       "prepare_openai_api":prepare_openai_api,
@@ -690,10 +703,8 @@ print(json.dumps({'providers':providers,'openai_key_present':bool(v.get('OPENAI_
                 # A failure before bootstrap must also restore provider selection.
                 # This invokes only settings rollback; it never stops live services
                 # or removes a first-installed API/encryption key.
-                rollback_code = ('import sys; sys.path.insert(0,' + repr(release + '/ops/timeweb') + '); '
-                    'from chatgpt_secrets import restore_settings; '
-                    'from openai_secrets import restore_settings as restore_openai; '
-                    'restore_settings(' + repr(sha) + '); restore_openai(' + repr(sha) + ')')
+                rollback_code = prebootstrap_rollback_code(release, sha, deployment_attempt,
+                    prepare_chatgpt_auth=prepare_chatgpt_auth, prepare_openai_api=prepare_openai_api)
                 try:
                     command(ssh + ['python3 -c ' + shlex.quote(rollback_code)], timeout=30)
                     event('provider_settings_restored_before_bootstrap')

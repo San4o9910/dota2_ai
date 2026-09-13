@@ -10,8 +10,7 @@ import subprocess
 import sys
 from chatgpt_secrets import prepare_settings
 from stratz_secrets import install_build_statistics
-from openai_secrets import install_key, prepare_openai_settings, settings_path
-from snapshot_worker_state import write_private
+from openai_secrets import install_key, prepare_deployment_settings
 
 os.umask(0o077)
 lock = open("/var/lock/narma-deploy.lock", "a")
@@ -63,12 +62,9 @@ if incoming.get('prepare_chatgpt_auth') is True:
 if incoming.get('prepare_openai_api') is True:
     if incoming.get('openai_key'):
         install_key(values, incoming['openai_key'])
-    checkpoint = prepare_openai_settings(values, incoming['release'],
-        enable_runtime=incoming.get('openai_activation_explicit') is True)
-    saved = settings_path(incoming['release'])
-    # Preserve the first rollback state on a repeat of the same release.
-    if not saved.exists():
-        write_private(saved, checkpoint)
+    prepare_deployment_settings(values, incoming['release'],
+        enable_runtime=incoming.get('openai_activation_explicit') is True,
+        attempt=incoming.get('deployment_attempt'))
 temporary = path.with_suffix(".new")
 temporary.write_text("".join(name+"="+value+"\n" for name,value in values.items()))
 temporary.chmod(0o600)

@@ -7,6 +7,8 @@ import re
 import sys
 import tempfile
 
+from snapshot_worker_state import write_private
+
 ENV_FILE = Path('/opt/narma/secrets/video.env')
 CURRENT = Path('/opt/narma/current')
 MODEL = 'gpt-5.6-sol'
@@ -76,12 +78,37 @@ def settings_path(release):
     return Path('/opt/narma/checks') / ('openai-settings-before-' + release + '.json')
 
 
-def restore_settings(release, path=ENV_FILE):
+def prepare_deployment_settings(values, release, *, enable_runtime=False, attempt=None):
+    """Capture the state immediately before this serialized deployment attempt.
+
+    A release SHA can be deployed more than once. Keeping its first checkpoint
+    would roll a later failed attempt back across an already successful activation.
+    The caller holds the deployment lock and persists the env only after this
+    non-secret checkpoint is safely written.
+    """
+    if attempt is not None and (not isinstance(attempt, str) or not re.fullmatch('[0-9a-f]{32}', attempt)):
+        raise RuntimeError('openai_deployment_attempt_invalid')
+    checkpoint = prepare_openai_settings(values, release, enable_runtime=enable_runtime)
+    if attempt is not None:
+        checkpoint['attempt'] = attempt
+    write_private(settings_path(release), checkpoint)
+    return checkpoint
+
+
+def restore_settings(release, path=ENV_FILE, *, attempt=None):
     saved = settings_path(release)
     if not saved.is_file():
         return False
+    snapshot = json.loads(saved.read_text())
+    if attempt is not None:
+        if not isinstance(attempt, str) or not re.fullmatch('[0-9a-f]{32}', attempt):
+            raise RuntimeError('openai_deployment_attempt_invalid')
+        # A failed SSH/secret validation may precede any mutation or checkpoint.
+        # It must never roll back another successful deployment of the same SHA.
+        if not isinstance(snapshot, dict) or snapshot.get('attempt') != attempt:
+            return False
     values = read_values(Path(path))
-    restore_openai_settings(values, json.loads(saved.read_text()), release)
+    restore_openai_settings(values, snapshot, release)
     write_values(Path(path), values)
     return True
 

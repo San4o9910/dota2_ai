@@ -69,6 +69,41 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Validate provider selection and explicit allowance before building
+        env:
+          ACTIVATE_HERMES: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_hermes && 'true' || 'false' }}
+          PREPARE_CHATGPT_AUTH: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_chatgpt_auth && 'true' || 'false' }}
+          PREPARE_OPENAI_API: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_openai_api && 'true' || 'false' }}
+          OPENAI_LIMIT_MICROUSD: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_limit_microusd || '' }}
+          OPENAI_EXPIRES_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_expires_at || '' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, 'ops/timeweb')
+          from pilot import provider_modes
+          from preflight import CheckError
+          from prepare_openai_api import allowance_input
+          try:
+              prepare_openai = os.environ['PREPARE_OPENAI_API'] == 'true'
+              provider_modes({'replay': None, 'hermes': None},
+                  activate_hermes=os.environ['ACTIVATE_HERMES'] == 'true',
+                  prepare_chatgpt_auth=os.environ['PREPARE_CHATGPT_AUTH'] == 'true',
+                  prepare_openai_api=prepare_openai)
+              allowance = allowance_input(os.environ['OPENAI_LIMIT_MICROUSD'], os.environ['OPENAI_EXPIRES_AT'])
+              if allowance and not prepare_openai:
+                  raise RuntimeError('openai_explicit_allowance_mode_required')
+          except (RuntimeError, CheckError) as error:
+              messages = {
+                  'openai_explicit_allowance_invalid': 'Set openai_limit_microusd to an integer from 1 through 10000000, or leave both allowance fields blank to preserve the existing limit.',
+                  'openai_explicit_expiry_invalid': 'When setting a limit, fill openai_expires_at with a future UTC date in YYYY-MM-DDTHH:MM:SSZ format, no later than 2026-11-21T00:00:00Z.',
+                  'openai_explicit_allowance_mode_required': 'Select prepare_openai_api when setting an explicit OpenAI allowance.',
+                  'conflicting_provider_activation_modes': 'Select only one provider activation checkbox.',
+              }
+              print('::error::' + messages.get(str(error), 'Invalid provider activation inputs.'))
+              sys.exit(1)
+          print('Provider selection and allowance inputs are valid; no provider requests were made.')
+          PY
       - name: Verify Gemini key without generation
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

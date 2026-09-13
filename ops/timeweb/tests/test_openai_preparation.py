@@ -63,6 +63,54 @@ class OpenAISecretTest(unittest.TestCase):
         secrets.prepare_openai_settings(values, SHA, enable_runtime=True)
         self.assertEqual(values['HERMES_RUNTIME_ENABLED'], '1')
 
+    def test_second_same_sha_attempt_rolls_back_to_successful_openai_activation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            saved, path = root / 'settings.json', root / 'video.env'
+            values = {**BASE, 'OPENAI_API_KEY': KEY, 'HERMES_RUNTIME_ENABLED': '0'}
+            with patch.object(secrets, 'settings_path', return_value=saved):
+                secrets.prepare_deployment_settings(values, SHA, enable_runtime=True, attempt='a'*32)
+                secrets.write_values(path, values)  # First attempt succeeded.
+                first_checkpoint = json.loads(saved.read_text())
+                activated = dict(values)
+                self.assertEqual(first_checkpoint['settings']['HERMES_PROVIDER'], 'chatgpt_subscription')
+                # A new attempt at the exact same SHA must refresh its baseline.
+                secrets.prepare_deployment_settings(values, SHA, enable_runtime=True, attempt='b'*32)
+                secrets.write_values(path, values)
+                self.assertEqual(json.loads(saved.read_text())['settings']['HERMES_PROVIDER'], 'openai_api')
+                self.assertTrue(secrets.restore_settings(SHA, path, attempt='b'*32))
+            self.assertEqual(secrets.read_values(path), activated)
+            self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+            checkpoint = saved.read_text()
+            for name in ('OPENAI_API_KEY', 'DATABASE_URL', 'GEMINI_API_KEY', 'spent_microusd', 'reserved_microusd'):
+                self.assertNotIn(name, checkpoint)
+            self.assertNotIn(KEY, checkpoint)
+
+    def test_failure_before_new_checkpoint_cannot_restore_older_same_sha_attempt(self):
+        for previous_attempt in (None, 'a'*32):
+            with self.subTest(previous_attempt=previous_attempt), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                saved, path = root / 'settings.json', root / 'video.env'
+                values = {**BASE, 'OPENAI_API_KEY': KEY}
+                with patch.object(secrets, 'settings_path', return_value=saved):
+                    secrets.prepare_deployment_settings(values, SHA, enable_runtime=True, attempt=previous_attempt)
+                    secrets.write_values(path, values)
+                    active = path.read_bytes()
+                    # A second attempt's invalid secret never wrote its checkpoint.
+                    self.assertFalse(secrets.restore_settings(SHA, path, attempt='b'*32))
+                    self.assertEqual(path.read_bytes(), active)
+
+    def test_failed_first_attempt_restores_prior_provider_and_keeps_installed_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            saved, path = root / 'settings.json', root / 'video.env'
+            values = {**BASE, 'OPENAI_API_KEY': KEY}
+            with patch.object(secrets, 'settings_path', return_value=saved):
+                secrets.prepare_deployment_settings(values, SHA, enable_runtime=True)
+                secrets.write_values(path, values)
+                secrets.restore_settings(SHA, path)
+            self.assertEqual(secrets.read_values(path), {**BASE, 'OPENAI_API_KEY': KEY})
+
     def test_install_only_needs_exact_release_and_has_private_idempotent_write(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -102,6 +150,17 @@ class OpenAISecretTest(unittest.TestCase):
 
 
 class OpenAIReleaseSelection(unittest.TestCase):
+    def test_prebootstrap_rollback_uses_only_current_openai_attempt(self):
+        import chatgpt_secrets
+        code = pilot.prebootstrap_rollback_code('/opt/narma/releases/'+SHA, SHA, 'b'*32,
+                                               prepare_openai_api=True)
+        with patch.object(secrets, 'restore_settings') as restore, \
+                patch.object(chatgpt_secrets, 'restore_settings') as personal, \
+                patch.object(sys, 'path', list(sys.path)):
+            exec(code, {})
+        restore.assert_called_once_with(SHA, attempt='b'*32)
+        personal.assert_not_called()
+
     def test_ordinary_release_keeps_api_without_selecting_personal_oauth(self):
         self.assertEqual(pilot.provider_modes({'replay': 'openai_api', 'hermes': 'openai_api'}), (False, True))
         self.assertEqual(pilot.provider_modes({'replay': None, 'hermes': None}), (False, False))
