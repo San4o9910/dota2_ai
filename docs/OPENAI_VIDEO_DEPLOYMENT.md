@@ -213,6 +213,22 @@ time and the price-policy deadline. Leaving the expiry empty with an explicit
 ceiling is an error. To correct inputs,
 start a new **Run workflow**: **Re-run jobs** retains the original inputs.
 
+Before validation/build, `deployment_inputs.py` compares the six declared,
+non-secret fields in the runner's `GITHUB_EVENT_PATH` with the resolved step
+environment. Its report records field presence and safe values; it never dumps
+the event, environment or unrelated inputs. A discrepancy stops the release
+without substituting values or selecting a provider. Matching default values
+remain a legitimate ordinary update and are explicitly reported as preserving
+the existing provider, not as successful OpenAI activation.
+
+This diagnostic distinguishes an event/context mismatch from a later deployment
+error. The runner event file is not an independent capture of the mobile app's
+request, so matching defaults cannot establish whether the client or another
+part of dispatch lost the intended values. Previously completed runs without
+this report cannot be diagnosed retrospectively from their environment alone.
+The run title also names the requested operation from the inputs context. It
+provides early feedback, but is not evidence that activation has completed.
+
 `--status-only` is available on the installed release:
 
 ```bash

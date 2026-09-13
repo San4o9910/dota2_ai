@@ -1,4 +1,5 @@
 name: Timeweb pilot deployment
+run-name: ${{ inputs.prepare_openai_api && 'NARMA — запрос на включение OpenAI API' || inputs.prepare_chatgpt_auth && 'NARMA — подготовка ChatGPT' || inputs.activate_hermes && 'NARMA — включение Hermes' || 'NARMA — обновление без смены AI' }}
 
 on:
   push:
@@ -80,6 +81,7 @@ jobs:
           OPENAI_LIMIT_MICROUSD: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_limit_microusd || '' }}
           OPENAI_EXPIRES_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_expires_at != 'Сохранить текущий срок' && inputs.openai_expires_at || '' }}
         run: |
+          python3 ops/timeweb/deployment_inputs.py
           python3 - <<'PY'
           import os
           import sys
