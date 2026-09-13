@@ -69,6 +69,35 @@ def test_inherited_libpq_routing_is_removed_before_connection_and_restored(monke
     assert {name: os.environ[name] for name in inherited} == inherited
 
 
+def test_generated_schema_uri_options_round_trip_through_libpq(monkeypatch):
+    from psycopg.conninfo import conninfo_to_dict
+    from narma_video import db
+    import re
+
+    class Admin:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def execute(self, *args):
+            pass
+
+    monkeypatch.setattr(psycopg, 'connect', lambda *args, **kwargs: Admin())
+    def inspect_generated_connection():
+        values = conninfo_to_dict(os.environ['DATABASE_URL'])
+        assert re.fullmatch(r'-csearch_path=pilot_rehearsal_[a-f0-9]{32} '
+                           r'-cstatement_timeout=8000 -clock_timeout=4000', values['options'])
+        assert values['host'] == '127.0.0.1'
+        assert values['dbname'] == 'isolated'
+        assert values['sslmode'] == 'disable'
+        assert values['application_name'] == 'narma-pilot-rehearsal'
+        raise RuntimeError('synthetic stop before migrations')
+    monkeypatch.setattr(db, 'migrate', inspect_generated_connection)
+    with pytest.raises(RuntimeError, match='synthetic stop before migrations'):
+        with isolated_database('postgresql://test@127.0.0.1/isolated?sslmode=disable'):
+            pytest.fail('Should stop before real PostgreSQL')
+
+
 def test_minimal_metadata_is_real_queue_input_not_gameplay_report():
     from narma_video.replay_metadata import read_demo_metadata_ranges
     value = metadata_fixture()

@@ -16,7 +16,7 @@ import socket
 import sys
 import tempfile
 import time
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import psycopg
@@ -74,7 +74,9 @@ def isolated_database(dsn, *, ci_container=False):
                 params = parse_qsl(parsed.query)
                 params.extend([('application_name', 'narma-pilot-rehearsal'),
                     ('options', f'-csearch_path={schema} -cstatement_timeout=8000 -clock_timeout=4000')])
-                os.environ['DATABASE_URL'] = urlunsplit(parsed._replace(query=urlencode(params)))
+                # libpq URI decoding preserves '+'; option separators must be
+                # percent-encoded spaces, not HTML form encoding's plus signs.
+                os.environ['DATABASE_URL'] = urlunsplit(parsed._replace(query=urlencode(params, quote_via=quote)))
                 from narma_video.db import migrate, database
                 migrate()
                 with database() as connection:
