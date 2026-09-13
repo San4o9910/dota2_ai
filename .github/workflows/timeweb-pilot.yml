@@ -42,10 +42,13 @@ on:
         required: false
         default: ''
       openai_expires_at:
-        description: Required with ceiling, UTC YYYY-MM-DDTHH:MM:SSZ no later than 2026-11-21T00:00:00Z
-        type: string
+        description: 'Срок лимита OpenAI: при указании суммы выберите дату из списка'
+        type: choice
+        options:
+          - 'Сохранить текущий срок'
+          - '2026-09-19T23:59:59Z'
         required: false
-        default: ''
+        default: 'Сохранить текущий срок'
 
 permissions:
   contents: read
@@ -75,7 +78,7 @@ jobs:
           PREPARE_CHATGPT_AUTH: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_chatgpt_auth && 'true' || 'false' }}
           PREPARE_OPENAI_API: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_openai_api && 'true' || 'false' }}
           OPENAI_LIMIT_MICROUSD: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_limit_microusd || '' }}
-          OPENAI_EXPIRES_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_expires_at || '' }}
+          OPENAI_EXPIRES_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_expires_at != 'Сохранить текущий срок' && inputs.openai_expires_at || '' }}
         run: |
           python3 - <<'PY'
           import os
@@ -96,7 +99,7 @@ jobs:
           except (RuntimeError, CheckError) as error:
               messages = {
                   'openai_explicit_allowance_invalid': 'Set openai_limit_microusd to an integer from 1 through 10000000, or leave both allowance fields blank to preserve the existing limit.',
-                  'openai_explicit_expiry_invalid': 'When setting a limit, fill openai_expires_at with a future UTC date in YYYY-MM-DDTHH:MM:SSZ format, no later than 2026-11-21T00:00:00Z.',
+                  'openai_explicit_expiry_invalid': 'При указании суммы выберите будущую дату в поле «Срок лимита OpenAI». Вариант «Сохранить текущий срок» подходит только при пустом поле суммы.',
                   'openai_explicit_allowance_mode_required': 'Select prepare_openai_api when setting an explicit OpenAI allowance.',
                   'conflicting_provider_activation_modes': 'Select only one provider activation checkbox.',
               }
@@ -207,7 +210,7 @@ jobs:
           PREPARE_OPENAI_API: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_openai_api && 'true' || 'false' }}
           OPENAI_API_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_openai_api && secrets.OPENAI_API_KEY || '' }}
           OPENAI_LIMIT_MICROUSD: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_limit_microusd || '' }}
-          OPENAI_EXPIRES_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_expires_at || '' }}
+          OPENAI_EXPIRES_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.openai_expires_at != 'Сохранить текущий срок' && inputs.openai_expires_at || '' }}
         run: |
           pilot_args=()
           if [[ "$ACTIVATE_HERMES" == "true" ]]; then

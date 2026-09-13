@@ -205,7 +205,12 @@ only as that legacy mode, never expanded to a shared all-customer subscription.
 
 The deployment validates provider checkboxes and the explicit allowance before
 building images or contacting the server. A ceiling requires a future
-`openai_expires_at`; leaving only that field blank is an error. To correct inputs,
+`openai_expires_at`. The manual form offers an exact UTC date from a dropdown to
+avoid corrupting timestamp text on mobile. Its default "Сохранить текущий срок"
+maps to an empty expiry and is valid only when the ceiling is also blank; it does
+not enable or extend an allowance. The date is still revalidated against current
+time and the price-policy deadline. Leaving the expiry empty with an explicit
+ceiling is an error. To correct inputs,
 start a new **Run workflow**: **Re-run jobs** retains the original inputs.
 
 `--status-only` is available on the installed release:
