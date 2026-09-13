@@ -186,6 +186,20 @@ class OpenAIReleaseSelection(unittest.TestCase):
             with self.subTest(limit=limit, expires=expires), self.assertRaises(RuntimeError):
                 preparation.allowance_input(limit, expires, now=NOW)
 
+    def test_mobile_expiry_is_canonicalized_without_changing_amount_or_deadline(self):
+        for expires in ('2026-09-19T23:59:59z', '2026-09-19t23:59:59z',
+                        ' 2026-09-19T23:59:59Z '):
+            with self.subTest(expires=expires):
+                self.assertEqual(preparation.allowance_input('5000000', expires, now=NOW),
+                    {'limit_microusd': 5000000, 'expires_at': '2026-09-19T23:59:59Z'})
+
+    def test_mobile_normalization_still_rejects_missing_invalid_or_out_of_policy_expiry(self):
+        for expires in (' ', '2026-09-01t00:00:00z', '2026-11-21t00:00:01z',
+                        '2026-09-31t00:00:00z', '2026-09-19t23:59:59+03:00',
+                        '2026-09-19t23:59:59z; true', None, 123):
+            with self.subTest(expires=expires), self.assertRaisesRegex(RuntimeError, 'openai_explicit_expiry_invalid'):
+                preparation.allowance_input('5000000', expires, now=NOW)
+
     def test_status_only_does_not_change_services_or_issue_model_calls(self):
         result = {'event':'openai_api_preflight','configured':True,'database_read_only':True,'generation_requests':0}
         with patch.object(preparation, 'api_json', return_value=result) as api, \

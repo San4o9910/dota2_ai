@@ -22,6 +22,10 @@ PRICE_EXPIRES = datetime(2026, 11, 21, tzinfo=timezone.utc)
 
 
 def allowance_input(limit=None, expires=None, *, now=None):
+    # Mobile keyboards may lowercase ISO UTC markers; normalize presentation
+    # before applying the same explicit date, future-time and price-policy gates.
+    if isinstance(expires, str):
+        expires = expires.strip().upper()
     if limit in (None, '') and expires in (None, ''):
         return None
     if not isinstance(limit, str) or not re.fullmatch(r'[0-9]{1,8}', limit) or not 0 < int(limit) <= 10_000_000:
