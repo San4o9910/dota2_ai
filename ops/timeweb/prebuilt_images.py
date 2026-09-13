@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -20,6 +21,13 @@ DIGEST = re.compile(r"[0-9a-f]{64}")
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_METADATA_BYTES = 16 * 1024**2
+STORAGE_RESERVE_BYTES = 4 * 1024**3
+MAX_RETENTION_ENTRIES = 256
+MAX_RETENTION_ARCHIVES = 16
+MAX_RETENTION_BYTES = 16 * 1024**3
+RELEASES_ROOT = Path("/opt/narma/releases")
+CURRENT_RELEASE = Path("/opt/narma/current")
+CHECKS_ROOT = Path("/opt/narma/checks")
 CONFIG_PATH = re.compile(r"(?:blobs/sha256/)?([0-9a-f]{64})(?:\.json)?")
 SOURCES = {
     "narma-video-check": ("narma-video-api", "narma-video-migrate", "narma-video-worker", "narma-video-hermes-broker"),
@@ -236,7 +244,7 @@ def prepare_bundle(release, directory):
 def release_path(release):
     if not SHA.fullmatch(release):
         raise ImageError("prebuilt_release_invalid")
-    return Path("/opt/narma/releases") / release
+    return RELEASES_ROOT / release
 
 
 def read_manifest(release):
@@ -249,10 +257,161 @@ def read_manifest(release):
         raise ImageError("prebuilt_manifest_invalid") from None
 
 
+def _identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+        value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
+def _read_cache_metadata(directory, name):
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    with os.fdopen(descriptor, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > 128 * 1024:
+            raise ValueError("invalid cache metadata")
+        raw = stream.read(128 * 1024 + 1)
+        if len(raw) != before.st_size or _identity(os.fstat(stream.fileno())) != _identity(before):
+            raise ValueError("changed cache metadata")
+    return json.loads(raw), hashlib.sha256(raw).hexdigest(), _identity(before)
+
+
+def _protected_cache_releases(incoming):
+    """Missing/ambiguous rollback evidence never authorizes cache reclamation."""
+    if RELEASES_ROOT.resolve(strict=True) != RELEASES_ROOT or not CURRENT_RELEASE.is_symlink():
+        raise ValueError("unknown current release")
+    current = CURRENT_RELEASE.resolve(strict=True)
+    if current.parent != RELEASES_ROOT or not SHA.fullmatch(current.name):
+        raise ValueError("unknown current release")
+    descriptor = os.open(CHECKS_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        saved, digest, _ = _read_cache_metadata(descriptor, "images-before-" + current.name + ".json")
+    finally:
+        os.close(descriptor)
+    if (not isinstance(saved, dict) or set(saved) != {"release", "images", "api", "previous_release"}
+            or saved["release"] != current.name or not isinstance(saved["images"], dict)
+            or any(tag not in TAGS or not isinstance(identifier, str) or not IMAGE_ID.fullmatch(identifier)
+                   for tag, identifier in saved["images"].items())):
+        raise ValueError("unknown rollback release")
+    previous = saved["previous_release"]
+    protected = {incoming, current.name}
+    if previous is not None:
+        if not isinstance(previous, str) or not SHA.fullmatch(previous) or previous == current.name:
+            raise ValueError("unknown rollback release")
+        path = RELEASES_ROOT / previous
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError("unknown rollback release")
+        protected.add(previous)
+    return protected, digest
+
+
+def reclaim_retired_archives(incoming):
+    """Remove only authenticated transport cache; Docker rollback images stay intact.
+
+    Work is bounded even on a damaged host. The active release and its recorded
+    predecessor remain protected, and unknown files are never reclaimed.
+    """
+    result = {"reclaimed_bytes": 0, "reclaimed_archives": 0,
+        "eligible_bytes": 0, "eligible_archives": 0, "cleanup_status": "not_needed"}
+    root_descriptor = None
+    try:
+        protected, checkpoint_digest = _protected_cache_releases(incoming)
+        root_descriptor = os.open(RELEASES_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        root_device = os.fstat(root_descriptor).st_dev
+        candidates = []
+        bounded = False
+        with os.scandir(root_descriptor) as entries:
+            for index, entry in enumerate(entries):
+                if index >= MAX_RETENTION_ENTRIES:
+                    bounded = True
+                    break
+                if SHA.fullmatch(entry.name) and entry.name not in protected:
+                    value = entry.stat(follow_symlinks=False)
+                    if stat.S_ISDIR(value.st_mode) and value.st_dev == root_device:
+                        candidates.append((value.st_mtime_ns, entry.name))
+        examined_bytes = examined_archives = 0
+        for _, name in sorted(candidates):
+            directory = archive_descriptor = None
+            try:
+                directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_descriptor)
+                if os.fstat(directory).st_dev != root_device:
+                    continue
+                manifest, manifest_digest, manifest_identity = _read_cache_metadata(directory, "images-manifest.json")
+                validate_manifest(manifest, name)
+                marker, _, marker_identity = _read_cache_metadata(directory, "images-validated.json")
+                if (not isinstance(marker, dict) or set(marker) != {"release", "manifest_sha256", "images"}
+                        or marker["release"] != name or marker["manifest_sha256"] != manifest_digest
+                        or not isinstance(marker["images"], dict) or set(marker["images"]) != set(TAGS)
+                        or any(not isinstance(info, dict) or set(info) != {"id", "os", "architecture"}
+                            or not isinstance(info["id"], str) or not IMAGE_ID.fullmatch(info["id"])
+                            or info["os"] != "linux" or info["architecture"] != "amd64"
+                            for info in marker["images"].values())):
+                    continue
+                archive_descriptor = os.open("images.tar.gz", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                before = os.fstat(archive_descriptor)
+                if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_dev != root_device
+                        or before.st_size != manifest["archive_bytes"]):
+                    continue
+                if (examined_archives >= MAX_RETENTION_ARCHIVES
+                        or examined_bytes + before.st_size > MAX_RETENTION_BYTES):
+                    bounded = True
+                    break
+                examined_bytes += before.st_size
+                examined_archives += 1
+                with os.fdopen(os.dup(archive_descriptor), "rb") as stream:
+                    digest = hashlib.sha256()
+                    remaining = before.st_size
+                    while remaining:
+                        block = stream.read(min(1024**2, remaining))
+                        if not block:
+                            raise ValueError("changed cache archive")
+                        digest.update(block)
+                        remaining -= len(block)
+                if digest.hexdigest() != manifest["archive_sha256"]:
+                    continue
+                identities = (("images.tar.gz", _identity(before)),
+                    ("images-manifest.json", manifest_identity), ("images-validated.json", marker_identity))
+                if any(_identity(os.stat(filename, dir_fd=directory, follow_symlinks=False)) != identity
+                       for filename, identity in identities):
+                    continue
+                try:
+                    unchanged = _protected_cache_releases(incoming) == (protected, checkpoint_digest)
+                except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+                    unchanged = False
+                if not unchanged:
+                    result["cleanup_status"] = "unavailable"
+                    return result
+                result["eligible_bytes"] += before.st_size
+                result["eligible_archives"] += 1
+                os.unlink("images.tar.gz", dir_fd=directory)
+                result["reclaimed_bytes"] += before.st_size
+                result["reclaimed_archives"] += 1
+            except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+                continue  # Unauthenticated or changed files remain untouched.
+            finally:
+                if archive_descriptor is not None:
+                    os.close(archive_descriptor)
+                if directory is not None:
+                    os.close(directory)
+        result["cleanup_status"] = "bounded" if bounded else "completed" if result["reclaimed_archives"] else "not_needed"
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+        result["cleanup_status"] = "unavailable"
+    finally:
+        if root_descriptor is not None:
+            os.close(root_descriptor)
+    return result
+
+
 def receive_archive(release, stream):
     manifest = read_manifest(release)
     root = release_path(release)
-    if shutil.disk_usage(root).free < manifest["archive_bytes"] + 4 * 1024**3:
+    required = manifest["archive_bytes"] + STORAGE_RESERVE_BYTES
+    before = shutil.disk_usage(root).free
+    retention = reclaim_retired_archives(release)
+    after = shutil.disk_usage(root).free
+    capacity_ok = after >= required
+    print(json.dumps({"event": "prebuilt_storage_check", "required_bytes": required,
+        "free_before_bytes": before, "free_after_bytes": after, **retention,
+        "capacity_ok": capacity_ok}), flush=True)
+    if not capacity_ok:
         raise ImageError("prebuilt_storage_insufficient")
     name = None
     try:
@@ -274,7 +433,7 @@ def receive_archive(release, stream):
 
 
 def checkpoint_path(release):
-    return Path("/opt/narma/checks") / ("images-before-" + release + ".json")
+    return CHECKS_ROOT / ("images-before-" + release + ".json")
 
 
 def install_bundle(release):
