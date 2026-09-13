@@ -2,7 +2,7 @@ name: Deep learning and public builds verification
 
 on:
   push:
-    branches: [codex/deep-learning-workshop-builds, codex/openai-video-coach]
+    branches: [codex/deep-learning-workshop-builds, codex/openai-video-coach, codex/production-readiness]
   workflow_dispatch:
 
 permissions:
@@ -85,3 +85,26 @@ jobs:
             --env NARMA_EXPLORE_REFRESH_ENABLED=0 --env NARMA_WORKSHOP_REFRESH_ENABLED=0 \
             --volume "$PWD:/repo:ro" narma-video-check \
             sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest /repo/services/video/tests -q -p no:cacheprovider'
+      - name: Rehearse concurrent accounts and replay admission without providers
+        env:
+          POSTGRES_PASSWORD: narma_ci_only
+          DATABASE_URL: postgresql://narma:narma_ci_only@db:5432/narma
+          VIDEO_SERVICE_TOKEN: local_ci_fixture_token_0000000000000000000000000000000000000000
+          GEMINI_API_KEY: unused_offline_ci_fixture
+          GEMINI_MODEL: gemini-3.8-flash
+        run: |
+          compose=(docker compose --project-name narma-pilot-rehearsal --file services/video/compose.yaml)
+          trap 'docker compose --project-name narma-pilot-rehearsal --file services/video/compose.yaml down --volumes >/dev/null' EXIT
+          "${compose[@]}" up -d db
+          for attempt in {1..30}; do
+            if "${compose[@]}" exec -T db pg_isready -U narma -d narma; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "${ready:-0}" = 1
+          docker run --rm --user root --network narma-pilot-rehearsal_default \
+            --env TEST_DATABASE_URL="$DATABASE_URL" --env NARMA_PILOT_CI_ISOLATED=1 \
+            --volume "$PWD:/repo:ro" narma-video-check \
+            python /repo/services/video/scripts/pilot_loadcheck.py --ci-container --users 4 --concurrency 8

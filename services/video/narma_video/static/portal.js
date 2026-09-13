@@ -2,7 +2,10 @@ import { roleGuidance } from './role-guidance.js';
 import { createVideoWorkspace } from './video-workspace.js';
 const $ = id => document.getElementById(id);
 const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set(),chatgpt:null,chatgptRequest:0,chatgptController:null,chatgptTimer:null,chatgptClock:null};
-if (state.token) history.replaceState(null, '', location.pathname);
+const entry = new URLSearchParams(location.hash.slice(1));
+state.invite = /^[A-Za-z0-9_-]{43}$/.test(entry.get('invite')??'') ? entry.get('invite') : null;
+if (state.invite && entry.get('email')) $('email').value=entry.get('email').slice(0,254);
+if (state.token || entry.has('invite')) history.replaceState(null, '', location.pathname);
 const labels = {uploading:'Загружается', queued:'В очереди', processing:'Разбираем матч', ready:'Разбор готов', failed:'Разбор остановлен'};
 const failures = {
   REPLAY_NATIVE_UNAVAILABLE:'Не запустился серверный обработчик реплеев. Файл сохранён; повторно загружать его не нужно.',
@@ -26,7 +29,7 @@ function heroName(value) { const names={npc_dota_hero_necrolyte:'Necrophos',npc_
 async function api(path, method='GET', body) {
   const response=await fetch(path,{method,credentials:'same-origin',cache:'no-store',headers:body!==undefined?{'Content-Type':'application/json'}:{},body:body!==undefined?JSON.stringify(body):undefined});
   let data; try { data=await response.json(); } catch { throw Error('Сервер вернул неполный ответ. Попробуй ещё раз.'); }
-  if(!response.ok) { if(response.status===401 && state.user) { state.user=null; await session(); } throw Error(typeof data.detail==='string'?data.detail:'Не удалось выполнить запрос.'); }
+  if(!response.ok) { if(response.status===401 && response.headers.get('X-Narma-Error')==='PORTAL_SIGN_IN' && state.user) { state.user=null; await session(); } throw Error(typeof data.detail==='string'?data.detail:'Не удалось выполнить запрос.'); }
   return data;
 }
 const videoWorkspace=createVideoWorkspace({api,onPlayer:()=>switchTab('review')});
@@ -42,7 +45,9 @@ function switchTab(tab,{historyMode='push'}={}) {
   if(tab==='learning'&&state.user) void loadLearning({preserveView:true});
   videoWorkspace.setVisible(tab==='videos');
   stopChatgptPolling();
+  if(tab!=='account') clearSecuritySecrets();
   if(tab==='account'&&state.user) void loadChatgpt();
+  if(tab==='account'&&state.user) void loadSecurity();
 }
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',event=>{if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();switchTab(button.dataset.tab);}));
 window.addEventListener('popstate',()=>switchTab(pathTab(),{historyMode:'none'}));
@@ -70,6 +75,7 @@ async function session() {
   $('platform-coach-status').textContent=state.coaching.available===true?'Тренер подключён к платформе. Личная подписка ChatGPT для разбора не нужна.':'Подключение тренера временно недоступно. Сохранённые разборы и практика остаются доступны.';
   $('loading').hidden=true; $('workspace').hidden=!state.user; $('auth').hidden=!!state.user; $('logout').hidden=!state.user;
   if(!state.user) {
+    clearSecuritySecrets(); $('pilot-invitations').hidden=true;
     stopChatgptPolling();state.chatgpt=null;$('chatgpt-content').replaceChildren();$('chatgpt-status').textContent='';
     state.pool=null; state.poolRequest++; state.poolDrafts.clear(); state.poolJournalOpen.clear(); state.poolSignature=''; state.poolVisible=20;
     state.profile=null; state.selected=null; state.detail=null; state.showArchived=false; $('result').hidden=true; $('pool-content').hidden=true;
@@ -79,27 +85,72 @@ async function session() {
     if($('learning-hero'))$('learning-hero').replaceChildren(new Option('Все герои',''));if($('learning-position'))$('learning-position').value='';
     state.learningScope=null;state.learningSignature=null;state.poolDirty=false;
     $('pool-status').textContent=''; $('pool-content').setAttribute('aria-busy','false');
-    $('auth-title').textContent=state.setup?'Создай свой аккаунт':'Вход в NARMA VISION';
-    $('auth-copy').textContent=state.setup?'Первый вход владельца платформы. Придумай отдельный пароль для NARMA VISION.':'Войди, чтобы загрузить реплей и посмотреть разбор своего матча.';
-    $('auth-submit').textContent=state.setup?'Создать аккаунт':'Войти'; $('auth-submit').disabled=state.setup&&!state.token;
-    $('setup-help').hidden=!state.setup||!!state.token; $('password-help').hidden=!state.setup; $('password').autocomplete=state.setup?'new-password':'current-password'; return;
+    $('auth-title').textContent=state.invite?'Прими приглашение':state.setup?'Создай свой аккаунт':'Вход в NARMA VISION';
+    $('auth-copy').textContent=state.invite?'Укажи почту из приглашения и придумай пароль для NARMA VISION.':state.setup?'Первый вход владельца платформы. Придумай отдельный пароль для NARMA VISION.':'Войди, чтобы загрузить реплей и посмотреть разбор своего матча.';
+    $('auth-submit').textContent=state.setup||state.invite?'Создать аккаунт':'Войти'; $('auth-submit').disabled=state.setup&&!state.token&&!state.invite;
+    $('setup-help').hidden=!state.setup||!!state.token||!!state.invite; $('password-help').hidden=!state.setup&&!state.invite; $('password').autocomplete=state.setup||state.invite?'new-password':'current-password';
+    $('forgot-password').hidden=state.setup||!!state.invite; $('closed-pilot-help').hidden=state.setup||!!state.invite; return;
   }
   $('account-email').textContent=state.user.email;
+  $('pilot-invitations').hidden=state.user.is_platform_owner!==true;
+  if(state.invite) notice('Чтобы принять приглашение на другой аккаунт, сначала нажми «Выйти».');
+  if(!$('account').hidden)void loadSecurity();
   if($('learning')&&!$('learning').hidden)void loadLearning();
   if(!$('account').hidden)void loadChatgpt();
   state.profile=(await api('/api/profile')).profile; profileView(); await refresh(); if(!$('hero-pool').hidden&&!state.pool) await loadPool();
 }
 $('auth-form').addEventListener('submit',async event=>{
   event.preventDefault(); notice(); const button=$('auth-submit'); button.disabled=true;
-  try { await api(state.setup?'/api/auth/setup':'/api/auth/login','POST',{email:$('email').value.trim(),password:$('password').value,...(state.setup?{token:state.token}:{})}); state.token=null; $('password').value=''; await session(); }
-  catch(error) { notice(error.message); } finally { button.disabled=state.setup&&!state.token; }
+  try { await api(state.invite?'/api/auth/accept-invitation':state.setup?'/api/auth/setup':'/api/auth/login','POST',{email:$('email').value.trim(),password:$('password').value,...(state.invite?{token:state.invite}:state.setup?{token:state.token}:{})}); state.token=null; state.invite=null; $('password').value=''; await session(); }
+  catch(error) { notice(error.message); } finally { button.disabled=state.setup&&!state.token&&!state.invite; }
 });
-$('logout').addEventListener('click',async()=>{stopChatgptPolling();try { await api('/api/auth/logout','POST',{}); location.reload(); } catch(error) { notice(error.message);if(!$('account').hidden)void loadChatgpt(); } });
+$('logout').addEventListener('click',async()=>{stopChatgptPolling();clearSecuritySecrets();try { await api('/api/auth/logout','POST',{}); clearSecuritySecrets(); await session(); } catch(error) { notice(error.message);if(!$('account').hidden)void loadChatgpt(); } });
 $('password-form').addEventListener('submit',async event=>{
   event.preventDefault(); const button=event.target.querySelector('button'); button.disabled=true;
-  try { await api('/api/auth/password','POST',{current_password:$('current-password').value,new_password:$('new-password').value}); $('current-password').value=''; $('new-password').value=''; state.user=null; await session(); notice('Пароль изменён. Войди с новым паролем.'); }
+  try { await api('/api/auth/password','POST',{current_password:$('current-password').value,new_password:$('new-password').value}); $('current-password').value=''; $('new-password').value=''; state.user=null; await session(); notice('Пароль изменён. Войди с новым паролем и создай новые резервные коды.'); }
   catch(error) { notice(error.message); } finally { button.disabled=false; }
 });
+
+function clearSecuritySecrets() {
+  state.securityEpoch=(state.securityEpoch??0)+1;
+  for(const id of ['recovery-code-list','invitation-link','recovery-current-password','invitation-password','current-password','new-password']) $(id).value='';
+  $('recovery-output').hidden=true; $('invitation-output').hidden=true;
+}
+async function loadSecurity() {
+  const email=state.user?.email; if(!email)return;
+  try {
+    const data=await api('/api/auth/security'); if(state.user?.email!==email)return;
+    $('recovery-count').textContent=data.recovery_codes_remaining?`Неиспользованных кодов: ${data.recovery_codes_remaining}.`:'Резервных кодов пока нет. Создай их, чтобы не потерять доступ.';
+    if(state.user.is_platform_owner!==true)return;
+    const invitations=await api('/api/auth/invitations'); if(state.user?.email!==email)return;
+    $('invitation-list').replaceChildren();
+    for(const invitation of invitations.invitations) {
+      const row=node('div',undefined,'invitation-row'),copy=node('p',`${invitation.email} · до ${new Date(invitation.expires_at).toLocaleString('ru-RU')}`,'help'),button=node('button','Отозвать','quiet');button.type='button';
+      button.addEventListener('click',async()=>{if(!$('invitation-password').value){$('invitation-password').focus();$('invitation-status').textContent='Введи текущий пароль для отзыва.';return;}button.disabled=true;try{await api(`/api/auth/invitations/${invitation.id}`,'DELETE',{current_password:$('invitation-password').value});$('invitation-status').textContent='Приглашение отозвано.';$('invitation-link').value='';$('invitation-output').hidden=true;await loadSecurity();}catch(error){$('invitation-status').textContent=error.message;}finally{$('invitation-password').value='';button.disabled=false;}});
+      row.append(copy,button);$('invitation-list').append(row);
+    }
+  }catch(error){$('recovery-count').textContent=error.message;}
+}
+$('forgot-password').addEventListener('click',()=>{$('auth-form').hidden=true;$('forgot-password').hidden=true;$('recovery-form').hidden=false;$('recovery-email').value=$('email').value;$('recovery-email').focus();});
+$('return-login').addEventListener('click',()=>{$('recovery-form').reset();$('recovery-form').hidden=true;$('auth-form').hidden=false;$('forgot-password').hidden=state.setup||!!state.invite;});
+$('recovery-form').addEventListener('submit',async event=>{
+  event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;
+  try{await api('/api/auth/recover','POST',{email:$('recovery-email').value.trim(),code:$('recovery-code').value,new_password:$('recovery-password').value});$('email').value=$('recovery-email').value;$('recovery-form').reset();$('recovery-form').hidden=true;$('auth-form').hidden=false;$('forgot-password').hidden=false;await session();notice('Пароль восстановлен. Все устройства вышли из аккаунта. Войди с новым паролем; использованный код больше не действует.');}
+  catch(error){notice(error.message);}finally{button.disabled=false;}
+});
+$('recovery-generate-form').addEventListener('submit',async event=>{
+  event.preventDefault();const button=event.target.querySelector('button'),epoch=state.securityEpoch,email=state.user?.email;button.disabled=true;
+  try{const data=await api('/api/auth/recovery-codes','POST',{current_password:$('recovery-current-password').value});if(epoch!==state.securityEpoch||email!==state.user?.email||$('account').hidden)return;$('recovery-code-list').value=data.codes.join('\n');$('recovery-output').hidden=false;$('recovery-code-list').focus();$('recovery-code-list').select();await loadSecurity();}
+  catch(error){notice(error.message);}finally{$('recovery-current-password').value='';button.disabled=false;}
+});
+$('recovery-saved').addEventListener('click',()=>{$('recovery-code-list').value='';$('recovery-output').hidden=true;});
+$('invitation-saved').addEventListener('click',()=>{$('invitation-link').value='';$('invitation-output').hidden=true;});
+$('invitation-form').addEventListener('submit',async event=>{
+  event.preventDefault();const button=event.target.querySelector('button'),epoch=state.securityEpoch,email=state.user?.email;button.disabled=true;
+  try{const data=await api('/api/auth/invitations','POST',{email:$('invitation-email').value.trim(),current_password:$('invitation-password').value});if(epoch!==state.securityEpoch||email!==state.user?.email||$('account').hidden)return;const fragment=new URLSearchParams({invite:data.token,email:data.invitation.email});$('invitation-link').value=`${location.origin}/replays#${fragment}`;$('invitation-output').hidden=false;$('invitation-link').focus();$('invitation-link').select();$('invitation-status').textContent='Приглашение создано. Письмо не отправлялось — передай ссылку участнику.';await loadSecurity();}
+  catch(error){$('invitation-status').textContent=error.message;}finally{$('invitation-password').value='';button.disabled=false;}
+});
+window.addEventListener('pagehide',clearSecuritySecrets);
 
 // OAuth credentials remain on the server. The browser receives only the short-lived login code.
 function stopChatgptPolling() {

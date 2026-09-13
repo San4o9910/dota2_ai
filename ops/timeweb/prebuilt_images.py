@@ -339,7 +339,7 @@ def validate_installed(release):
         raise ImageError("prebuilt_loaded_image_changed")
 
 
-def rollback_images(release):
+def rollback_images(release, *, restore_api=True):
     from snapshot_worker_state import CONFIG, compose, inspect_service, write_private
     from chatgpt_secrets import restore_settings
     from openai_secrets import restore_settings as restore_openai_settings
@@ -357,6 +357,10 @@ def rollback_images(release):
             raise ImageError("prebuilt_rollback_snapshot_invalid")
         image_info(identifier)
         run(["docker", "image", "tag", identifier, tag])
+    if not restore_api:
+        # A proved refusal before cutover must never recreate a working API or
+        # stop live workers. Only settings and image tags changed so far.
+        return
     previous = saved.get("api")
     if previous and previous.get("running"):
         if (previous.get("service") != "api" or not CONFIG.fullmatch(previous.get("config", ""))
@@ -387,14 +391,14 @@ def rollback_images(release):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("receive", "install", "validate", "rollback"))
+    parser.add_argument("action", choices=("receive", "install", "validate", "rollback", "rollback-tags"))
     parser.add_argument("release")
     args = parser.parse_args()
     try:
         if args.action == "receive": receive_archive(args.release, sys.stdin.buffer)
         elif args.action == "install": install_bundle(args.release)
         elif args.action == "validate": validate_installed(args.release)
-        else: rollback_images(args.release)
+        else: rollback_images(args.release, restore_api=args.action != 'rollback-tags')
         print(json.dumps({"event": "prebuilt_images_" + args.action, "release": args.release}), flush=True)
     except Exception as error:
         code = str(error) if isinstance(error, ImageError) else "prebuilt_operation_failed"

@@ -1,0 +1,43 @@
+name: Timeweb operational monitor
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+    inputs:
+      notification_test:
+        description: "Проверить уведомление GitHub об ошибке (без обращения к серверу)"
+        required: false
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  # Read-only probes do not replace/cancel a queued deployment or backup.
+  group: timeweb-operations-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    if: github.repository == 'San4o9910/dota2_ai'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: CHECKOUT_PRODUCTION_MONITOR_SHA
+      - name: Validate monitor before loading credentials
+        run: |
+          python3 -m py_compile ops/timeweb/monitor.py services/video/narma_video/operations_health.py
+          python3 -m unittest discover -s ops/timeweb/tests -p test_monitor.py
+      - name: Read HTTPS, worker, disk, budget and backup status
+        if: ${{ !inputs.notification_test }}
+        env:
+          TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 ops/timeweb/monitor.py
+      - name: Synthetic notification delivery test without cloud credentials
+        if: ${{ inputs.notification_test }}
+        run: |
+          echo '::error title=NARMA notification test::Synthetic notification test; this is not evidence of a service failure.'
+          exit 1

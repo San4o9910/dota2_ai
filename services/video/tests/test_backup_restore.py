@@ -187,7 +187,7 @@ def test_multiple_accounts_require_the_explicit_migration(restored):
         assert restored.verify()['portal']['accounts'] == 2
 
 
-@pytest.mark.parametrize('restored', [18, 20, 22], indirect=True)
+@pytest.mark.parametrize('restored', [18, 20, 22, 23], indirect=True)
 @pytest.mark.parametrize('frozen_reason', [None, 'PROVIDER_ACCOUNTING_UNCERTAIN'])
 def test_openai_ledger_and_both_budget_snapshots_survive_restore(restored, frozen_reason):
     restored.gemini_call('video')
@@ -264,3 +264,42 @@ def test_soft_deleted_openai_sources_keep_their_ledger(restored, kind, billing):
     assert restored.rows('openai_api_budget')[0][0] == {
         **before_budget, 'enabled': False, 'frozen_reason': 'RESTORE_REQUIRES_SPEND_RECONCILIATION',
     }
+
+
+@pytest.mark.parametrize('restored', [22, 23], indirect=True)
+def test_restore_does_not_resurrect_previously_revoked_sessions(restored):
+    restored.insert('portal_sessions', token_hash='c' * 64, owner_id=OWNER,
+                    expires_at='2099-01-01T00:00:00Z')
+    assert restored.verify()['restored_sessions_revoked'] is True
+    assert restored.connection.execute('SELECT count(*) FROM portal_sessions').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('restored', [23], indirect=True)
+def test_restore_revokes_bearer_codes_and_invites_preserving_accounts_and_reports(restored):
+    restored.connection.execute('UPDATE portal_accounts SET is_platform_owner=true WHERE owner_id=%s', (OWNER,))
+    restored.insert('portal_invitations', id=uuid4(), email='invite@example.invalid',
+                    token_hash='d' * 64, invited_by=OWNER, expires_at='2099-01-01T00:00:00Z')
+    restored.insert('portal_recovery_codes', token_hash='e' * 64, owner_id=OWNER)
+    restored.insert('portal_recovery_codes', token_hash='f' * 64, owner_id=OWNER, used_at=FINISHED)
+    account = restored.connection.execute('SELECT to_jsonb(a) FROM portal_accounts a').fetchone()[0]
+    used_before = restored.connection.execute('SELECT used_at FROM portal_recovery_codes WHERE token_hash=%s', ('f' * 64,)).fetchone()[0]
+    restored.openai_call('replay', billing='settled')
+    jobs_before = restored.rows('replay_jobs')
+    state = restored.verify()
+    assert state['account_access']['platform_owners'] == 1
+    assert state['restored_access_tokens_revoked'] is True
+    assert restored.connection.execute('SELECT count(*) FROM portal_invitations WHERE used_at IS NULL').fetchone()[0] == 0
+    assert restored.connection.execute('SELECT count(*) FROM portal_recovery_codes WHERE used_at IS NULL').fetchone()[0] == 0
+    assert restored.connection.execute('SELECT used_at FROM portal_recovery_codes WHERE token_hash=%s', ('f' * 64,)).fetchone()[0] == used_before
+    assert restored.connection.execute('SELECT to_jsonb(a) FROM portal_accounts a').fetchone()[0] == account
+    assert restored.rows('replay_jobs') == jobs_before
+
+
+@pytest.mark.parametrize('restored', [23], indirect=True)
+def test_restore_rejects_multiple_platform_owners_even_if_index_was_lost(restored):
+    restored.connection.execute('DROP INDEX portal_single_platform_owner')
+    restored.connection.execute('UPDATE portal_accounts SET is_platform_owner=true')
+    restored.insert('portal_accounts', owner_id='other', email='other@example.invalid',
+                    password_hash='synthetic', is_platform_owner=True)
+    with pytest.raises(restored.backup.CheckError, match='backup_account_access_restore_invariants_failed'):
+        restored.verify()
