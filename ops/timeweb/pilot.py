@@ -261,10 +261,26 @@ reinstalls and revalidates them; stale image checkpoints never stop live work.
 
 
 def emit_image_failure(line):
+    """Forward only whitelisted image failure codes and aggregate storage evidence."""
     try:
         item = json.loads(line)
+        if not isinstance(item, dict):
+            return
         if item.get("event") == "prebuilt_images_failed" and re.fullmatch("prebuilt_[a-z_]{1,80}", item.get("code", "")):
             event("prebuilt_images_failed", code=item["code"])
+        elif item.get("event") == "prebuilt_storage_check":
+            numbers = {"required_bytes", "free_before_bytes", "free_after_bytes",
+                "reclaimed_bytes", "reclaimed_archives", "eligible_bytes", "eligible_archives"}
+            if (set(item) != numbers | {"event", "cleanup_status", "capacity_ok"}
+                    or any(type(item[key]) is not int or not 0 <= item[key] < 2**63 for key in numbers)
+                    or not 0 < item["required_bytes"] <= 8 * 1024**3
+                    or not item["reclaimed_archives"] <= item["eligible_archives"] <= 256
+                    or item["reclaimed_bytes"] > item["eligible_bytes"]
+                    or item["cleanup_status"] not in {"not_needed", "completed", "unavailable", "bounded"}
+                    or type(item["capacity_ok"]) is not bool
+                    or item["capacity_ok"] != (item["free_after_bytes"] >= item["required_bytes"])):
+                return
+            event("prebuilt_storage_check", **{key: value for key, value in item.items() if key != "event"})
     except (ValueError, TypeError):
         pass
 
