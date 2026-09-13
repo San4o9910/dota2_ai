@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-          ref: CHECKOUT_PRODUCTION_MONITOR_SHA
+          ref: 5a02352520460bb8af6731e9a1836ee92c6c7630
       - name: Validate monitor before loading credentials
         run: |
           python3 -m py_compile ops/timeweb/monitor.py services/video/narma_video/operations_health.py
