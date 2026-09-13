@@ -1,14 +1,16 @@
 """Paid replay routing keeps selected-player and training-context boundaries."""
 from copy import deepcopy
+from contextlib import contextmanager
 import json
 import os
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from narma_video import replay_coach as coach, openai_provider as provider, openai_budget as budget
 from narma_video.db import database, migrate
-from test_replay_coach import FACTS, RESULT
+from test_replay_coach import FACTS, RESULT, RESULT_V2
 
 
 @pytest.fixture
@@ -67,6 +69,143 @@ def test_paid_output_business_validation_and_cache(paid, change):
     paid.setattr(provider, 'perform_reserved', lambda *args: pytest.fail('No repeat request'))
     result = coach.enrich_report({'id': 'job', 'owner_id': 'owner'}, FACTS)
     assert result['coaching']['status'] == ('ready' if change == 'success' else 'unavailable')
+
+
+@pytest.mark.parametrize('change', ['valid', 'legacy_downgrade', 'invalid_condition', 'incomplete'])
+def test_new_paid_call_requests_structured_decisions_once_and_keeps_failure_facts(paid, change):
+    calls = []
+    paid.setattr(coach, 'reserve_api_replay', lambda *args: {
+        'id': 'call', 'state': 'reserved', '_coaching_contract': coach.COACHING_SCHEMA_V2})
+    def perform(call_id, owner_id, instructions, encoded, schema):
+        calls.append((call_id, owner_id, instructions, encoded, schema))
+        if change == 'incomplete':
+            raise provider.ProviderError('OPENAI_RESPONSE_INCOMPLETE')
+        value = deepcopy(RESULT if change == 'legacy_downgrade' else RESULT_V2)
+        if change == 'invalid_condition':
+            value['points'][0]['when_to_apply'] = 'У тебя было 700 золота.'
+        return {'text': json.dumps(value)}
+    paid.setattr(provider, 'perform_reserved', perform)
+    result = coach.enrich_report({'id': 'job', 'owner_id': 'owner'}, FACTS)
+    assert len(calls) == 1
+    assert calls[0][2] == coach.API_SYSTEM_V2
+    assert calls[0][4] == coach.ReplayCoachingV2.model_json_schema()
+    payload = provider.request_payload(calls[0][2], calls[0][3], calls[0][4])
+    assert payload['max_output_tokens'] == 5000
+    assert result['metrics'] == FACTS['metrics'] and result['evidence'] == FACTS['evidence']
+    assert result['coaching']['status'] == ('ready' if change == 'valid' else 'unavailable')
+    if change == 'valid':
+        assert result['coaching']['schema_version'] == coach.COACHING_SCHEMA_V2
+        assert result['coaching']['call_id'] == 'call'
+        assert result['coaching']['points'] == RESULT_V2['points']
+
+
+@pytest.mark.parametrize('legacy', [True, False])
+def test_saved_versioned_output_does_not_generate_another_response(paid, legacy):
+    value = RESULT if legacy else RESULT_V2
+    paid.setattr(coach, 'reserve_api_replay', lambda *args: {
+        'id': 'saved-call', 'state': 'succeeded', 'output_text': json.dumps(value),
+        '_coaching_contract': 'legacy' if legacy else coach.COACHING_SCHEMA_V2})
+    paid.setattr(provider, 'perform_reserved', lambda *args: pytest.fail('Saved output must not generate'))
+    result = coach.enrich_report({'id': 'job', 'owner_id': 'owner'}, FACTS)
+    assert result['coaching']['status'] == 'ready'
+    assert result['coaching']['call_id'] == 'saved-call'
+    assert {key: result['coaching'][key] for key in value} == value
+
+
+@pytest.mark.parametrize('change', ['unchanged', 'facts', 'context'])
+def test_legacy_request_selection_rebuilds_digest_from_current_facts_and_context(paid, change):
+    job = {'id': 'job', 'owner_id': 'owner', 'account_id': 123, 'match_id': '8984479726',
+           'source_sha256': 'a' * 64, 'lease_token': 'lease'}
+    facts = {**deepcopy(FACTS), 'match_id': job['match_id'],
+             'coverage': {'source_sha256': job['source_sha256'], 'complete': True}}
+    original, _ = coach.prepare_evidence(facts)
+    legacy_digest = provider.request_digest(coach.SYSTEM, original, coach.ReplayCoaching.model_json_schema())
+    context = {'position': None, 'exercise_id': None, 'mmr': None, 'training_level': None}
+    queries, reservations = [], []
+    if change == 'facts':
+        facts['metrics']['kills'] += 1
+    if change == 'context':
+        context['mmr'] = 5000
+    encoded, _ = coach.prepare_evidence(facts, mmr=context['mmr'])
+    class Connection:
+        def execute(self, sql, params=None):
+            queries.append((sql, params))
+            row = {'id': job['id'], 'position': None, 'requested_mmr': context['mmr'], 'training_level': None}
+            if 'FROM openai_api_calls' in sql:
+                row = {'request_sha256': legacy_digest}
+            return SimpleNamespace(fetchone=lambda: row)
+    @contextmanager
+    def db():
+        yield Connection()
+    def reserve(connection, **request):
+        reservations.append(request)
+        # The unchanged provider gate reuses only an exact stored request key;
+        # changed inputs remain subject to the one-attempt rule.
+        if request['request_key'] != f"replay:{job['id']}:{legacy_digest}":
+            raise provider.ProviderError('OPENAI_CALL_ALREADY_ATTEMPTED')
+        return {'id': 'saved-call', 'state': 'succeeded', 'output_text': json.dumps(RESULT)}
+    paid.setattr(coach, 'database', db)
+    paid.setattr(provider, 'reserve_call', reserve)
+    if change == 'unchanged':
+        row = coach.reserve_api_replay(job, facts, context, encoded)
+        assert row['_coaching_contract'] == 'legacy'
+        assert row['id'] == 'saved-call'
+    else:
+        with pytest.raises(provider.ProviderError, match='OPENAI_CALL_ALREADY_ATTEMPTED'):
+            coach.reserve_api_replay(job, facts, context, encoded)
+    assert len(reservations) == 1
+    request = reservations[0]
+    assert request['owner_id'] == job['owner_id'] and request['lease_token'] == job['lease_token']
+    assert request['instructions'] == (coach.SYSTEM if change == 'unchanged' else coach.API_SYSTEM_V2)
+    lookup = next((sql, args) for sql, args in queries if 'FROM openai_api_calls' in sql)
+    assert 'owner_id=%s AND job_id=%s AND source_sha256=%s' in lookup[0]
+    assert lookup[1] == (job['owner_id'], job['id'], job['source_sha256'])
+
+
+@pytest.mark.parametrize('change', ['unchanged', 'facts', 'absent'])
+def test_near_limit_legacy_cache_does_not_require_a_larger_v2_request(paid, change):
+    job = {'id': 'job', 'owner_id': 'owner', 'account_id': 123, 'match_id': '8984479726',
+           'source_sha256': 'a' * 64, 'lease_token': 'lease'}
+    facts = {**deepcopy(FACTS), 'match_id': job['match_id'],
+             'coverage': {'source_sha256': job['source_sha256'], 'complete': True}}
+    # Synthetic request in the gap between the old and new schema overheads.
+    facts['metrics']['padding'] = 'x' * 205000
+    original, _ = coach.prepare_evidence(facts)
+    legacy_digest = provider.request_digest(coach.SYSTEM, original, coach.ReplayCoaching.model_json_schema())
+    with pytest.raises(provider.ProviderError, match='OPENAI_REQUEST_TOO_LARGE'):
+        provider.request_digest(coach.API_SYSTEM_V2, original, coach.ReplayCoachingV2.model_json_schema())
+    if change == 'facts':
+        facts['metrics']['kills'] += 1
+    encoded, ids = coach.prepare_evidence(facts)
+    context = {'position': None, 'exercise_id': None, 'mmr': None, 'training_level': None}
+    reservations, lookups = [], []
+    class Connection:
+        def execute(self, sql, params=None):
+            row = {'id': job['id'], 'position': None, 'requested_mmr': None, 'training_level': None}
+            if 'FROM openai_api_calls' in sql:
+                lookups.append(params)
+                row = None if change == 'absent' else {'request_sha256': legacy_digest}
+            return SimpleNamespace(fetchone=lambda: row)
+    @contextmanager
+    def db():
+        yield Connection()
+    def reserve(connection, **request):
+        reservations.append(request)
+        assert request['instructions'] == coach.SYSTEM
+        assert request['request_key'] == f"replay:{job['id']}:{legacy_digest}"
+        return {'id': 'saved-call', 'state': 'succeeded', 'output_text': json.dumps(RESULT)}
+    paid.setattr(coach, 'database', db)
+    paid.setattr(provider, 'reserve_call', reserve)
+    paid.setattr(provider, 'perform_reserved', lambda *args: pytest.fail('No paid dispatch or retry'))
+    if change == 'unchanged':
+        result, call_id = coach.analyze_api_replay(job, facts, context, encoded, ids)
+        assert result.model_dump() == RESULT and call_id == 'saved-call'
+        assert len(reservations) == 1
+    else:
+        with pytest.raises(provider.ProviderError, match='OPENAI_REQUEST_TOO_LARGE'):
+            coach.analyze_api_replay(job, facts, context, encoded, ids)
+        assert not reservations
+    assert lookups == [(job['owner_id'], job['id'], job['source_sha256'])]
 
 
 @pytest.fixture

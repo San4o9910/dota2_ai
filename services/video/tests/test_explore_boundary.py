@@ -43,7 +43,7 @@ def test_public_launch_does_not_expose_personal_reports_or_provider_access(publi
 
 
 def test_private_navigation_direct_links_keep_the_portal_shell(public_client):
-    for path in ('/replays', '/hero-pool', '/player', '/my-learning', '/account', '/setup'):
+    for path in ('/coach', '/replays', '/hero-pool', '/player', '/my-learning', '/account', '/setup'):
         response = public_client.get(path)
         assert response.status_code == 200
         assert '/assets/portal.js' in response.text

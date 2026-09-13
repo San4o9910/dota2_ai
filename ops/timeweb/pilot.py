@@ -363,8 +363,9 @@ def ensure_https(ssh,release,hostname,host):
             raise CheckError('https_auth_check_failed') from None
     event('https_public_endpoint',origin='https://'+hostname,certificate_verified=True,anonymous_api_status=401)
     portal_origin='https://'+hostname
-    for path,signature in (('/',b'NARMA VISION'),('/replays',b'/assets/portal.js'),
+    for path,signature in (('/',b'NARMA VISION'),('/coach',b'/assets/portal.js'),('/replays',b'/assets/portal.js'),
                            ('/my-learning',b'pool-learning'),('/assets/portal.js',b'/api/session'),
+                           ('/assets/personal-coach.js',b'createPersonalCoach'),
                            ('/assets/portal.css',b'--surface'),('/practice',b'/assets/explore.js'),
                            ('/builds',b'/assets/builds.css'),('/assets/builds.js',b'build-inventory-grid'),
                            ('/assets/build-meta.js',b'/api/explore/builds?guide='),

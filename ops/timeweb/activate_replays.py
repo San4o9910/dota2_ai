@@ -28,7 +28,7 @@ class LocalHTTPS(http.client.HTTPSConnection):
 
 
 def anonymous_checks(hostname):
-    checks = [('/livez', 200), ('/hero-pool', 200), ('/api/session', 200),
+    checks = [('/livez', 200), ('/coach', 200), ('/hero-pool', 200), ('/api/session', 200),
               ('/api/replays', 401), ('/api/hero-pool', 401), ('/api/learning', 401), ('/v1/videos', 401)]
     for path, expected in checks:
         connection = LocalHTTPS(hostname, timeout=10, context=ssl.create_default_context())
