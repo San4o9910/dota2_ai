@@ -24,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from .config import PART_BYTES, media_root
 from .db import database
 from . import media_storage
+from . import replay_coaching_status
 from .replay_metadata import parse_demo_metadata, resolve_player
 from .replay_hero_context import build_hero_context
 from .role_context import COACH_METHOD_VERSION
@@ -144,13 +145,18 @@ def get_replay(job_id, owner_id):
         report = row["result_payload"] if current else (archive["report"] if archive else None)
         context = report_hero_context(connection, row, report)
         report = report_coaching_view(report, context)
+        call = replay_coaching_status.owned_call(connection, row)
+        coaching_status = replay_coaching_status.project(row, report, call, archived=bool(not current and archive))
         if archive:
             archived_context = report_hero_context(connection, row, archive["report"])
+            archived_report = report_coaching_view(archive["report"], archived_context)
             archive = {**archive, "hero_context": archived_context,
-                       "report": report_coaching_view(archive["report"], archived_context)}
+                       "report": archived_report,
+                       "coaching_status": replay_coaching_status.project(row, archived_report, call, archived=True)}
     return {"replay": public(row), "parts": [part["part_number"] for part in parts],
             "report": report, "hero_context": context,
-            "report_is_previous": bool(not current and archive), "archived_report": archive}
+            "report_is_previous": bool(not current and archive), "archived_report": archive,
+            "coaching_status": coaching_status}
 
 
 def report_coaching_view(report, hero_context):

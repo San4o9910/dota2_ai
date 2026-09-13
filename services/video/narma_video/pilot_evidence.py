@@ -16,13 +16,13 @@ from .db import database
 
 
 LEDGER = """
-    SELECT 'openai' AS provider,kind,
+    SELECT 'openai' AS provider,kind,id::text AS call_id,
         coalesce(job_id,video_job_id,task_id) AS source_id,owner_id,source_sha256,
         state,billing_status,charged_microusd,reserved_microusd,created_at,
         started_at,finished_at,error_code
     FROM openai_api_calls
     UNION ALL
-    SELECT 'gemini',call_kind,coalesce(replay_job_id,job_id),owner_id,NULL,
+    SELECT 'gemini',call_kind,id::text,coalesce(replay_job_id,job_id),owner_id,NULL,
         NULL,billing_status,charged_microusd,reserved_microusd,created_at,
         NULL,finished_at,NULL
     FROM video_provider_calls
@@ -77,10 +77,12 @@ def collect(connection, *, since: datetime, until: datetime):
         SELECT j.kind,count(*) AS ready_reports,
             count(*) FILTER (WHERE coaching->>'status'='ready') AS coaching_ready_reports,
             count(*) FILTER (WHERE coaching->>'status'='unavailable') AS coaching_unavailable_reports,
-            count(*) FILTER (WHERE coaching->>'status'='ready' AND EXISTS (
+            count(*) FILTER (WHERE coaching->>'status'='ready'
+                AND coaching->>'provider'='openai' AND coaching->>'usage_kind'='openai_api' AND EXISTS (
                 SELECT 1 FROM ledger c WHERE c.provider='openai' AND c.kind=j.kind
                     AND c.source_id=j.id AND c.owner_id=j.owner_id
                     AND c.source_sha256=j.source_sha256
+                    AND c.call_id=coaching->>'call_id'
                     AND c.state='succeeded' AND c.billing_status='settled'
                     AND c.charged_microusd IS NOT NULL)) AS ready_with_confirmed_openai_call
         FROM jobs j WHERE j.created_at>=%s AND j.created_at<%s AND j.state='ready'
@@ -175,7 +177,8 @@ def collect(connection, *, since: datetime, until: datetime):
         'ledger_link_integrity': integrity,
         'limitations': [
             'Ready parsing alone does not confirm a usable OpenAI coaching response.',
-            'Report coaching status and a succeeded settled source-bound call are both required for confirmation.',
+            'Ready coaching must name OpenAI API and its exact succeeded settled owner/source-bound call for confirmation.',
+            'Legacy or carried-forward text without explicit provider and call identity is excluded from confirmed OpenAI reports.',
             'Job timing includes upload, queue and later updates; immutable processing timings are unavailable.',
             'Per-job costs sum stored Gemini and OpenAI charges; calls without charges retain unknown cost.',
             'No-provider jobs are excluded from paid unit-cost averages; Hermes overhead is reported separately in calls.',

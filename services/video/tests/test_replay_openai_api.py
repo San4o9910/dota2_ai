@@ -110,6 +110,19 @@ def test_real_api_reservation_binds_manual_role_and_source(owned):
     assert coach.reserve_api_replay(job, facts, context, encoded)['id'] == row['id']
 
 
+def test_status_ledger_lookup_cannot_cross_owner_job_or_source(owned):
+    from narma_video.replay_coaching_status import owned_call
+    job, facts = owned
+    context = coach.resolve_learning_context(job, facts)
+    encoded, _ = coach.prepare_evidence(facts, position=context['position'])
+    row = coach.reserve_api_replay(job, facts, context, encoded)
+    with database() as connection:
+        assert owned_call(connection, job)['id'] == row['id']
+        assert owned_call(connection, {**job, 'owner_id': 'foreign-owner'}) is None
+        assert owned_call(connection, {**job, 'id': uuid4()}) is None
+        assert owned_call(connection, {**job, 'source_sha256': 'b' * 64}) is None
+
+
 @pytest.mark.parametrize('change', ['source', 'account', 'incomplete', 'lease', 'role', 'mmr'])
 def test_changed_or_unbound_source_never_reserves(owned, change):
     job, facts = owned
@@ -125,4 +138,3 @@ def test_changed_or_unbound_source_never_reserves(owned, change):
         coach.reserve_api_replay(job, facts, context, encoded)
     with database() as connection:
         assert connection.execute('SELECT count(*) AS n FROM openai_api_calls').fetchone()['n'] == 0
-

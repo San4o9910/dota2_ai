@@ -178,6 +178,17 @@ def seed_openai(connection, kind, job, owner, *, charge=None, state='unknown', s
             now()-interval '9 minutes',now()-interval '8 minutes',now()-interval '7 minutes')""",
         (call, owner, str(call), 'b'*64, kind, job, uuid4(), source, charge, state, billing,
          'private_model_text' if state == 'succeeded' else None, 'c'*64 if state == 'succeeded' else None))
+    return call
+
+
+def bind_coaching(connection, kind, job, call, **changes):
+    value = {'status': 'ready', 'provider': 'openai', 'usage_kind': 'openai_api',
+             'call_id': str(call), **changes}
+    if kind == 'video':
+        connection.execute('UPDATE video_jobs SET video_coaching=%s WHERE id=%s', (Jsonb(value), job))
+    else:
+        connection.execute("UPDATE replay_jobs SET result_payload=jsonb_set(result_payload,'{coaching}',%s) WHERE id=%s",
+                           (Jsonb(value), job))
 
 
 def seed_gemini(connection, job, owner, charge, frame):
@@ -190,18 +201,22 @@ def seed_gemini(connection, job, owner, charge, frame):
 def test_evidence_separates_ready_from_openai_success_and_no_join_fanout(isolated):
     with database() as connection:
         video, owner = seed_job(connection, 'video', coaching={'status': 'ready'})
-        seed_openai(connection, 'video', video, owner, charge=30, state='succeeded')
+        call = seed_openai(connection, 'video', video, owner, charge=30, state='succeeded')
+        bind_coaching(connection, 'video', video, call)
         seed_gemini(connection, video, owner, 10, 0)
         seed_gemini(connection, video, owner, 20, 1)
         failed, owner = seed_job(connection, 'video', state='failed')
         seed_openai(connection, 'video', failed, owner)
         seed_job(connection, 'replay', coaching={'status': 'unavailable'})
         replay, owner = seed_job(connection, 'replay', coaching={'status': 'ready'})
-        seed_openai(connection, 'replay', replay, owner, charge=7, state='failed')
+        call = seed_openai(connection, 'replay', replay, owner, charge=7, state='failed')
+        bind_coaching(connection, 'replay', replay, call)
         replay, owner = seed_job(connection, 'replay', coaching={'status': 'ready'})
-        seed_openai(connection, 'replay', replay, owner, charge=11, state='succeeded')
+        call = seed_openai(connection, 'replay', replay, owner, charge=11, state='succeeded')
+        bind_coaching(connection, 'replay', replay, call)
         replay, owner = seed_job(connection, 'replay', coaching={'status': 'ready'})
-        seed_openai(connection, 'replay', replay, owner, charge=13, state='succeeded', source='d'*64)
+        call = seed_openai(connection, 'replay', replay, owner, charge=13, state='succeeded', source='d'*64)
+        bind_coaching(connection, 'replay', replay, call)
         before = connection.execute('SELECT * FROM openai_api_budget').fetchall()
     now = datetime.now(timezone.utc)
     with database() as connection:
@@ -224,6 +239,35 @@ def test_evidence_separates_ready_from_openai_success_and_no_join_fanout(isolate
         assert private not in encoded
     with database() as connection:
         assert connection.execute('SELECT * FROM openai_api_budget').fetchall() == before
+
+
+def test_confirmed_openai_reports_require_the_current_comment_exact_call_provenance(isolated):
+    # A successful paid attempt for a job does not prove its currently displayed
+    # comment came from that response: it may be legacy, another provider, or
+    # carry-forward text after a failed refresh. Invalid UUID text remains data.
+    variants = [
+        {}, {'provider': None}, {'provider': 'gemini'}, {'usage_kind': None},
+        {'usage_kind': 'chatgpt_subscription'}, {'call_id': None},
+        {'call_id': str(uuid4())}, {'call_id': 'malformed private call reference'},
+        {'status': 'context_changed'},
+    ]
+    with database() as connection:
+        for changes in variants:
+            job, owner = seed_job(connection, 'replay', coaching={'status': 'ready'})
+            call = seed_openai(connection, 'replay', job, owner, charge=10, state='succeeded')
+            bind_coaching(connection, 'replay', job, call, **changes)
+        job, owner = seed_job(connection, 'replay', coaching={'status': 'ready', 'origin': 'previous_report'})
+        seed_openai(connection, 'replay', job, owner, charge=10, state='succeeded')
+        job, owner = seed_job(connection, 'replay', coaching={'status': 'ready'})
+        call = seed_openai(connection, 'replay', job, 'different-owner', charge=10, state='succeeded')
+        bind_coaching(connection, 'replay', job, call)
+    now = datetime.now(timezone.utc)
+    with database() as connection:
+        report = collect(connection, since=now-timedelta(days=1), until=now)
+    summary = report['ready_reports'][0]
+    assert summary['ready_reports'] == len(variants) + 2
+    assert summary['ready_with_confirmed_openai_call'] == 1
+    assert 'malformed private call reference' not in json.dumps(report)
 
 
 def test_evidence_transaction_prevents_writes(isolated):

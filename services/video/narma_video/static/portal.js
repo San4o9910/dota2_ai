@@ -308,17 +308,52 @@ function drawBars(id,bins,key,duration) {
   if(!valid.length) { const empty=svgNode('text',{x:260,y:80,'text-anchor':'middle',class:'chart-empty'}); empty.textContent='Нет поминутных данных'; svg.append(empty); }
 }
 function drawCombat(duration) {
-  const target=$('combat-strip'); target.replaceChildren(); const svg=svgNode('svg',{viewBox:'0 0 520 44',role:'img','aria-label':'Моменты убийств, смертей и получения предметов. Точные времена доступны в хронологии.'}), x=t=>20+Math.max(0,Math.min(duration,t))/duration*480;
-  svg.append(svgNode('line',{x1:20,x2:500,y1:22,y2:22,class:'chart-axis'}));
-  for(const interval of insight().death_intervals??[]) if(finite(interval.start)&&finite(interval.end)) svg.append(svgNode('rect',{x:x(interval.start),y:9,width:Math.max(1,x(interval.end)-x(interval.start)),height:26,class:'death-period'}));
-  for(const event of displayedReport().evidence??[]) {
-    if(!['kill','death'].includes(event.type)||!finite(event.time)) continue;
-    const marker=event.type==='kill'?svgNode('circle',{cx:x(event.time),cy:22,r:3,class:'combat-kill'}):svgNode('path',{d:`M ${x(event.time)} 14 l 5 8 l -5 8 l -5 -8 Z`,class:'combat-death'});
-    const title=svgNode('title',{}); title.textContent=`${stamp(event.time)} · ${eventLabels[event.type]}`; marker.append(title); svg.append(marker);
+  const report=displayedReport(), target=$('combat-strip'); target.replaceChildren();
+  const events=(report.evidence??[]).filter(event=>['kill','death'].includes(event.type)&&finite(event.time)&&event.time>=0&&event.time<=duration).map((event,index)=>({...event,key:`evidence-${index}`,evidenceId:event.id}));
+  const items=Array.isArray(insight().items)?insight().items:(report.inventory??[]);
+  for(const [index,item] of items.entries()) {
+    if(!finite(item.time)||item.time<0||item.time>duration) continue;
+    const evidence=state.evidence.get(item.event_id);
+    // Observed inventory is not proof of a purchase. Keep the report's acquisition
+    // meaning, and never manufacture a purchase time or combat event from counters.
+    const purchase=item.acquisition==='purchase'||evidence?.type==='purchase';
+    events.push({key:`item-${index}`,type:'item',time:item.time,title:item.label??itemName(item.item),label:purchase?'Покупка':'Предмет',details:purchase?'Покупка записана в реплее. Доставка и применение показаны в разделе «Ключевые предметы».':'Предмет записан в отчёте. Время его появления не обязательно совпадает с покупкой.',evidenceId:evidence?.id});
   }
-  for(const item of insight().items??[]) if(finite(item.time)) svg.append(svgNode('rect',{x:x(item.time)-2,y:35,width:4,height:7,class:'combat-purchase'}));
-  const cursor=svgNode('line',{x1:20,x2:20,y1:0,y2:44,class:'chart-cursor'}); svg.append(cursor); state.graphs.push({cursor,x}); target.append(svg);
-  svg.addEventListener('click',event=>{const box=svg.getBoundingClientRect(); seekTime(((event.clientX-box.left)/box.width*520-20)/480*duration);});
+  events.sort((a,b)=>a.time-b.time);
+  const categories=[['death','Смерти'],['kill','Убийства'],['item','Ключевые предметы']], reportKey=`${state.selected}|${state.showArchived}|${state.detail?.report_is_previous===true}|${report.match_id}`;
+  if(state.combatReportKey!==reportKey) {state.combatReportKey=reportKey;state.combatFilter=events.some(event=>event.type==='death')?'death':events[0]?.type??'death';state.combatSelected=null;}
+  const filters=node('div',undefined,'episode-filters'); filters.setAttribute('role','group'); filters.setAttribute('aria-label','Тип эпизода');
+  const layout=node('div',undefined,'episode-layout'), list=node('div',undefined,'episode-list'), detail=node('div',undefined,'episode-detail');
+  list.setAttribute('role','group'); list.setAttribute('aria-label','Выбрать эпизод по времени'); detail.setAttribute('aria-live','polite'); detail.setAttribute('aria-atomic','true');
+  const count=node('p',undefined,'help episode-count');
+  const choose=event=>{state.combatSelected=event.key;renderSelection(event);seekTime(event.time,event.evidenceId);};
+  function renderSelection(event) {
+    for(const button of list.children) button.setAttribute('aria-pressed',String(button.dataset.episodeKey===event?.key));
+    detail.replaceChildren();
+    if(!event) {detail.append(node('p',list.childElementCount?'Нажми на время эпизода. Здесь появятся факты из реплея и кнопки для сравнения показателей до события и в его момент.':'В этом отчёте нет таймкодов для выбранного типа событий.','help'));return;}
+    detail.append(node('p','Выбранный эпизод','eyebrow'),node('h5',`${stamp(event.time)} · ${event.label??eventLabels[event.type]}`),node('p',event.title??eventLabels[event.type],'episode-title'));
+    if(event.details) detail.append(node('p',event.details,'help'));
+    const interval=event.type==='death'?(insight().death_intervals??[]).find(value=>finite(value.start)&&finite(value.end)&&value.end>value.start&&Math.abs(value.start-event.time)<.1):null;
+    if(interval) detail.append(node('p',`Время вне игры по реплею: ${stamp(interval.end-interval.start)}. Возвращение: ${stamp(interval.end)}.`,'episode-fact'));
+    detail.append(node('p',event.type==='death'?'Сравни золото и опыт перед смертью и в момент события. Затем пересмотри этот отрезок в Dota 2: по одному факту смерти причину не определить.':event.type==='kill'?'Посмотри, как менялись золото и опыт рядом с убийством. Само событие не показывает, стоило ли вступать в этот бой.':'Сравни состояние героя перед событием и в этот момент. Получение и первое применение проверяй в карточке предмета.','episode-guide'));
+    const actions=node('div',undefined,'episode-actions'), before=node('button','За 30 с до события'), at=node('button','В момент события'); before.type=at.type='button';
+    before.disabled=event.time<=0;before.addEventListener('click',()=>seekTime(Math.max(0,event.time-30)));at.addEventListener('click',()=>seekTime(event.time,event.evidenceId));actions.append(before,at);
+    if(event.evidenceId) {const journal=node('button','Открыть в хронологии','quiet');journal.type='button';journal.addEventListener('click',()=>focusEvidence(event.evidenceId));actions.append(journal);}
+    detail.append(actions);
+  }
+  function renderList() {
+    const visible=events.filter(event=>event.type===state.combatFilter); list.replaceChildren();
+    for(const filter of filters.children)filter.setAttribute('aria-pressed',String(filter.dataset.episodeFilter===state.combatFilter));
+    count.textContent=`Таймкодов в отчёте: ${visible.length}. События идут от начала матча; счётчик в итоговой статистике может отличаться, если журнал неполный.`;
+    for(const event of visible) {
+      const button=node('button',undefined,'episode-choice');button.type='button';button.dataset.episodeKey=event.key;button.setAttribute('aria-label',`${stamp(event.time)} · ${event.label??eventLabels[event.type]}${event.type==='item'?` · ${event.title}`:''}`);
+      button.append(node('span',stamp(event.time),'episode-time'),node('span',event.type==='item'?event.title:event.title??eventLabels[event.type],'episode-name'));
+      button.addEventListener('click',()=>choose(event));list.append(button);
+    }
+    const selected=visible.find(event=>event.key===state.combatSelected);state.combatSelected=selected?.key??null;renderSelection(selected);
+  }
+  for(const [type,label] of categories) {const button=node('button',`${label} · ${events.filter(event=>event.type===type).length}`);button.type='button';button.dataset.episodeFilter=type;button.addEventListener('click',()=>{state.combatFilter=type;state.combatSelected=null;renderList();});filters.append(button);}
+  layout.append(list,detail);target.append(filters,count,layout);renderList();
 }
 function renderSources() {
   const gold=insight().gold??{}, target=$('gold-sources'); target.replaceChildren();
@@ -468,7 +503,8 @@ function seekTime(seconds, evidenceId=null) {
   const samples=(report.economy??[]).filter(sample=>Number.isFinite(sample.time)&&sample.time<=state.time);
   const snapshot=samples.at(-1);
   $('gold-value').textContent=num(snapshot?.net_worth); $('xp-value').textContent=num(snapshot?.xp);
-  $('timeline-snapshot').textContent=snapshot?`${stamp(snapshot.time)} · Уровень ${num(snapshot.level)} · ${num(snapshot.kills)} / ${num(snapshot.deaths)} / ${num(snapshot.assists)} · Добивания ${num(snapshot.last_hits)} / ${num(snapshot.denies)}`:'До первого снимка статистики. Выбери более поздний момент.';
+  $('timeline').setAttribute('aria-valuetext',stamp(state.time));
+  $('timeline-snapshot').textContent=snapshot?`На графиках: ${stamp(state.time)}. Последняя запись: ${stamp(snapshot.time)} · Уровень ${num(snapshot.level)} · Убийства: ${num(snapshot.kills)} · Смерти: ${num(snapshot.deaths)} · Помощи: ${num(snapshot.assists)} · Добивания: ${num(snapshot.last_hits)} · Денаи: ${num(snapshot.denies)}`:'До первого снимка статистики. Выбери более поздний момент.';
   for(const graph of state.graphs) { graph.cursor.setAttribute('x1',String(graph.x(state.time))); graph.cursor.setAttribute('x2',String(graph.x(state.time))); }
   for(const row of $('events').children) row.classList.toggle('selected-event',row.dataset.evidenceId===evidenceId);
   updateMoment();
@@ -521,6 +557,36 @@ function renderHeroHeader(report) {
   const hero=report.player?.hero,label=typeof hero==='string'&&/^npc_dota_hero_([a-z0-9_]{1,80})$/.test(hero)?heroName(hero):'Герой не определён';
   target.append(heroIcon(hero,{label}),node('h3',label,'report-hero-name'));
 }
+function renderCoachingStatus(detail, report) {
+  const target=$('report-ai-status'); target.replaceChildren();
+  const status=state.showArchived?detail.archived_report?.coaching_status:detail.coaching_status;
+  const saved=state.showArchived||detail.report_is_previous||report?.coaching?.origin==='previous_report';
+  const coaching=report?.coaching, usable=coaching?.status==='ready'&&Boolean(typeof coaching.summary==='string'&&coaching.summary.trim()||(Array.isArray(coaching.points)?coaching.points:[]).some(point=>typeof point?.observation==='string'&&point.observation.trim()));
+  const known=['ready','saved','unavailable','context_changed','pending','unknown'].includes(status?.state), provider=status?.provider;
+  let kind=known?status.state:status?'unknown':!report?(['uploading','queued','processing'].includes(detail.replay?.state)?'pending':'unavailable'):coaching?.status==='context_changed'?'context_changed':!usable?'unavailable':saved?'saved':'unknown';
+  // Archive selection describes which version is open, not whether its AI text
+  // succeeded. The server's unavailable/context_changed/unknown verdict wins.
+  if(['ready','saved'].includes(kind)&&!usable||kind==='ready'&&provider==='openai_api'&&status?.verified_openai!==true)kind='unknown';
+  const titles={ready:provider==='openai_api'&&status?.verified_openai===true?'Комментарий OpenAI подтверждён':provider==='chatgpt_subscription'?'Комментарий ChatGPT готов':provider==='gemini'?'Комментарий Gemini готов':'Тренерский комментарий готов',saved:'Показан сохранённый комментарий',unavailable:report?'Статистика готова · без нового комментария ИИ':'Комментарий ИИ не получен',context_changed:'Контекст изменился · комментарий требует обновления',pending:'Комментарий ИИ ещё не получен',unknown:'Источник комментария не подтверждён'};
+  target.dataset.status=kind;target.append(node('strong',titles[kind]??titles.unknown,'report-ai-title'));
+  const explanations={
+    OPENAI_BUDGET_EXCEEDED:'Вызов OpenAI остановлен лимитом расходов.',OPENAI_BUDGET_DISABLED:'Расходы на OpenAI сейчас отключены.',OPENAI_BUDGET_INVALID:'Лимит расходов OpenAI требует проверки.',OPENAI_BUDGET_PRICE_POLICY_EXPIRED:'Срок действующих настроек стоимости OpenAI истёк.',OPENAI_DAILY_LIMIT:'Достигнут дневной лимит вызовов OpenAI.',OPENAI_RATE_LIMITED:'OpenAI временно ограничил частоту запросов.',
+    OPENAI_BUDGET_RECONCILIATION_REQUIRED:'Предыдущий расход OpenAI требует сверки. Новый вызов остановлен.',OPENAI_BUDGET_ACCOUNTING_FAILED:'Не удалось подтвердить учёт расходов OpenAI.',OPENAI_BUDGET_BOUND_INVALID:'Оценка максимальной стоимости запроса требует проверки.',OPENAI_BUDGET_USAGE_INVALID:'Данные о расходе OpenAI не прошли проверку.',
+    REPLAY_COACH_REQUEST_BUDGET_EXCEEDED:'Этот запрос превысил разрешённую стоимость одного разбора.',OPENAI_REQUEST_TOO_LARGE:'Данные разбора превышают размер одного запроса OpenAI.',REPLAY_COACH_INPUT_TOO_LARGE:'Данные разбора превышают допустимый размер запроса.',
+    OPENAI_AUTHENTICATION_FAILED:'OpenAI отклонил ключ подключения.',OPENAI_NOT_CONFIGURED:'Подключение OpenAI не настроено.',REPLAY_COACH_NOT_CONFIGURED:'Подключение тренера не настроено.',
+    OPENAI_TIMEOUT:'Ответ OpenAI не получен за отведённое время.',OPENAI_TRANSPORT_ERROR:'Связь с OpenAI прервалась.',OPENAI_PROVIDER_UNAVAILABLE:'OpenAI временно недоступен.',OPENAI_CALL_ALREADY_ATTEMPTED:'Запрос для этого разбора уже запускался. Автоматически повторно он не отправляется.',
+    REPLAY_COACH_RESPONSE_INVALID:'Ответ ИИ получен, но не прошёл проверку качества.',REPLAY_COACH_EVIDENCE_MISMATCH:'Ответ ИИ не совпал с подтверждёнными событиями реплея.',REPLAY_COACH_NUMERIC_CLAIM:'Числа в ответе ИИ не прошли сверку с реплеем.',OPENAI_RESPONSE_INVALID:'Ответ OpenAI не прошёл проверку.',OPENAI_RESPONSE_INCOMPLETE:'OpenAI вернул неполный ответ.',OPENAI_USAGE_MISSING:'OpenAI не вернул проверяемые данные о токенах.',OPENAI_PROVENANCE_UNVERIFIED:'Нет подтверждённой записи OpenAI для этого комментария.',
+    CHATGPT_NOT_CONNECTED:'ChatGPT не подключён.',CHATGPT_AUTH_EXPIRED:'Авторизация ChatGPT истекла.',CHATGPT_QUOTA:'Достигнут лимит ChatGPT.',REPLAY_COACH_CONTEXT_CHANGED:'Позиция или контекст изменились. Предыдущий комментарий к ним не применяется.'
+  };
+  const defaultCopy=kind==='saved'?'Это ранее сохранённый текст. Его наличие не подтверждает новый ответ OpenAI.':kind==='ready'?'Открытие сохранённого отчёта не отправляет новый запрос в ИИ.':kind==='pending'?'Обработка ещё не завершена.':kind==='unknown'?'Готовая статистика сама по себе не означает, что OpenAI был вызван.':'Факты, графики и события из реплея доступны независимо от комментария ИИ.';
+  target.append(node('p',explanations[status?.reason_code]??defaultCopy,'help'));
+  if(kind==='saved'&&explanations[status?.reason_code]) target.append(node('p',defaultCopy,'help'));
+  const usage=status?.usage, validTokens=usage&&['input_tokens','output_tokens','cached_input_tokens'].every(key=>Number.isSafeInteger(usage[key])&&usage[key]>=0)&&usage.cached_input_tokens<=usage.input_tokens;
+  if(validTokens) target.append(node('p',`Учтено для этого разбора: ${num(usage.input_tokens)} токенов на входе · ${num(usage.output_tokens)} в ответе${usage.cached_input_tokens?` · из входных ${num(usage.cached_input_tokens)} из кэша`:''}.`,'report-ai-usage'));
+  if(Number.isSafeInteger(status?.charged_microusd)&&status.charged_microusd>=0) target.append(node('p',`Учтённая стоимость OpenAI: $${new Intl.NumberFormat('ru-RU',{maximumFractionDigits:6}).format(status.charged_microusd/1_000_000)}. Это расход сохранённого запроса, а не открытия страницы.`,'help'));
+  const accounting={held:'Сумма зарезервирована; итоговый расход ещё не подтверждён.',unknown:'Итоговый расход не подтверждён. Отсутствие счётчика токенов не означает, что запрос был бесплатным.',breach:'Стоимость учтена, но расход требует проверки.'};
+  if(accounting[status?.billing_state]) target.append(node('p',accounting[status.billing_state],'help'));
+}
 function renderDetail() {
   const detail=state.detail; if(!detail) return; const job=detail.replay, report=state.showArchived&&detail.archived_report?.report?detail.archived_report.report:detail.report;
   $('result').hidden=false; $('result-title').textContent=job.match_id?`Матч ${job.match_id}`:job.filename; $('result-state').textContent=labels[job.state]??job.state;
@@ -529,6 +595,7 @@ function renderDetail() {
   $('result-status').textContent=job.state==='failed'?(failures[job.failure_code]??'Не удалось завершить разбор этого реплея. Повтори загрузку полного файла .dem.'):job.state==='queued'?'Реплей загружен. Ожидаем начало разбора.':job.state==='processing'?`Читаем события матча и готовим разбор · ${num(job.progress)}%`:job.state==='uploading'?'Реплей ещё загружается.':report?`Полный матч · ${stamp(report.metrics?.duration_seconds)} · Разбор закреплённого игрока`:'Результат ещё не получен.';
   $('report-body').hidden=!report;
   renderHeroHeader(report);
+  renderCoachingStatus(detail,report);
   const trainingContext=report?.coaching?.context??(!state.showArchived&&!detail.report_is_previous?job.training_context:null);
   const contextParts=[];
   if(trainingContext?.position>=1&&trainingContext.position<=5) contextParts.push(`Позиция ${trainingContext.position}`);
@@ -536,9 +603,9 @@ function renderDetail() {
   const depthLabels={foundations:'Основы',application:'Применение',advanced:'Сложные решения'};
   if(depthLabels[trainingContext?.training_level]) contextParts.push(depthLabels[trainingContext.training_level]);
   $('report-training-context').hidden=!report||!contextParts.length; $('report-training-context').textContent=contextParts.join(' · ');
-  const archive=$('previous-report-toggle'); archive.hidden=!detail.archived_report?.report||detail.report_is_previous===true; archive.textContent=state.showArchived?'Вернуться к текущему разбору':'Предыдущий тренерский разбор'; archive.setAttribute('aria-pressed',String(state.showArchived));
+  const archive=$('previous-report-toggle'); archive.hidden=!detail.archived_report?.report||detail.report_is_previous===true; archive.textContent=state.showArchived?'Вернуться к текущему разбору':detail.archived_report?.report?.coaching?.status==='ready'?'Предыдущий тренерский разбор':'Предыдущая версия разбора'; archive.setAttribute('aria-pressed',String(state.showArchived));
   $('previous-report-note').hidden=!(state.showArchived||detail.report_is_previous||report?.coaching?.origin==='previous_report');
-  $('previous-report-note').textContent=state.showArchived||detail.report_is_previous?'Показан сохранённый предыдущий разбор целиком, с его исходными событиями и таймкодами.':report?.coaching?.origin==='previous_report'?'Сохранён предыдущий тренерский комментарий: обновить его в этом запуске не удалось.':'';
+  $('previous-report-note').textContent=state.showArchived||detail.report_is_previous?'Показан сохранённый предыдущий разбор целиком, с его исходными событиями и таймкодами.':report?.coaching?.origin==='previous_report'?(report.coaching.status==='ready'?'Сохранён предыдущий тренерский комментарий: обновить его в этом запуске не удалось.':'Обновить тренерский комментарий в этом запуске не удалось.'):'';
   if(!report) return;
   state.evidence=new Map((report.evidence??[]).map(event=>[event.id,event]));
   const metrics=$('metrics'); metrics.replaceChildren(); const m=report.metrics??{};

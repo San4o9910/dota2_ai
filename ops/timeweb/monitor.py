@@ -16,6 +16,7 @@ import time
 import urllib.request
 
 from pilot import Cloud, CheckError, NoRedirect, command, event, validate_pinned_server
+from coaching_evidence import collect_rollout_snapshot
 
 SERVER = 9037783
 HOST = "72.56.98.68"
@@ -163,6 +164,7 @@ def private_health(cloud):
                       "docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env "
                       "exec -T api python -m narma_video.operations_health")
             result = parse_snapshot(command(ssh + [remote], timeout=90))
+            collect_rollout_snapshot(ssh, '/opt/narma/current', command, event)
         finally:
             if key_id is not None:
                 try:
