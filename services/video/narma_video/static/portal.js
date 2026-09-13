@@ -1,5 +1,6 @@
 import { roleGuidance } from './role-guidance.js';
 import { createVideoWorkspace } from './video-workspace.js';
+import { createPersonalCoach, renderDecisionPoints } from './personal-coach.js';
 const $ = id => document.getElementById(id);
 const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set(),chatgpt:null,chatgptRequest:0,chatgptController:null,chatgptTimer:null,chatgptClock:null};
 const entry = new URLSearchParams(location.hash.slice(1));
@@ -33,7 +34,16 @@ async function api(path, method='GET', body) {
   return data;
 }
 const videoWorkspace=createVideoWorkspace({api,onPlayer:()=>switchTab('review')});
-const tabPaths={review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account'};
+const personalCoach=createPersonalCoach({api,heroName,heroIcon,onNavigate:tab=>switchTab(tab),onOpenReplay:async(id,evidenceId,expected)=>{
+  const user=state.user;switchTab('review');state.showArchived=false;$('result').hidden=true;
+  try{await openReplay(id,true);}catch(error){if(state.user===user)notice(`Не удалось открыть выбранный матч. ${error.message}`);throw error;}
+  if(state.user!==user||state.selected!==id||!evidenceId)return;
+  const report=state.detail?.report;
+  const position=state.detail?.hero_context?.position??report?.coaching?.context?.position??null;
+  if(!expected?.report_sha256||state.detail.report_sha256!==expected.report_sha256||String(report?.match_id)!==String(expected.match_id)||report?.coverage?.source_sha256!==expected.source_sha256||report?.player?.hero!==expected.hero||position!==(expected.position??null)){notice('Этот разбор обновился. Открыта текущая версия; выбери эпизод заново, чтобы проверить актуальный таймкод.');return;}
+  focusEvidence(evidenceId);
+}});
+const tabPaths={coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account'};
 function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'review';}
 function switchTab(tab,{historyMode='push'}={}) {
   if(!Object.hasOwn(tabPaths,tab)||!$(tab)) return;
@@ -44,6 +54,7 @@ function switchTab(tab,{historyMode='push'}={}) {
   if(tab==='hero-pool'&&state.user&&(!state.pool||state.poolDirty)) void loadPool();
   if(tab==='learning'&&state.user) void loadLearning({preserveView:true});
   videoWorkspace.setVisible(tab==='videos');
+  personalCoach.setVisible(tab==='coach');
   stopChatgptPolling();
   if(tab!=='account') clearSecuritySecrets();
   if(tab==='account'&&state.user) void loadChatgpt();
@@ -66,6 +77,7 @@ function profileView() {
   else summary.append(node('p','Загрузи первый матч и укажи свой ник. Игрок закрепится автоматически после чтения реплея.','muted'));
   buttons();
   videoWorkspace.setSession(state.user,profile);
+  personalCoach.setSession(state.user,profile);
 }
 async function session() {
   const data=await api('/api/session'); state.setup=data.setup_required===true; state.user=data.authenticated?data.user:null;
@@ -80,6 +92,7 @@ async function session() {
     state.pool=null; state.poolRequest++; state.poolDrafts.clear(); state.poolJournalOpen.clear(); state.poolSignature=''; state.poolVisible=20;
     state.profile=null; state.selected=null; state.detail=null; state.showArchived=false; $('result').hidden=true; $('pool-content').hidden=true;
     videoWorkspace.setSession(null,null);
+    personalCoach.setSession(null,null);
     state.learning=null;state.reportLearning=null;state.learningRequest++;state.reportLearningRequest++;state.learningDrafts.clear();state.learningMatches.clear();state.learningStage=null;state.learningExercise=null;state.reportExercise=null;$('report-learning').replaceChildren();$('pool-learning').replaceChildren();
     $('pool-hero').replaceChildren(new Option('Все герои','')); $('pool-position').value=''; $('pool-period').value='all'; $('pool-favorites-only').checked=false; $('pool-refresh').disabled=false;
     if($('learning-hero'))$('learning-hero').replaceChildren(new Option('Все герои',''));if($('learning-position'))$('learning-position').value='';
@@ -259,7 +272,7 @@ async function refresh() {
   if(!state.user) return;
   const data=await api('/api/replays'); $('worker-status').textContent=data.worker_ready?'Обработчик реплеев работает':'Ожидаем обработчик реплеев';
   const signature=data.replays.map(item=>`${item.id}:${item.state}:${item.updated_at??''}`).sort().join('|');
-  if(signature!==state.poolSignature) { state.poolSignature=signature; state.poolDirty=true; if(!$('hero-pool').hidden) void loadPool(); }
+  if(signature!==state.poolSignature) { state.poolSignature=signature; state.poolDirty=true; personalCoach.invalidate(); if(!$('hero-pool').hidden) void loadPool(); }
   const history=$('history'); history.replaceChildren();
   if(!data.replays.length) history.append(node('p','Загрузи реплей — здесь появится твой первый матч.','empty'));
   for(const item of data.replays) {
@@ -515,7 +528,8 @@ function focusEvidence(id) {
   const row=Array.from($('events').children).find(element=>element.dataset.evidenceId===id);
   row?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
 }
-function renderPoints(target, points) {
+function renderPoints(target, points, schemaVersion) {
+  if(schemaVersion==='narma.replay-coaching.v2')return renderDecisionPoints(target,points,{schemaVersion,evidence:state.evidence,onEvidence:focusEvidence});
   target.replaceChildren();
   for(const point of points??[]) {
     const article=node('article',undefined,'report-point'); article.append(node('h4',point.title??'Эпизод'));
@@ -615,7 +629,7 @@ function renderDetail() {
   drawBars('income-chart',insight().gold?.bins??[],'income',duration); drawBars('farm-chart',insight().pace??[],'last_hits',duration); drawCombat(duration); renderSources(); renderItems(); renderHeroContext(); renderTraining(); renderReportLearning();
   renderPoints($('findings'),report.findings); renderEvents();
   const coach=report.coaching; $('coaching-section').hidden=false;
-  if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points); }
+  if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points,coach.schema_version); }
   else {
     const needsConnection=coach?.failure_code==='CHATGPT_NOT_CONNECTED'&&state.coaching?.personal_connect===true;
     $('coaching-summary').textContent=coach?.status==='context_changed'?'Контекст разбора обновлён. Упражнение выше учитывает текущую позицию; прежний тренерский комментарий больше не применяется.':needsConnection?'Статистика матча готова. Подключи ChatGPT в аккаунте, чтобы использовать тренера Narma.':'Тренерский комментарий временно недоступен. Статистика и эпизоды из реплея доступны.';
@@ -630,8 +644,9 @@ function renderDetail() {
   seekTime(state.time);
 }
 async function openReplay(id, scroll=false, canonicalRedirect=false) {
+  const owner=state.user;if(!owner)return;
   if(!canonicalRedirect)state.learningCanonicalTrail.clear();
-  const changed=state.selected!==id; if(changed) state.showArchived=false; state.selected=id; const detail=await api('/api/replays/'+id); if(state.selected!==id) return;
+  const changed=state.selected!==id; if(changed) state.showArchived=false; state.selected=id; const detail=await api('/api/replays/'+id); if(state.selected!==id||state.user!==owner) return;
   if(changed||(!state.detail?.report&&detail.report)) { state.time=detail.report?.metrics?.duration_seconds??0; $('event-filter').value='all'; }
   state.detail=detail; if(changed) {state.reportLearning=null;state.reportExercise=null;} renderDetail(); if(detail.report&&!state.showArchived&&!detail.report_is_previous) void loadReportLearning(); if(scroll) $('result').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
 }
@@ -685,7 +700,7 @@ async function loadPool() {
 }
 async function poolMutation(button,path,method,body,success) {
   const focusId=button.id, focusLabel=button.getAttribute('aria-label'); button.disabled=true;
-  try { await api(path,method,body); await loadPool();
+  try { await api(path,method,body); personalCoach.invalidate(); await loadPool();
     if(body&&Object.hasOwn(body,'position')) {
       state.reportLearning=null;state.reportExercise=null;
       await loadLearning({preserveView:true});
@@ -966,6 +981,7 @@ async function learningMutation(button,path,method,body,scope) {
   button.disabled=true;const status=scope.querySelector('.learning-status')??scope.appendChild(learningStatus(''));status.textContent='Сохраняем…';
   try {
     await api(path,method,body);
+    personalCoach.invalidate();
     if(scope.isConnected)status.textContent='Сохранено в аккаунте.';
     await Promise.all([loadReportLearning(),loadLearning()]);
   }catch(error){if(scope.isConnected)status.textContent=error.message;}

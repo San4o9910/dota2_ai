@@ -13,8 +13,8 @@ function dependency(name) {
 }
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
-const files=Object.fromEntries(['/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
-Object.assign(files,{'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
+const files=Object.fromEntries(['/coach','/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
+Object.assign(files,{'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type',file[1]); response.end(await readFile(path.join(root,file[0])));
@@ -64,6 +64,33 @@ report.insights.gold.recorded_loss=report.insights.gold.bins.reduce((sum,bin)=>s
 report.insights.gold.total_earned_gold=report.insights.gold.recorded_income;
 report.metrics.total_earned_gold=report.insights.gold.recorded_income;
 report.insights.pace=report.insights.gold.bins.map((bin,index)=>({...bin,last_hits:3+index%7,kills:index%11===0?1:0,deaths:index%15===0?1:0,assists:index%9===0?1:0,earned_gold:bin.income,xp:bin.income*1.5}));
+
+function personalCoachFixtures() {
+  const history=[
+    {job_id:'coach-new',match_id:'8984100002',played_at:'2026-09-12T18:00:00Z',outcome:'win'},
+    {job_id:'coach-old',match_id:'8984100001',played_at:'2026-09-10T18:00:00Z',outcome:'loss'},
+  ].map(match=>({...match,hero:'npc_dota_hero_necrolyte',label:'Necrophos',position:2,date_source:'user',chronology_at:match.played_at,report_state:'ready',source_sha256:'a'.repeat(64),report_sha256:(match.job_id==='coach-new'?'b':'c').repeat(64),metrics:{gpm:450,xpm:500,deaths_per_30:5}}));
+  const structuredPoint={kind:'review',title:'Возвращение после смерти',observation:malicious,decision_question:'Что проверить перед возвращением на линию?',reasoning:'Смерть записана, но причина требует проверки окружения.',alternative:'Проверь доступные пути возвращения и состояние линии.',when_to_apply:'Перед возвращением после смерти.',when_not_to_apply:'Если команда уже требует срочной защиты базы.',evidence_ids:['coach-new-death']};
+  const exercise={id:'coach-risk',stage_id:'risk',title:'Проверка перед возвращением',roles:[2],decision_question:'Что было известно до решения?',signal:'Перед возвращением на линию.',action:'Проверь доступный путь и цель.',why:'Это позволяет заранее оценить риск.',exception:'Срочная защита может изменить план.',drill:'Сравни три возвращения.',measurement:'Запиши информацию, доступную до выбора.',focus_window_matches:3,review_mode:'episode_review',evidence_types:['death'],source_refs:[]};
+  const plan={id:'coach-practice',exercise_id:exercise.id,exercise,hero:history[0].hero,hero_label:'Necrophos',position:2,status:'active',validity:'current',can_check:true,source_job_id:'coach-old',source_match_id:'8984100001',created_at:'2026-09-11T18:00:00Z',training_matches:1,reviewed_matches:1,self_report_counts:{applied:0,partial:1,not_applied:0,no_opportunity:0,uncertain:0},checks:[]};
+  const catalog={schema_version:'narma.curriculum.v1',version:'narma.curriculum.v1',role_context:roleProfiles[2],position:2,position_required:false,stages:[{id:'risk',title:'Риск и возвращение в игру',order:3,description:'Проверь решение до возвращения.',exercise_ids:[exercise.id]}],exercises:[exercise],sources:[]};
+  function detail(id,{unavailable=false}={}) {
+    const match=history.find(item=>item.job_id===id);assert.ok(match);
+    const event={id:`${id}-death`,type:'death',time:id==='coach-new'?720:600,title:'Возвращение и смерть',details:'Синтетический факт для проверки перехода.'};
+    const coaching=id==='coach-new'?{status:'ready',schema_version:'narma.replay-coaching.v2',summary:'Начни с решения о возвращении на линию.',points:[structuredPoint],next_game:[{title:'Одна проверка до возвращения',action:'До выхода назови цель и безопасный путь.',measure:'После игры проверь три таких решения.',evidence_ids:[event.id]}]}:{status:'ready',summary:'Сохранённый комментарий старого формата.',points:[{title:'Старое наблюдение',observation:'В реплее есть смерть на десятой минуте.',advice:'Проверь положение перед возвращением.',evidence_ids:[event.id]}],next_game:[]};
+    coaching.context={position:match.position};
+    if(unavailable){coaching.status='unavailable';coaching.failure_code='OPENAI_BUDGET_EXCEEDED';}
+    return {replay:{id,state:'ready',progress:100,match_id:match.match_id,nickname:profile.nickname,created_at:match.played_at,source_retained:true},report:{...structuredClone(report),match_id:match.match_id,player:{...report.player,match_id:match.match_id},evidence:[event],coaching,coverage:{...report.coverage,source_sha256:match.source_sha256}},report_sha256:match.report_sha256,hero_context:null,parts:[],archived_report:null,coaching_status:unavailable?{state:'unavailable',provider:'openai_api',verified_openai:false,reason_code:'OPENAI_BUDGET_EXCEEDED',usage:null,billing_state:'none',charged_microusd:null}:{state:'ready',provider:'openai_api',verified_openai:true,reason_code:null,usage:{input_tokens:1000,output_tokens:200,cached_input_tokens:0},billing_state:'settled',charged_microusd:2000}};
+  }
+  function pool(empty) {
+    return {profile:empty?null:profile,role_context:roleProfiles[2],summary:{matches:empty?0:2,wins:empty?0:1,losses:empty?0:1,known_outcomes:empty?0:2,unknown_outcomes:0,winrate_pct:empty?null:50,unknown_positions:0,analysis_dated_matches:0},heroes:empty?[]:[{hero:history[0].hero,label:'Necrophos',position:2,matches:2,wins:1,losses:1,known_outcomes:2,unknown_outcomes:0,winrate_pct:50,favorite:false}],available_heroes:empty?[]:[{hero:history[0].hero,label:'Necrophos'}],history:empty?[]:history,trends:[],patterns:[],coaching:null,goals:[],limitations:['Синтетические данные для проверки интерфейса.']};
+  }
+  function learning(empty,id=null) {
+    const match=history.find(item=>item.job_id===id);
+    return {schema_version:'narma.learning.v1',catalog,profile:empty?null:profile,scope:{hero:null,position:null},plans:empty?[]:[plan],history:empty?[]:history,...(match?{job_id:id,requested_job_id:id,match_id:match.match_id,hero:match.hero,hero_label:match.label,position:2,position_required:false,suggestions:[],review_candidates:[{evidence_id:`${id}-death`,type:'death',time:id==='coach-new'?720:600,title:'Возвращение и смерть'}]}:{})};
+  }
+  return {history,structuredPoint,exercise,plan,detail,pool,learning};
+}
 try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
@@ -753,5 +780,127 @@ try {
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);await page.close();
   }
 
-  console.log('Visual report income sources, item timings/delivery/realization, personal goals/reset and next-game plan; Portal .dem upload→report with role/MMR/training depth, frozen context and idempotent retry; selected-player binding, shared timeline, safe coaching links, account navigation, reduced motion, mobile layout and WCAG passed (mocked API; no paid calls).');
+  // Personal coaching is a read-only projection of the owner's saved reports.
+  // This independent fixture keeps provider/account/upload mutation scenarios above unchanged.
+  for(const width of [390,1440]) {
+    const page=await browser.newPage({viewport:{width,height:1000}}),fixture=personalCoachFixtures(),errors=[],commands=[],externalRequests=[];
+    let authenticated=true,empty=true,unavailable=false,reportChanged=false,delayedReport=null,releaseReport=null,observeReport=null;
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.route('**/*',async route=>{
+      const url=route.request().url();
+      if(url===heroImageUrl||url===itemImageUrl||url===blinkImageUrl)await route.fulfill({contentType:'image/png',body:itemImage});
+      else if(new URL(url).origin!==origin){externalRequests.push(url);await route.abort();}
+      else await route.fallback();
+    });
+    await page.route('**/api/**',async route=>{
+      const request=route.request(),endpoint=new URL(request.url()).pathname,method=request.method();commands.push({method,endpoint});
+      let body;
+      if(endpoint==='/api/session')body={authenticated,setup_required:false,user:authenticated?{email:'coach-owner@example.test',is_platform_owner:true}:null,coaching:{mode:'platform',available:true,personal_connect:false}};
+      else if(endpoint==='/api/auth/logout'){assert.equal(method,'POST');authenticated=false;body={authenticated:false};}
+      else {
+        assert.equal(method,'GET','Opening or switching saved coach reports must never create provider, upload or practice mutations.');
+        if(endpoint==='/api/profile')body={profile:empty?null:profile};
+        else if(endpoint==='/api/replays')body={replays:empty?[]:fixture.history.map(match=>fixture.detail(match.job_id).replay),worker_ready:true,max_bytes:512*1024**2};
+        else if(endpoint==='/api/hero-pool')body=fixture.pool(empty);
+        else if(endpoint==='/api/learning')body=fixture.learning(empty);
+        else if(endpoint.startsWith('/api/learning/reports/'))body=fixture.learning(empty,endpoint.split('/').at(-1));
+        else if(endpoint.startsWith('/api/replays/')){
+          const id=endpoint.split('/').at(-1);body=fixture.detail(id,{unavailable});
+          if(reportChanged&&id==='coach-new'){body.report_sha256='d'.repeat(64);body.report.evidence[0].time=1260;}
+          if(id===delayedReport){await new Promise(resolve=>{releaseReport=resolve;observeReport();});delayedReport=null;}
+        }
+        else throw Error(`Unexpected personal coach request ${method} ${endpoint}`);
+      }
+      await route.fulfill({json:body});
+    });
+    await page.goto(origin+'/coach');
+    await page.locator('#coach-empty').waitFor();
+    assert.equal(await page.locator('nav [data-tab]').first().getAttribute('data-tab'),'coach','The personal coach is the first customer tab.');
+    assert.equal(await page.locator('nav [data-tab=coach]').getAttribute('aria-current'),'page');
+    assert.match(await page.locator('#coach-empty').textContent(),/Загрузи полный \.dem/);
+    assert.equal(await page.locator('#coach-decisions,#coach-match-select').count(),0,'An empty account never receives invented match findings.');
+    assert.equal(commands.some(command=>/^\/api\/replays\//.test(command.endpoint)),false);
+    await page.locator('#coach-empty').getByRole('button',{name:'Загрузить первый реплей',exact:true}).click();
+    assert.equal(new URL(page.url()).pathname,'/replays');
+    await page.locator('nav [data-tab=coach]').click();
+    empty=false;
+    await page.locator('#coach-refresh').click();
+    await page.locator('#coach-decisions .decision-details').waitFor();
+    assert.equal(await page.locator('#coach-match-select').inputValue(),'coach-new');
+    assert.equal(await page.locator('#coach-matches .coach-match-row').count(),2);
+    assert.match(await page.locator('#coach-match-detail').textContent(),/Матч 8984100002/);
+    assert.match(await page.locator('#coach-next-game').textContent(),/До выхода назови цель и безопасный путь/);
+    assert.match(await page.locator('#coach-next-game').textContent(),/После игры проверь три таких решения/);
+    assert.match(await page.locator('#coach-practice').textContent(),/Проверка перед возвращением/);
+    assert.match(await page.locator('#coach-practice').textContent(),/Подходящих матчей с твоей проверкой: 1/);
+    assert.match(await page.locator('#coach-practice').textContent(),/самооценка/);
+    const decision=page.locator('#coach-decisions .decision-details');
+    await decision.locator('summary').focus();await decision.locator('summary').press('Enter');
+    assert.equal(await decision.getAttribute('open'),'','Structured decisions expand using the keyboard.');
+    for(const label of ['Факты эпизода','Почему это имеет значение','Другой вариант действия','Когда применять','Когда выбрать другое'])assert.equal(await decision.getByText(label,{exact:true}).isVisible(),true);
+    for(const key of ['observation','decision_question','reasoning','alternative','when_to_apply','when_not_to_apply'])assert.equal(await decision.getByText(fixture.structuredPoint[key],{exact:true}).isVisible(),true);
+    assert.equal(await page.locator('#coach-decisions img, #coach-decisions script, #coach-decisions iframe').count(),0,'Model prose remains literal text.');
+    const axe=dependency('axe-core');await page.addScriptTag({content:axe.source});
+    const coachAccessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+    assert.deepEqual(coachAccessibility.violations.map(violation=>({id:violation.id,nodes:violation.nodes.map(item=>item.target)})),[]);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'The personal coach fits both mobile and desktop widths.');
+    if(screenshotDir)await page.screenshot({path:path.join(screenshotDir,`portal-${width}-personal-coach.png`),fullPage:true});
+    reportChanged=true;
+    await decision.getByRole('button',{name:'12:00 · Смерть',exact:true}).click();
+    await page.getByRole('heading',{name:'Матч 8984100002',exact:true}).waitFor();
+    await page.locator('#notice').getByText(/Этот разбор обновился/).waitFor();
+    assert.equal(await page.locator('#events .selected-event').count(),0,'A reprocessed report cannot reuse an old evidence ID as proof of the same episode.');
+    assert.notEqual(await page.locator('#timeline-value').textContent(),'12:00','Changing the report hash prevents seeking to its old timestamp.');
+    assert.match(await page.locator('#events [data-evidence-id=coach-new-death]').textContent(),/21:00/);
+    reportChanged=false;
+    await page.locator('nav [data-tab=coach]').click();
+    await page.locator('#coach-decisions .decision-details').waitFor();
+    await decision.locator('summary').click();
+    await decision.getByRole('button',{name:'12:00 · Смерть',exact:true}).click();
+    await page.getByRole('heading',{name:'Матч 8984100002',exact:true}).waitFor();
+    await page.waitForFunction(()=>document.querySelector('#timeline-value').textContent==='12:00');
+    assert.equal(new URL(page.url()).pathname,'/replays');
+    assert.equal(await page.locator('#events [data-evidence-id=coach-new-death].selected-event').count(),1,'An episode opens and seeks its own saved report.');
+    assert.equal(await page.locator('#coaching .decision-details').count(),1,'The full report renders the same versioned decision contract.');
+    await page.locator('#coaching .decision-details > summary').click();
+    assert.equal(await page.locator('#coaching').getByText(fixture.structuredPoint.alternative,{exact:true}).isVisible(),true);
+    await page.locator('nav [data-tab=coach]').click();
+    await page.locator('#coach-decisions .decision-details').waitFor();
+    await page.locator('#coach-match-select').selectOption('coach-old');
+    await page.locator('#coach-decisions').getByRole('heading',{name:'Старое наблюдение',exact:true}).waitFor();
+    assert.match(await page.locator('#coach-match-detail').textContent(),/Сохранённый разбор в прежнем формате/);
+    assert.match(await page.locator('#coach-decisions').textContent(),/Проверь положение перед возвращением/);
+    assert.equal(await page.locator('#coach-decisions .decision-field').count(),0,'Legacy advice is not expanded into invented structured fields.');
+    assert.equal(await page.locator('#coach-next-game').count(),0,'Selecting an older report clears the other match\'s next-game focus.');
+    await page.locator('#coach-practice').getByRole('button',{name:'Продолжить практику',exact:true}).click();
+    assert.equal(new URL(page.url()).pathname,'/my-learning');
+    await page.locator('#learning .learning-stages').waitFor();
+    await page.locator('nav [data-tab=coach]').click();
+    await page.locator('#coach-decisions').getByRole('heading',{name:'Старое наблюдение',exact:true}).waitFor();
+    unavailable=true;
+    await page.locator('#coach-match-select').selectOption('coach-new');
+    await page.locator('#coach-match-detail .coach-unavailable').waitFor();
+    assert.match(await page.locator('#coach-match-detail').textContent(),/нет готового комментария ИИ/);
+    assert.equal(await page.locator('#coach-decisions,#coach-next-game,.coach-summary').count(),0,'An unavailable verdict hides stale model text and goals contained in a saved response.');
+    assert.doesNotMatch(await page.locator('#coach-match-detail').textContent(),/Начни с решения о возвращении/);
+    assert.match(await page.locator('#coach-practice').textContent(),/Проверка перед возвращением/,'A separately saved practice stays available without a new AI comment.');
+    assert.ok(commands.every(command=>command.method==='GET'),'Viewing the coach, old reports, episodes and saved practice creates no mutations.');
+    // A response that was authorized before logout must not restore private findings afterwards.
+    unavailable=false;delayedReport='coach-old';
+    const reportStarted=new Promise(resolve=>{observeReport=resolve;});
+    await page.locator('#coach-match-select').selectOption('coach-old');await reportStarted;
+    await page.locator('#logout').click();await page.locator('#auth').waitFor();
+    const reportFinished=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/replays/coach-old');
+    releaseReport();await (await reportFinished).finished();
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await page.locator('#coach-content').innerText(),'');
+    assert.equal(await page.locator('#coach-content').isHidden(),true);
+    assert.equal(await page.locator('#coach-player').textContent(),'Личный разбор','Logout also clears the selected player name.');
+    assert.equal(await page.locator('#coach-decisions,#coach-match-detail').count(),0,'Late selected-report responses cannot repopulate a logged-out session.');
+    assert.deepEqual(commands.filter(command=>command.method!=='GET'),[{method:'POST',endpoint:'/api/auth/logout'}]);
+    assert.deepEqual(externalRequests,[],'The personal coach fixture never contacts a provider or other external service.');
+    assert.deepEqual(errors,[]);await page.close();
+  }
+
+  console.log('Personal coach empty/history/structured and legacy reports, episode navigation, saved practice and logout race; visual report income sources, item timings/delivery/realization, personal goals/reset and next-game plan; Portal .dem upload→report with role/MMR/training depth, frozen context and idempotent retry; selected-player binding, shared timeline, safe coaching links, account navigation, reduced motion, mobile layout and WCAG passed (mocked API; no paid calls).');
 } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }

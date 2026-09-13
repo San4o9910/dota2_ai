@@ -55,8 +55,10 @@ def replay_directory(job_id) -> Path:
     return media_root() / "replays" / str(UUID(str(job_id)))
 
 
-def owned(connection, owner_id, job_id, lock=False):
-    row = connection.execute("""SELECT * FROM replay_jobs
+def owned(connection, owner_id, job_id, lock=False, *, report_digest=False):
+    fields = ("*, encode(sha256(convert_to(result_payload::text,'UTF8')), 'hex') AS report_sha256"
+              if report_digest else "*")
+    row = connection.execute(f"""SELECT {fields} FROM replay_jobs
         WHERE id=%s AND owner_id=%s AND state<>'deleted'""" + (" FOR UPDATE" if lock else ""),
         (job_id, owner_id)).fetchone()
     if row is None:
@@ -138,7 +140,7 @@ def create_replay(body: CreateReplay, owner_id):
 
 def get_replay(job_id, owner_id):
     with database() as connection:
-        row = owned(connection, owner_id, job_id)
+        row = owned(connection, owner_id, job_id, report_digest=True)
         parts = connection.execute("SELECT part_number FROM replay_parts WHERE job_id=%s ORDER BY part_number", (job_id,)).fetchall()
         archive = previous_report(connection, row)
         current = row["state"] == "ready"
@@ -155,6 +157,10 @@ def get_replay(job_id, owner_id):
                        "coaching_status": replay_coaching_status.project(row, archived_report, call, archived=True)}
     return {"replay": public(row), "parts": [part["part_number"] for part in parts],
             "report": report, "hero_context": context,
+            # Hash the raw stored JSON in the same SELECT as the report. This
+            # matches hero_pool and lets links reject an event from an older
+            # report after a concurrent reparse. Role projection stays separate.
+            "report_sha256": row["report_sha256"] if current else None,
             "report_is_previous": bool(not current and archive), "archived_report": archive,
             "coaching_status": coaching_status}
 

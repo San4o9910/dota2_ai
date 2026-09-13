@@ -39,3 +39,37 @@ fallback from an AI response? Confirm repeated-game coaching and improvements
 with real history before claiming a personal long-term coach or parity with the
 reference. Do not invent grades, causes of death, matchup benchmarks or progress
 scores to make the interface resemble a competitor.
+
+## Personal coach correction
+
+The owner explicitly rejected treating the reference as a request to redraw a
+chart. The primary product is a personal coach: identify a decision worth
+reviewing, understand an alternative, practise it, then return to comparable
+matches. The dedicated `/coach` workspace brings these actions together.
+
+| Player question | Product behaviour | Evidence boundary |
+| --- | --- | --- |
+| Where should I start? | Choose a saved match and read its coaching focus and next-game task. | A parsed report without usable coaching is labelled as such. |
+| What could I do differently? | New OpenAI responses contain a decision question, reasoning, conditional alternative and exception. | Every point cites current replay events; an outcome alone is not a mistake. |
+| What should I keep doing? | Supported strength points can appear in a separate group. | The model is not required to invent praise or a strength for every match. |
+| What repeats across my games? | Saved AI observations from the existing verified review and deterministic history observations are distinguished. | Show the supporting matches, hero, role and sample size. No invented personality, rating or progress score. |
+| What do I practise next? | Show the active practice and open its existing journal. | Practice completion remains an explicit player review; match outcome does not imply mastery. |
+| Can I check this claim? | Open the referenced saved report and its exact event. | Event identifiers are resolved within that report, including for archived reports. |
+
+Opening this workspace reads existing account-scoped data. It does not generate
+a new model answer. Existing reports keep their original text; new layout must
+not fabricate missing decision fields in legacy commentary. The expanded format
+is for new OpenAI responses, with compatible reading of earlier settled calls.
+
+The reference's AI page was checked again directly in the browser. It still
+requires Steam login and advertises mistakes, style, growth planning, matchups,
+itemisation and timings. Public event cards, categories, role selection and a
+link to a development tree were visible. The development tree and the full
+personal coach were not inspected, so parity with those features is not claimed.
+
+Remaining product work includes independently reviewing real coaching quality,
+adding trustworthy matchup/item timing references where data permits, and
+evaluating whether previous comparable match facts should enter the single-match
+OpenAI prompt. Displaying existing history together is not proof that this prompt
+has long-term memory. These gaps must not disappear from acceptance reporting
+merely because the deployment is green.

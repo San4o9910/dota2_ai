@@ -32,6 +32,22 @@ RESULT = {
         'evidence_ids': ['buyback.1'],
     }],
 }
+RESULT_V2 = {
+    'schema_version': coach.COACHING_SCHEMA_V2,
+    'summary': 'Перед возвращением в бой выбери достижимую цель.',
+    'points': [{
+        'kind': 'review',
+        'title': 'Задача выкупа',
+        'observation': 'После смерти последовал выкуп.',
+        'decision_question': 'Какую задачу можно было выполнить после возвращения?',
+        'reasoning': 'Возвращение полезно, когда доступная задача оправдывает расход ресурса.',
+        'alternative': 'Если срочной задачи нет, сравни выкуп с ожиданием возрождения.',
+        'when_to_apply': 'Проверь, есть ли достижимая цель и поддержка для возвращения.',
+        'when_not_to_apply': 'При необходимой защите ожидание может стоить важной цели.',
+        'evidence_ids': ['death.1', 'buyback.1'],
+    }],
+    'next_game': deepcopy(RESULT['next_game']),
+}
 
 
 def test_evidence_contract_rejects_missing_ambiguous_or_oversized_data():
@@ -63,6 +79,53 @@ def test_model_cannot_invent_evidence_or_numeric_stats(change, code):
 def test_numeric_match_summary_is_also_rejected():
     with pytest.raises(ValueError, match='NUMERIC_CLAIM'):
         coach.validate_coaching({**RESULT, 'summary': 'Потеряно ２０ минут.'}, {'death.1', 'buyback.1'})
+
+
+def test_structured_decisions_keep_facts_separate_from_conditional_practice():
+    original = deepcopy(RESULT_V2)
+    result = coach.validate_coaching(RESULT_V2, {'death.1', 'buyback.1'},
+                                     expected_schema=coach.COACHING_SCHEMA_V2)
+    assert isinstance(result, coach.ReplayCoachingV2)
+    assert result.model_dump() == original == RESULT_V2
+    assert all(point.kind == 'review' for point in result.points)
+    # Legacy output remains an exact reader contract, without invented fields.
+    assert coach.validate_coaching(RESULT, {'death.1', 'buyback.1'}).model_dump() == RESULT
+    with pytest.raises(ValueError, match='RESPONSE_INVALID'):
+        coach.validate_coaching(RESULT, {'death.1', 'buyback.1'},
+                                expected_schema=coach.COACHING_SCHEMA_V2)
+
+
+@pytest.mark.parametrize('field', ['observation', 'decision_question', 'reasoning',
+                                   'alternative', 'when_to_apply', 'when_not_to_apply'])
+@pytest.mark.parametrize('bad,code', [
+    ('', 'RESPONSE_INVALID'), ('   ', 'RESPONSE_INVALID'),
+    ('Ты потерял ２００ золота.', 'NUMERIC_CLAIM'),
+    ('Открой https://example.invalid', 'RESPONSE_INVALID'),
+])
+def test_every_new_decision_field_has_the_existing_claim_boundaries(field, bad, code):
+    value = deepcopy(RESULT_V2)
+    value['points'][0][field] = bad
+    with pytest.raises(ValueError, match=code):
+        coach.validate_coaching(value, {'death.1', 'buyback.1'})
+
+
+@pytest.mark.parametrize('change', ['missing_condition', 'unknown_evidence', 'duplicate_evidence',
+                                   'no_evidence', 'unrecognised_kind', 'invented_score',
+                                   'future_version', 'missing_version', 'extra_task'])
+def test_v2_cannot_drop_decision_conditions_or_invent_contract_fields(change):
+    value = deepcopy(RESULT_V2)
+    point = value['points'][0]
+    if change == 'missing_condition': point.pop('when_not_to_apply')
+    elif change == 'unknown_evidence': point['evidence_ids'] = ['another-match-event']
+    elif change == 'duplicate_evidence': point['evidence_ids'] = ['death.1', 'death.1']
+    elif change == 'no_evidence': point['evidence_ids'] = []
+    elif change == 'unrecognised_kind': point['kind'] = 'confirmed_mistake'
+    elif change == 'invented_score': point['score'] = 98
+    elif change == 'future_version': value['schema_version'] = 'narma.replay-coaching.v999'
+    elif change == 'missing_version': value.pop('schema_version')
+    elif change == 'extra_task': value['next_game'] *= 2
+    with pytest.raises(ValueError, match='REPLAY_COACH_(RESPONSE_INVALID|EVIDENCE_MISMATCH)'):
+        coach.validate_coaching(value, {'death.1', 'buyback.1'})
 
 
 @pytest.mark.parametrize('change,code', [
@@ -304,6 +367,35 @@ def test_optional_failure_carries_forward_all_valid_evidence_without_retry(monke
     assert report['coaching']['next_game'][0]['evidence_ids'] == ['new-buyback.1']
     assert previous == prior_report() and facts == refreshed_facts()
     assert 'previous_coaching_carried_forward": true' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('value', [RESULT, RESULT_V2])
+def test_carry_forward_retains_original_call_identity_and_all_decision_fields(value):
+    previous, current = prior_report(), refreshed_facts()
+    previous['coaching'] = {'status': 'ready', 'model': coach.openai_provider.MODEL,
+                            'provider': 'openai', 'usage_kind': 'openai_api',
+                            'call_id': 'a8516744-1857-4527-9639-0619fa5e7fab', **deepcopy(value)}
+    snapshot = deepcopy(previous)
+    current['coaching'] = {'status': 'unavailable', 'failure_code': 'OPENAI_CALL_ALREADY_ATTEMPTED'}
+    assert coach.carry_forward_coaching(previous, current, 12)
+    saved = current['coaching']
+    expected = deepcopy(value)
+    for point in [*expected['points'], *expected['next_game']]:
+        point['evidence_ids'] = ['new-' + reference for reference in point['evidence_ids']]
+    assert {key: saved[key] for key in expected} == expected
+    assert saved['call_id'] == snapshot['coaching']['call_id']
+    assert saved['usage_kind'] == 'openai_api' and saved['provider'] == 'openai'
+    assert saved['origin'] == 'previous_report' and saved['source_report_id'] == 12
+    assert previous == snapshot
+
+
+def test_changed_v2_evidence_stays_archived_without_partial_decision_reuse():
+    previous, current = prior_report(), refreshed_facts()
+    previous['coaching'] = {'status': 'ready', **deepcopy(RESULT_V2)}
+    current['evidence'][1]['details']['spent'] += 1
+    current['coaching'] = {'status': 'unavailable'}
+    assert not coach.carry_forward_coaching(previous, current)
+    assert current['coaching'] == {'status': 'unavailable'}
 
 
 @pytest.mark.parametrize('change', ['account', 'match', 'source', 'incomplete', 'missing_source',

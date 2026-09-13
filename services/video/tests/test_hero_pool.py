@@ -90,6 +90,28 @@ def test_known_outcome_denominator_and_unknown_data():
     assert "item_delay_seconds" not in rows[0]["metrics"]
 
 
+def test_report_link_digest_matches_history_and_detects_reparsed_event(browser):
+    from fastapi import HTTPException
+    from narma_video import replay_jobs
+
+    payload = report()
+    job = seed(payload)
+    before = pool.get_pool(OWNER, include_coaching=False)["history"][0]
+    detail = replay_jobs.get_replay(job, OWNER)
+    assert detail["report_sha256"] == before["report_sha256"]
+    assert len(detail["report_sha256"]) == 64
+    # A parser update can keep an event ID while correcting its timestamp.
+    payload["evidence"][0]["time"] = 205
+    with database() as connection:
+        connection.execute("UPDATE replay_jobs SET result_payload=%s WHERE id=%s", (Jsonb(payload), job))
+    after = replay_jobs.get_replay(job, OWNER)
+    assert after["report_sha256"] != detail["report_sha256"]
+    assert after["report_sha256"] == pool.get_pool(OWNER, include_coaching=False)["history"][0]["report_sha256"]
+    with pytest.raises(HTTPException) as forbidden:
+        replay_jobs.get_replay(job, "another-owner")
+    assert forbidden.value.status_code == 404
+
+
 def test_no_role_inference_and_source_identity_validation():
     row = facts(position=None)
     assert row["position"] is None and row["date_source"] == "analysis" and row["played_at"] is None
