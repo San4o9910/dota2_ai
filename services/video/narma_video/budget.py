@@ -1,5 +1,6 @@
 """Global, durable Gemini allowance. Micro-USD arithmetic; no automatic resets."""
 import json
+import os
 from psycopg.types.json import Jsonb
 from .db import database
 
@@ -42,7 +43,9 @@ def reserve_hermes(connection, task, model):
     return call_id
 
 
-def _reserve(connection, job, frames, model, *, kind):
+def _reserve(connection, job, frames, model, *, kind, reservation=RESERVATION):
+    if type(reservation) is not int or not 0 < reservation <= RESERVATION:
+        raise ValueError('VIDEO_GLOBAL_BUDGET_INVALID')
     # Serialize the shared per-owner cap for every caller, including replay jobs.
     connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))',(job['owner_id'],))
     daily=connection.execute("SELECT count(*) AS calls FROM video_provider_calls WHERE owner_id=%s AND created_at>now()-interval '1 day'",(job['owner_id'],)).fetchone()
@@ -55,29 +58,76 @@ def _reserve(connection, job, frames, model, *, kind):
         raise ValueError('VIDEO_BUDGET_PRICE_POLICY_EXPIRED')
     if not 0 < row['limit_microusd'] <= MAX_ALLOWANCE:
         raise ValueError('VIDEO_GLOBAL_BUDGET_INVALID')
-    if row['spent_microusd'] + row['reserved_microusd'] + RESERVATION > row['limit_microusd']:
+    if row['spent_microusd'] + row['reserved_microusd'] + reservation > row['limit_microusd']:
         raise ValueError('VIDEO_GLOBAL_BUDGET_EXCEEDED')
     if kind == 'hermes':
         call = connection.execute("""INSERT INTO video_provider_calls
             (hermes_task_id,call_kind,owner_id,first_frame,last_frame,budget_id,model,price_policy,reserved_microusd,billing_status)
             VALUES (%s,'hermes',%s,0,0,1,%s,%s,%s,'reserved') RETURNING id""",
-            (job['id'],job['owner_id'],MODEL,POLICY,RESERVATION)).fetchone()
+            (job['id'],job['owner_id'],MODEL,POLICY,reservation)).fetchone()
     elif kind == 'replay':
         # Static SQL branch: callers cannot supply a table or column name.
         call = connection.execute("""INSERT INTO video_provider_calls
             (replay_job_id,call_kind,owner_id,first_frame,last_frame,budget_id,model,price_policy,reserved_microusd,billing_status)
             VALUES (%s,'replay',%s,0,0,1,%s,%s,%s,'reserved') RETURNING id""",
-            (job['id'],job['owner_id'],MODEL,POLICY,RESERVATION)).fetchone()
+            (job['id'],job['owner_id'],MODEL,POLICY,reservation)).fetchone()
     else:
         call = connection.execute("""INSERT INTO video_provider_calls
             (job_id,owner_id,first_frame,last_frame,budget_id,model,price_policy,reserved_microusd,billing_status)
             VALUES (%s,%s,%s,%s,1,%s,%s,%s,'reserved') RETURNING id""",
-            (job['id'],job['owner_id'],frames[0]['frame_id'],frames[-1]['frame_id'],MODEL,POLICY,RESERVATION)).fetchone()
-    connection.execute("UPDATE video_ai_budget SET reserved_microusd=reserved_microusd+%s,updated_at=now() WHERE id=1",(RESERVATION,))
+            (job['id'],job['owner_id'],frames[0]['frame_id'],frames[-1]['frame_id'],MODEL,POLICY,reservation)).fetchone()
+    connection.execute("UPDATE video_ai_budget SET reserved_microusd=reserved_microusd+%s,updated_at=now() WHERE id=1",(reservation,))
     return call['id']
 
 
-def normalize_usage(usage):
+def reserve_video_step(connection, job, model, input_bound):
+    """Bound native-video calls without changing the legacy Gemini allowance."""
+    if type(input_bound) is not int or not 1 <= input_bound <= 1_048_576:
+        raise ValueError('VIDEO_REQUEST_BUDGET_EXCEEDED')
+    connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))', (job['owner_id'],))
+    active = connection.execute("""SELECT id FROM video_jobs WHERE id=%s AND owner_id=%s
+        AND analysis_mode='selective_v1' AND state='processing' AND lease_token=%s
+        AND source_sha256=%s AND storage_deleted_at IS NULL
+        AND lease_expires_at>clock_timestamp() FOR UPDATE""",
+        (job['id'], job['owner_id'], job['lease_token'], job['source_sha256'])).fetchone()
+    if not active:
+        raise ValueError('VIDEO_LEASE_LOST')
+    try:
+        job_limit = int(os.environ.get('VIDEO_REQUEST_BUDGET', '250'))
+        daily_limit = int(os.environ.get('VIDEO_OWNER_DAILY_REQUEST_BUDGET', '1000'))
+    except (TypeError, ValueError):
+        raise ValueError('VIDEO_REQUEST_BUDGET_EXCEEDED') from None
+    if job_limit < 1 or daily_limit < 1:
+        raise ValueError('VIDEO_REQUEST_BUDGET_EXCEEDED')
+    daily = connection.execute("""SELECT count(*) AS n FROM video_provider_calls
+        WHERE owner_id=%s AND created_at>clock_timestamp()-interval '1 day'""",
+        (job['owner_id'],)).fetchone()
+    if daily['n'] >= daily_limit:
+        raise ValueError('VIDEO_REQUEST_BUDGET_EXCEEDED')
+    reservation = (3*input_bound + 15*(4096+65536) + 3)//4
+    calls = connection.execute("""SELECT count(*) AS n,
+        coalesce(sum(coalesce(charged_microusd,reserved_microusd)),0) AS spent
+        FROM video_provider_calls WHERE job_id=%s""", (job['id'],)).fetchone()
+    if calls['n'] >= min(11, job_limit) or calls['spent'] + reservation > 2_000_000:
+        raise ValueError('VIDEO_REQUEST_BUDGET_EXCEEDED')
+    # These ledger frame columns are unused for native video. Its time coverage
+    # is recorded separately in video_analysis_steps, never as reviewed frames.
+    call_id = _reserve(connection, job, [{'frame_id': 0}], model, kind='video', reservation=reservation)
+    connection.execute("""UPDATE video_provider_calls SET input_token_bound=%s,
+        output_token_bound=4096,thought_token_bound=65536 WHERE id=%s""", (input_bound, call_id))
+    # Budget/source row-lock waits may have consumed the lease. This fresh
+    # statement runs after those locks and rolls back the uncommitted hold.
+    valid = connection.execute("""SELECT lease_expires_at>clock_timestamp() AS live
+        FROM video_jobs WHERE id=%s AND owner_id=%s AND state='processing'
+        AND analysis_mode='selective_v1' AND lease_token=%s AND source_sha256=%s
+        AND storage_deleted_at IS NULL""",
+        (job['id'], job['owner_id'], job['lease_token'], job['source_sha256'])).fetchone()
+    if not valid or not valid['live']:
+        raise ValueError('VIDEO_LEASE_LOST')
+    return call_id
+
+
+def normalize_usage(usage, *, allow_video=False):
     if usage is None:
         return None, None
     fields = ('total_input_tokens','total_output_tokens','total_thought_tokens','total_tokens',
@@ -98,7 +148,7 @@ def normalize_usage(usage):
             if name in ('grounding_tool_count','tool_use_tokens_by_modality'):
                 if item[count_key]:
                     raise ValueError('VIDEO_BUDGET_USAGE_INVALID')
-            elif item.get('modality') not in ('text','image') or (name=='output_tokens_by_modality' and item.get('modality')!='text'):
+            elif item.get('modality') not in (('text','image','video') if allow_video else ('text','image')) or (name=='output_tokens_by_modality' and item.get('modality')!='text'):
                 raise ValueError('VIDEO_BUDGET_USAGE_INVALID')
     values = {}
     for field in fields:
@@ -124,10 +174,6 @@ def normalize_usage(usage):
 def settle(call_id, usage):
     """Commit accounting even after invalid model output, cancellation or lease loss."""
     invalid = False
-    try:
-        values, cost = normalize_usage(usage)
-    except (ValueError,TypeError,AttributeError):
-        values,cost,invalid = None,None,True
     frozen = False
     with database() as connection:
         budget = connection.execute('SELECT * FROM video_ai_budget WHERE id=1 FOR UPDATE').fetchone()
@@ -136,6 +182,10 @@ def settle(call_id, usage):
             raise ValueError('VIDEO_BUDGET_ACCOUNTING_FAILED')
         if call['billing_status'] in ('settled','breach','unknown'):
             return  # Settlement is idempotent; uncertain attempts stay reserved.
+        try:
+            values, cost = normalize_usage(usage, allow_video=call.get('input_token_bound') is not None)
+        except (ValueError,TypeError,AttributeError):
+            values,cost,invalid = None,None,True
         if cost is None:
             try:
                 raw=usage if isinstance(usage,dict) else usage.model_dump(mode='json',exclude_none=True) if usage is not None else None
@@ -148,7 +198,11 @@ def settle(call_id, usage):
                 connection.execute("UPDATE video_ai_budget SET enabled=false,frozen_reason='INVALID_PROVIDER_USAGE',updated_at=now() WHERE id=1")
                 frozen = True
         else:
-            frozen = cost>call['reserved_microusd'] or bool(values.get('bounds_exceeded'))
+            exceeded = call.get('input_token_bound') is not None and any(
+                values[name] > call[bound] for name,bound in (
+                    ('total_input_tokens','input_token_bound'),('total_output_tokens','output_token_bound'),
+                    ('total_thought_tokens','thought_token_bound')))
+            frozen = cost>call['reserved_microusd'] or bool(values.get('bounds_exceeded')) or exceeded
             connection.execute("""UPDATE video_ai_budget SET reserved_microusd=reserved_microusd-%s,
                 spent_microusd=spent_microusd+%s,enabled=enabled AND NOT %s,
                 frozen_reason=CASE WHEN %s THEN 'PROVIDER_PRICE_BOUND_EXCEEDED' ELSE frozen_reason END,updated_at=now() WHERE id=1""",

@@ -359,13 +359,16 @@ def complete_replay(job_id, owner_id):
 
 
 def delete_replay(job_id, owner_id):
+    from .openai_provider import forget_output
     with database() as connection:
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner_id,))
+        connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (owner_id,))
         row = connection.execute("SELECT id,account_id,match_id FROM replay_jobs WHERE id=%s AND owner_id=%s FOR UPDATE", (job_id, owner_id)).fetchone()
         if not row:
             reject(404, "REPLAY_NOT_FOUND", "Разбор не найден.")
         connection.execute("""UPDATE replay_jobs SET state='deleted',result_payload=NULL,
             lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=%s""", (job_id,))
+        forget_output(connection, owner_id=owner_id, job_id=job_id)
         connection.execute("DELETE FROM replay_parts WHERE job_id=%s", (job_id,))
         connection.execute("""DELETE FROM hero_pool_match_notes n
             WHERE n.owner_id=%s AND n.account_id=%s AND n.match_id=%s

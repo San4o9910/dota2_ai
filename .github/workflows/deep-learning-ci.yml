@@ -2,14 +2,14 @@ name: Deep learning and public builds verification
 
 on:
   push:
-    branches: [codex/deep-learning-workshop-builds]
+    branches: [codex/deep-learning-workshop-builds, codex/openai-video-coach]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: deep-learning-verification
+  group: deep-learning-verification-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -32,6 +32,7 @@ jobs:
           node scripts/check-workshop-builds.mjs
           node scripts/check-explore-ui.mjs
           node scripts/check-portal-ui.mjs
+          node scripts/check-video-workspace.mjs
       - name: Preserve synthetic UI screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -82,5 +83,5 @@ jobs:
           docker run --rm --user root --network narma-video-ci_default \
             --env TEST_DATABASE_URL="$DATABASE_URL" \
             --env NARMA_EXPLORE_REFRESH_ENABLED=0 --env NARMA_WORKSHOP_REFRESH_ENABLED=0 \
-            --volume "$PWD/services/video/tests:/app/tests:ro" narma-video-check \
-            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest tests -q'
+            --volume "$PWD:/repo:ro" narma-video-check \
+            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest /repo/services/video/tests -q -p no:cacheprovider'

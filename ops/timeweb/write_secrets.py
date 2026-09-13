@@ -10,11 +10,14 @@ import subprocess
 import sys
 from chatgpt_secrets import prepare_settings
 from stratz_secrets import install_build_statistics
+from openai_secrets import install_key, prepare_deployment_settings
 
 os.umask(0o077)
 lock = open("/var/lock/narma-deploy.lock", "a")
 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 incoming = json.load(sys.stdin)
+if incoming.get('prepare_chatgpt_auth') is True and incoming.get('prepare_openai_api') is True:
+    raise SystemExit(7)
 key = incoming["gemini_key"]
 if not re.fullmatch(r"[A-Za-z0-9_./+=:-]{20,16384}", key):
     raise SystemExit(2)
@@ -40,6 +43,10 @@ else:
     values["POSTGRES_PASSWORD"] = secrets.token_hex(32)
     values["VIDEO_SERVICE_TOKEN"] = secrets.token_hex(32)
     values["DATABASE_URL"] = "postgresql://narma:" + values["POSTGRES_PASSWORD"] + "@db:5432/narma"
+if incoming.get('prepare_openai_api') is True and established:
+    # Connecting the new API must not also rotate the existing vision secret.
+    # Deliberate Gemini rotation remains a separate operator action.
+    key = values.get('GEMINI_API_KEY') or key
 values.update(GEMINI_API_KEY=key, GEMINI_MODEL="gemini-3.8-flash",
     VIDEO_FRAME_BUDGET="3600", VIDEO_REQUEST_BUDGET="250",
     VIDEO_OWNER_DAILY_REQUEST_BUDGET="250")
@@ -52,6 +59,12 @@ if not re.fullmatch('[0-9a-f]{64}',portal['setup_token_sha256']):
 values.update(APP_ORIGIN=portal['origin'],PORTAL_SETUP_TOKEN_SHA256=portal['setup_token_sha256'],PORTAL_SETUP_EXPIRES_AT=portal['setup_expires_at'])
 if incoming.get('prepare_chatgpt_auth') is True:
     prepare_settings(values, incoming['release'], established=established)
+if incoming.get('prepare_openai_api') is True:
+    if incoming.get('openai_key'):
+        install_key(values, incoming['openai_key'])
+    prepare_deployment_settings(values, incoming['release'],
+        enable_runtime=incoming.get('openai_activation_explicit') is True,
+        attempt=incoming.get('deployment_attempt'))
 temporary = path.with_suffix(".new")
 temporary.write_text("".join(name+"="+value+"\n" for name,value in values.items()))
 temporary.chmod(0o600)

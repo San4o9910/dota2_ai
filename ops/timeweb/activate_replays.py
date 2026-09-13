@@ -208,7 +208,9 @@ def verify_preserved(before, after):
 
 def rollback(config, snapshot):
     from chatgpt_secrets import restore_settings
+    from openai_secrets import restore_settings as restore_openai_settings
     restore_settings(snapshot['release'])
+    restore_openai_settings(snapshot['release'])
     # Always stop the new worker first: old + new workers must not compete for RAM.
     run(compose(config) + ['--profile', 'analysis', '--profile', 'hermes', 'stop', '--timeout', '20', *SERVICES])
     restored = []
@@ -243,7 +245,9 @@ def rollback(config, snapshot):
     return restored
 
 
-def activate(sha, hostname, *, prepare_chatgpt_auth=False):
+def activate(sha, hostname, *, prepare_chatgpt_auth=False, prepare_openai_api=False, openai_allowance=None):
+    if prepare_chatgpt_auth and prepare_openai_api:
+        raise RuntimeError('replay_conflicting_provider_modes')
     os.umask(0o077)
     path = state_path(sha)
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?', hostname) or '..' in hostname:
@@ -276,9 +280,13 @@ def activate(sha, hostname, *, prepare_chatgpt_auth=False):
             raise RuntimeError('replay_runtime_check_failed')
         anonymous_checks(hostname)
         chatgpt_status = None
+        openai_status = None
         if prepare_chatgpt_auth:
             from prepare_chatgpt_auth import prepare
             chatgpt_status = prepare(sha, hostname)
+        if prepare_openai_api:
+            from prepare_openai_api import prepare
+            openai_status = prepare(sha, allowance=openai_allowance)
         started = datetime.now(timezone.utc).isoformat()
         heartbeat = '''import json
 from narma_video.db import database
@@ -287,21 +295,37 @@ with database() as c:
  print(json.dumps({'fresh':bool(row and row['fresh'])}))
 ''' % started
         run(compose(config) + ['--profile', 'analysis', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'replay-worker'])
+        if prepare_openai_api:
+            run(compose(config) + ['--profile', 'analysis', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'worker'])
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             current = inspect_service('replay-worker')
             status = json.loads(run(compose(config) + ['exec', '-T', 'api', 'python', '-c', heartbeat], timeout=15))
             if current and current['running'] and status.get('fresh') is True:
-                if (video := inspect_service('worker')) and video['running']:
+                video = inspect_service('worker')
+                if prepare_openai_api:
+                    video_heartbeat = '''import json
+from narma_video.db import database
+with database() as c:
+ row=c.execute("SELECT last_seen>%%s::timestamptz AS fresh FROM video_workers WHERE id='vision'",(%r,)).fetchone()
+ print(json.dumps({'fresh':bool(row and row['fresh'])}))
+''' % started
+                    video_status = json.loads(run(compose(config) + ['exec', '-T', 'api', 'python', '-c', video_heartbeat], timeout=15))
+                    if not video or not video['running'] or video_status.get('fresh') is not True:
+                        time.sleep(2)
+                        continue
+                elif video and video['running']:
                     raise RuntimeError('replay_video_worker_must_remain_stopped')
                 write_private(Path('/opt/narma/checks/replay-worker-activation.json'),
                     {'release': sha, 'activated_at': started, 'worker': 'replay', 'synthetic_paid_calls': 0})
                 return {'event': 'replay_pipeline_ready', 'worker_enabled': True, 'fresh_worker_heartbeat': True,
-                        'video_worker_stopped': True, 'schema_verified': True, 'parser_runtime_verified': True,
+                        'video_worker_stopped': not prepare_openai_api,
+                        'video_worker_fresh': prepare_openai_api, 'schema_verified': True, 'parser_runtime_verified': True,
                         'existing_account_and_budget_preserved': snapshot.get('before') is not None,
                         'hero_pool': pool_status,
                         'learning': learning_status,
                         'chatgpt': chatgpt_status,
+                        'openai': openai_status,
                         'synthetic_paid_calls': 0, 'anonymous_replays_status': 401}
             time.sleep(2)
         raise RuntimeError('replay_worker_heartbeat_timeout')
@@ -317,7 +341,11 @@ with database() as c:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('sha'); parser.add_argument('hostname'); parser.add_argument('--rollback-only', action='store_true')
-    parser.add_argument('--prepare-chatgpt-auth', action='store_true'); args = parser.parse_args()
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--prepare-chatgpt-auth', action='store_true')
+    modes.add_argument('--prepare-openai-api', action='store_true')
+    parser.add_argument('--openai-limit-microusd'); parser.add_argument('--openai-expires-at')
+    args = parser.parse_args()
     try:
         if args.rollback_only:
             saved = json.loads(state_path(args.sha).read_text())
@@ -326,7 +354,12 @@ if __name__ == '__main__':
             restored = rollback('/opt/narma/releases/' + args.sha + '/services/video/compose.yaml', saved)
             print(json.dumps({'event': 'replay_activation_rollback', 'restored_services': restored}), flush=True)
         else:
-            print(json.dumps(activate(args.sha, args.hostname, prepare_chatgpt_auth=args.prepare_chatgpt_auth)), flush=True)
+            from prepare_openai_api import allowance_input
+            allowance = allowance_input(args.openai_limit_microusd, args.openai_expires_at)
+            if allowance and not args.prepare_openai_api:
+                raise RuntimeError('replay_openai_allowance_mode_required')
+            print(json.dumps(activate(args.sha, args.hostname, prepare_chatgpt_auth=args.prepare_chatgpt_auth,
+                prepare_openai_api=args.prepare_openai_api, openai_allowance=allowance)), flush=True)
     except Exception as error:
         code = str(error) if isinstance(error, RuntimeError) and re.fullmatch('(replay|hermes)_[a-z_]{1,100}', str(error)) else 'replay_activation_failed'
         event = 'hermes_activation_failure' if code.startswith('hermes_') else 'replay_activation_failure'

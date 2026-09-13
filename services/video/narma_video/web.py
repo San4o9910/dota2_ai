@@ -126,6 +126,10 @@ class BrowserVideo(BaseModel):
     id: UUID
     filename: str = Field(min_length=5, max_length=180)
     size_bytes: int = Field(ge=16, le=MAX_VIDEO_BYTES)
+    hero: str | None = Field(default=None, min_length=1, max_length=80)
+    position: int | None = Field(default=None, ge=1, le=5)
+    mmr: int | None = Field(default=None, ge=0, le=20000)
+    training_level: Literal['foundations','application','advanced'] | None = None
 
 
 async def json_body(request: Request, model):
@@ -313,11 +317,23 @@ def attach_web(app):
     @router.get("/session")
     def session(request: Request):
         account = session_account(request)
+        coaching = {'mode': 'unavailable', 'available': False, 'personal_connect': False}
         with database() as connection:
             configured = bool(connection.execute("SELECT 1 FROM portal_accounts LIMIT 1").fetchone())
+            if account:
+                selected = os.environ.get('REPLAY_COACH_PROVIDER', 'gemini')
+                if selected == 'openai_api':
+                    from .video_analysis import coach_available
+                    coaching = {'mode': 'platform', 'available': coach_available(connection, account['owner_id']), 'personal_connect': False}
+                elif selected == 'chatgpt_subscription':
+                    from . import chatgpt_auth
+                    if chatgpt_auth._owner_allowed(connection, account['owner_id']):
+                        current = chatgpt_auth.current_connection(connection, account['owner_id'])
+                        coaching = {'mode': 'personal', 'available': bool(current and current['available']),
+                                    'personal_connect': chatgpt_auth.configured()}
         return {"authenticated": bool(account), "setup_required": not configured,
                 "user": {"email": account["email"]} if account else None,
-                "profile": profile_for(account["owner_id"]) if account else None}
+                "profile": profile_for(account["owner_id"]) if account else None, 'coaching': coaching}
 
     @router.post("/auth/setup", dependencies=[Depends(csrf)])
     async def setup(request: Request):
