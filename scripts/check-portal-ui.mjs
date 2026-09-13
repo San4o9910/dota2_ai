@@ -113,6 +113,7 @@ try {
       let body, status=200, responseHeaders={};
       if(endpoint==='/api/auth/login') { authenticated=true; body={authenticated:true}; }
       else if(endpoint==='/api/auth/logout') {authenticated=false;body={authenticated:false};}
+      else if(endpoint==='/api/auth/security') body={recovery_codes_remaining:0};
       else if(endpoint==='/api/session') body={authenticated,setup_required:false,user:authenticated?{email:'fixture@example.test'}:null,coaching:{mode:'personal',personal_connect:true,available:false}};
       else if(endpoint.startsWith('/api/integrations/chatgpt')) {
         integrationRequests.push({method,endpoint,body:request.postDataJSON()});
@@ -630,5 +631,69 @@ try {
     assert.deepEqual(externalRequests,[],'Synthetic UI fixtures must never contact external providers.');
     assert.deepEqual(errors,[]); await page.close();
   }
+  // Account controls use synthetic API responses; credential transaction rules
+  // are covered separately by the PostgreSQL suite.
+  for(const width of [390,1440]) {
+    const page=await browser.newPage({viewport:{width,height:1000}}),errors=[],commands=[];
+    let authenticated=false,owner=true,remaining=0,invites=[],releaseCodes=null,delayCodes=false,releaseInvite=null,delayInvite=false,observeCredential=null;
+    const code='01234567-89abcdef-01234567-89abcdef',inviteToken='A'.repeat(43),inviteId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.route('**/api/**',async route=>{
+      const request=route.request(),endpoint=new URL(request.url()).pathname,method=request.method();
+      if(method!=='GET')commands.push({endpoint,body:request.postDataJSON()});
+      let body;
+      if(endpoint==='/api/session')body={authenticated,setup_required:false,user:authenticated?{email:owner?'owner@example.test':'guest@example.test',is_platform_owner:owner}:null,coaching:{mode:'platform',available:true,personal_connect:false}};
+      else if(endpoint==='/api/auth/login'){authenticated=true;body={authenticated:true};}
+      else if(endpoint==='/api/auth/logout'){authenticated=false;body={authenticated:false};}
+      else if(endpoint==='/api/profile')body={profile:null};
+      else if(endpoint==='/api/replays')body={replays:[],worker_ready:true};
+      else if(endpoint==='/api/auth/security')body={recovery_codes_remaining:remaining};
+      else if(endpoint==='/api/auth/recovery-codes'){remaining=5;if(delayCodes)await new Promise(resolve=>{releaseCodes=resolve;observeCredential();});body={codes:Array(5).fill(code)};}
+      else if(endpoint==='/api/auth/invitations'&&method==='GET')body={invitations:invites,maximum_accounts:25};
+      else if(endpoint==='/api/auth/invitations'&&method==='POST'){invites=[{id:inviteId,email:'guest@example.test',expires_at:'2099-01-01T00:00:00Z'}];body={invitation:invites[0],token:inviteToken};if(delayInvite)await new Promise(resolve=>{releaseInvite=resolve;observeCredential();});}
+      else if(endpoint.startsWith('/api/auth/invitations/')&&method==='DELETE'){invites=[];body={revoked:true};}
+      else if(endpoint==='/api/auth/accept-invitation'){authenticated=true;owner=false;body={authenticated:true};}
+      else if(endpoint==='/api/auth/recover'){remaining--;authenticated=false;body={authenticated:false,password_changed:true};}
+      else throw Error(`Unexpected account request ${method} ${endpoint}`);
+      await route.fulfill({json:body});
+    });
+    await page.goto(origin+'/account');
+    await page.locator('#email').fill('owner@example.test');await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#auth-submit').click();
+    await page.locator('#pilot-invitations').waitFor();
+    await page.locator('#recovery-current-password').fill('Synthetic passphrase 2026');await page.locator('#recovery-generate-form button').click();await page.locator('#recovery-output').waitFor();
+    assert.equal(await page.locator('#recovery-code-list').inputValue(),Array(5).fill(code).join('\n'));
+    assert.equal(await page.locator('#recovery-current-password').inputValue(),'');
+    await page.locator('#recovery-saved').click();assert.equal(await page.locator('#recovery-code-list').inputValue(),'');
+    await page.locator('#invitation-email').fill('guest@example.test');await page.locator('#invitation-password').fill('Synthetic passphrase 2026');await page.locator('#invitation-form button').click();await page.locator('#invitation-output').waitFor();
+    const link=await page.locator('#invitation-link').inputValue(),url=new URL(link);
+    assert.equal(url.search,'');assert.equal(new URLSearchParams(url.hash.slice(1)).get('invite'),inviteToken);
+    assert.equal(await page.locator('#invitation-password').inputValue(),'');
+    await page.locator('#invitation-list button').click();await page.locator('#invitation-status').getByText('Введи текущий пароль для отзыва.').waitFor();
+    await page.locator('#invitation-password').fill('Synthetic passphrase 2026');await page.locator('#invitation-list button').click();await page.waitForFunction(()=>document.querySelector('#invitation-list').children.length===0);
+    assert.equal(await page.locator('#invitation-link').inputValue(),'');
+    // A delayed response must not put backup credentials back into the DOM
+    // after a user has left the account screen.
+    const codeStarted=new Promise(resolve=>{observeCredential=resolve;});delayCodes=true;await page.locator('#recovery-current-password').fill('Synthetic passphrase 2026');await page.locator('#recovery-generate-form button').click();
+    await codeStarted;await page.locator('nav [data-tab=review]').click();
+    const codeFinished=page.waitForResponse(response=>response.url().endsWith('/api/auth/recovery-codes'));releaseCodes();await codeFinished;
+    await page.waitForFunction(()=>!document.querySelector('#recovery-generate-form button').disabled);
+    assert.equal(await page.locator('#recovery-code-list').inputValue(),'');assert.equal(await page.locator('#recovery-output').isHidden(),true);
+    delayCodes=false;await page.locator('nav [data-tab=account]').click();await page.locator('#pilot-invitations').waitFor();
+    const inviteStarted=new Promise(resolve=>{observeCredential=resolve;});delayInvite=true;
+    await page.locator('#invitation-password').fill('Synthetic passphrase 2026');await page.locator('#invitation-form button').click();await inviteStarted;
+    await page.locator('#logout').click();await page.locator('#auth').waitFor();
+    const inviteFinished=page.waitForResponse(response=>response.url().endsWith('/api/auth/invitations'));releaseInvite();await inviteFinished;
+    await page.waitForFunction(()=>!document.querySelector('#invitation-form button').disabled);
+    assert.equal(await page.locator('#invitation-link').inputValue(),'');assert.equal(await page.locator('#invitation-output').isHidden(),true);
+    await page.locator('#forgot-password').click();await page.locator('#recovery-email').fill('owner@example.test');await page.locator('#recovery-code').fill(code);await page.locator('#recovery-password').fill('Synthetic changed password');await page.locator('#recovery-form .primary').click();
+    await page.locator('#notice').getByText(/Пароль восстановлен/).waitFor();assert.equal(await page.locator('#recovery-code').inputValue(),'');assert.equal(await page.locator('#recovery-password').inputValue(),'');
+    await page.goto(link);await page.locator('#auth-title').getByText('Прими приглашение').waitFor();
+    assert.equal(new URL(page.url()).hash,'');assert.equal(await page.locator('#email').inputValue(),'guest@example.test');
+    await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#auth-submit').click();await page.locator('#workspace').waitFor();
+    assert.equal(await page.locator('#pilot-invitations').isHidden(),true);
+    assert.deepEqual(commands.find(command=>command.endpoint==='/api/auth/accept-invitation').body,{email:'guest@example.test',password:'Synthetic passphrase 2026',token:inviteToken});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);await page.close();
+  }
+
   console.log('Visual report income sources, item timings/delivery/realization, personal goals/reset and next-game plan; Portal .dem upload→report with role/MMR/training depth, frozen context and idempotent retry; selected-player binding, shared timeline, safe coaching links, account navigation, reduced motion, mobile layout and WCAG passed (mocked API; no paid calls).');
 } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }

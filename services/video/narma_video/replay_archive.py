@@ -5,12 +5,14 @@ import shutil
 from fastapi import APIRouter, Depends
 
 from .db import database
+from . import media_storage
 from .replay_jobs import owned, replay_directory
 from .web import account_required, csrf, reject
 
 
 def remove_source(job_id, owner_id):
     with database() as connection:
+        media_storage.lock(connection)
         row = owned(connection, owner_id, job_id, lock=True)
         if row["state"] != "ready" or not row["result_payload"]:
             reject(409, "REPLAY_REPORT_REQUIRED", "Сначала дождитесь готового разбора.")

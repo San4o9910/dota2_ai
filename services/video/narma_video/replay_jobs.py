@@ -23,6 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import PART_BYTES, media_root
 from .db import database
+from . import media_storage
 from .replay_metadata import parse_demo_metadata, resolve_player
 from .replay_hero_context import build_hero_context
 from .role_context import COACH_METHOD_VERSION
@@ -32,7 +33,7 @@ MAX_REPLAY_BYTES = 512 * 1024**2
 OWNER_STORAGE_BYTES = 2 * 1024**3
 GLOBAL_STORAGE_BYTES = 4 * 1024**3
 DAILY_JOBS = 8
-QUOTA_LOCK = 643847219
+QUOTA_LOCK = media_storage.QUOTA_LOCK
 LEASE_SECONDS = 300
 MAX_RESULT_BYTES = 8 * 1024**2
 
@@ -41,7 +42,7 @@ class CreateReplay(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: UUID
     filename: str = Field(min_length=5, max_length=180)
-    size_bytes: int = Field(ge=20, le=MAX_REPLAY_BYTES)
+    size_bytes: int = Field(ge=20, le=MAX_REPLAY_BYTES, strict=True)
     nickname: str | None = Field(default=None, min_length=1, max_length=128)
     match_id: str | None = Field(default=None, pattern=r"^[1-9][0-9]{7,11}$")
     position: int | None = Field(default=None, ge=1, le=5, strict=True)
@@ -81,7 +82,8 @@ def list_replays(owner_id):
             AND state<>'deleted' ORDER BY created_at DESC LIMIT 30""", (owner_id,)).fetchall()
         worker = connection.execute("SELECT 1 FROM replay_workers WHERE last_seen>now()-interval '5 minutes' LIMIT 1").fetchone()
     return {"replays": [public(row) for row in rows], "worker_ready": bool(worker),
-            "max_bytes": MAX_REPLAY_BYTES, "part_bytes": PART_BYTES}
+            "max_bytes": MAX_REPLAY_BYTES, "part_bytes": PART_BYTES,
+            "storage_policy": media_storage.SOURCE_POLICY}
 
 
 def create_replay(body: CreateReplay, owner_id):
@@ -89,7 +91,7 @@ def create_replay(body: CreateReplay, owner_id):
         reject(400, "REPLAY_FILE_TYPE", "Выберите реплей Dota 2 в формате .dem.")
     with database() as connection:
         # One lock covers the global disk reservation and concurrent creation.
-        connection.execute("SELECT pg_advisory_xact_lock(%s)", (QUOTA_LOCK,))
+        media_storage.lock(connection)
         profile = connection.execute("SELECT account_id,nickname FROM portal_dota_profiles WHERE owner_id=%s", (owner_id,)).fetchone()
         nickname = (body.nickname or (profile["nickname"] if profile else "")).strip()
         if not nickname or re.search(r"[\x00-\x1f\x7f]", nickname):
@@ -114,16 +116,15 @@ def create_replay(body: CreateReplay, owner_id):
             reject(429, "REPLAY_QUOTA", "Дождитесь завершения текущих разборов. Доступно до восьми загрузок за сутки.")
         if own["stored"] + body.size_bytes > OWNER_STORAGE_BYTES or total + body.size_bytes > GLOBAL_STORAGE_BYTES:
             reject(429, "REPLAY_STORAGE_QUOTA", "Удалите ненужные реплеи, чтобы освободить место.")
+        media_storage.check_admission(connection, owner_id, body.size_bytes)
         root = media_root() / "replays"
-        root.mkdir(mode=0o700, exist_ok=True)
-        # Joining parts briefly needs one additional source-sized allocation.
-        pending = connection.execute("SELECT coalesce(sum(size_bytes),0) AS n FROM replay_jobs WHERE state='uploading'").fetchone()["n"]
-        if shutil.disk_usage(root).free < 2 * (pending + body.size_bytes) + 1024**3:
-            reject(507, "REPLAY_STORAGE", "На сервере недостаточно места для реплея.")
+        with media_storage.storage_errors():
+            root.mkdir(mode=0o700, exist_ok=True)
         directory = replay_directory(body.id)
         if directory.exists() and any(directory.iterdir()):
             reject(409, "REPLAY_REQUEST_REUSED", "Повторите загрузку с новым заданием.")
-        directory.mkdir(mode=0o700, exist_ok=True)
+        with media_storage.storage_errors():
+            directory.mkdir(mode=0o700, exist_ok=True)
         row = connection.execute("""INSERT INTO replay_jobs
             (id,owner_id,filename,size_bytes,requested_nickname,nickname,expected_match_id,account_id,
              requested_position,requested_mmr,training_level)
@@ -242,6 +243,7 @@ def previous_report(connection, row):
 
 def store_part(job_id, part_number, data: bytes, owner_id):
     with database() as connection:
+        media_storage.lock(connection)
         row = owned(connection, owner_id, job_id, True)
         if row["state"] != "uploading" or not 1 <= part_number <= math.ceil(row["size_bytes"] / PART_BYTES):
             reject(409, "REPLAY_UPLOAD_CLOSED", "Загрузка закрыта или номер части неверен.")
@@ -254,15 +256,17 @@ def store_part(job_id, part_number, data: bytes, owner_id):
         previous = connection.execute("SELECT sha256,size_bytes FROM replay_parts WHERE job_id=%s AND part_number=%s", (job_id, part_number)).fetchone()
         if previous and (previous["sha256"] != digest or previous["size_bytes"] != len(data)):
             reject(409, "REPLAY_PART_CHANGED", "Содержимое загруженной части изменилось. Начните новую загрузку.")
+        media_storage.check_space(connection)
         directory = replay_directory(job_id)
         temporary = directory / (uuid4().hex + ".tmp")
         try:
-            with temporary.open("xb") as handle:
+            with media_storage.storage_errors(), temporary.open("xb") as handle:
                 os.chmod(temporary, 0o600)
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, directory / f"part-{part_number}")
+            with media_storage.storage_errors():
+                os.replace(temporary, directory / f"part-{part_number}")
             connection.execute("""INSERT INTO replay_parts(job_id,part_number,size_bytes,sha256)
                 VALUES (%s,%s,%s,%s) ON CONFLICT(job_id,part_number) DO NOTHING""",
                 (job_id, part_number, len(data), digest))
@@ -311,6 +315,7 @@ def _resolve_identity(connection, row, metadata, digest):
 
 def complete_replay(job_id, owner_id):
     with database() as connection:
+        media_storage.lock(connection)
         row = owned(connection, owner_id, job_id, True)
         if row["state"] in ("queued", "processing", "ready"):
             return {"replay": public(row)}
@@ -322,17 +327,17 @@ def complete_replay(job_id, owner_id):
         directory = replay_directory(job_id)
         temporary = directory / "source.pending"
         digest = hashlib.sha256()
+        media_storage.check_space(connection)
         try:
-            if shutil.disk_usage(directory).free < row["size_bytes"] + 512 * 1024**2:
-                reject(507, "REPLAY_STORAGE", "На сервере недостаточно места для сборки реплея.")
-            with temporary.open("wb") as destination:
+            with media_storage.storage_errors(), temporary.open("wb") as destination:
                 os.chmod(temporary, 0o600)
                 for number, part in enumerate(parts, 1):
                     path = directory / f"part-{number}"
-                    if not path.is_file() or path.stat().st_size != part["size_bytes"]:
+                    expected = min(PART_BYTES, row["size_bytes"] - (number-1)*PART_BYTES)
+                    if part["size_bytes"] != expected or not path.is_file() or path.stat().st_size != expected:
                         reject(409, "REPLAY_INTEGRITY", "Проверка целостности реплея не прошла.")
                     data = path.read_bytes()
-                    if part["part_number"] != number or hashlib.sha256(data).hexdigest() != part["sha256"]:
+                    if len(data) != expected or part["part_number"] != number or hashlib.sha256(data).hexdigest() != part["sha256"]:
                         reject(409, "REPLAY_INTEGRITY", "Проверка целостности реплея не прошла.")
                     destination.write(data)
                     digest.update(data)
@@ -344,7 +349,8 @@ def complete_replay(job_id, owner_id):
                 reject(400, "REPLAY_METADATA", "Не удалось прочитать реплей. Выберите полный исходный файл .dem.")
             source_digest = digest.hexdigest()
             player = _resolve_identity(connection, row, metadata, source_digest)
-            os.replace(temporary, directory / "source.dem")
+            with media_storage.storage_errors():
+                os.replace(temporary, directory / "source.dem")
             row = connection.execute("""UPDATE replay_jobs SET state='queued',progress=0,
                 source_sha256=%s,match_id=%s,account_id=%s,nickname=%s,updated_at=now()
                 WHERE id=%s RETURNING *""", (source_digest, metadata["match_id"],
@@ -361,6 +367,7 @@ def complete_replay(job_id, owner_id):
 def delete_replay(job_id, owner_id):
     from .openai_provider import forget_output
     with database() as connection:
+        media_storage.lock(connection)
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner_id,))
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (owner_id,))
         row = connection.execute("SELECT id,account_id,match_id FROM replay_jobs WHERE id=%s AND owner_id=%s FOR UPDATE", (job_id, owner_id)).fetchone()

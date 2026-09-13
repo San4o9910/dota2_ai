@@ -1,7 +1,11 @@
 # NARMA pilot operations — 2026-09-07
 
-This is the current deployment record. It supersedes the initial bootstrap
-limitations recorded in `ops/timeweb/README.md` on September 6.
+This is the historical September 7 deployment record. Later changes use native
+`.dem` parsing, OpenAI coaching and selective video; the all-frame, single-account
+and old checkout references below must not be used as current release settings.
+See [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) for the current rollout and
+restore procedure, and [OPENAI_VIDEO_DEPLOYMENT.md](OPENAI_VIDEO_DEPLOYMENT.md) for
+the provider activation contract. Historical prices below are not a fresh quote.
 
 ## Infrastructure and scope
 

@@ -14,10 +14,11 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from .config import PART_BYTES, MAX_VIDEO_BYTES, job_directory, media_root, service_token
 from .db import database
-from . import budget
+from . import budget, media_storage
 from .build_meta import cache as build_cache, router as build_meta_router
 from .workshop_builds import cache as workshop_cache
 
@@ -91,7 +92,7 @@ class CreateVideo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: UUID
     filename: str = Field(min_length=5, max_length=180)
-    size_bytes: int = Field(ge=16, le=MAX_VIDEO_BYTES)
+    size_bytes: int = Field(ge=16, le=MAX_VIDEO_BYTES, strict=True)
     account_id: int = Field(ge=1, le=4294967294)
     nickname: str = Field(min_length=1, max_length=128)
     hero: str | None = Field(default=None, min_length=1, max_length=80)
@@ -121,6 +122,7 @@ def videos(owner: Owner):
     return {"videos": [public(row) for row in rows], "worker_ready": bool(worker), "max_bytes": MAX_VIDEO_BYTES,
         "frame_budget":int(os.environ.get('VIDEO_FRAME_BUDGET','3600')),
         "analysis_mode": configured_mode(), "coach_available": coach_ready,
+        "storage_policy": media_storage.SOURCE_POLICY,
         "budget_available":bool(allowance['enabled'] and allowance['available_microusd']>=budget.RESERVATION
             and (configured_mode() != 'selective_v1' or coach_ready))}
 
@@ -130,6 +132,7 @@ def create_video(body: CreateVideo, owner: Owner):
     if not re.fullmatch(r"[^\x00-\x1f\x7f/\\]+\.(?:mp4|mkv|webm|mov)", body.filename, re.I):
         raise HTTPException(400, "Выберите MP4, MKV, WebM или MOV.")
     with database() as connection:
+        media_storage.lock(connection)
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner,))
         existing = connection.execute("SELECT * FROM video_jobs WHERE id=%s", (body.id,)).fetchone()
         if existing:
@@ -150,6 +153,7 @@ def create_video(body: CreateVideo, owner: Owner):
         limits = connection.execute("SELECT count(*) FILTER (WHERE created_at>now()-interval '1 day') AS daily, coalesce(sum(size_bytes) FILTER(WHERE storage_deleted_at IS NULL),0) AS stored FROM video_jobs WHERE owner_id=%s", (owner,)).fetchone()
         if limits["daily"] >= 4 or limits["stored"] + body.size_bytes > 8 * 1024**3:
             raise HTTPException(429, "Лимит видео исчерпан. Удалите ненужные файлы или повторите позже.")
+        media_storage.check_admission(connection, owner, body.size_bytes)
         row = connection.execute("""INSERT INTO video_jobs(id,owner_id,account_id,nickname,filename,size_bytes,
             analysis_mode,hero,position,mmr,training_level) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
             (body.id,owner,body.account_id,body.nickname,body.filename,body.size_bytes,mode,body.hero,body.position,body.mmr,body.training_level)).fetchone()
@@ -159,7 +163,8 @@ def create_video(body: CreateVideo, owner: Owner):
             if any(directory.iterdir()):
                 raise HTTPException(409, "Повторите загрузку с новым заданием.")
         else:
-            directory.mkdir(mode=0o700, parents=True)
+            with media_storage.storage_errors():
+                directory.mkdir(mode=0o700, parents=True)
     return {"video": public(row), "part_bytes": PART_BYTES}
 
 @app.get("/v1/videos/{job_id}")
@@ -176,12 +181,30 @@ def get_video(job_id: UUID, owner: Owner, after: int = -1):
 
 @app.put("/v1/videos/{job_id}/parts/{part_number}")
 async def upload_part(job_id: UUID, part_number: int, request: Request, owner: Owner):
+    # Reject foreign IDs and closed uploads before reading their request body.
+    expected = await run_in_threadpool(video_part_size, job_id, part_number, owner)
+    length = request.headers.get("content-length")
+    if length and (not length.isdigit() or int(length) > expected):
+        raise HTTPException(413, "Часть файла слишком велика.")
     data = bytearray()
     async for chunk in request.stream():
-        if len(data) + len(chunk) > PART_BYTES:
+        if len(data) + len(chunk) > expected:
             raise HTTPException(413, "Часть файла слишком велика.")
         data.extend(chunk)
+    return await run_in_threadpool(store_video_part, job_id, part_number, bytes(data), owner)
+
+
+def video_part_size(job_id, part_number, owner):
     with database() as connection:
+        row = owned(connection, owner, job_id)
+        if row["state"] != "uploading" or not 1 <= part_number <= math.ceil(row["size_bytes"] / PART_BYTES):
+            raise HTTPException(409, "Загрузка закрыта или номер части неверен.")
+        return min(PART_BYTES, row["size_bytes"] - (part_number - 1) * PART_BYTES)
+
+
+def store_video_part(job_id, part_number, data, owner):
+    with database() as connection:
+        media_storage.lock(connection)
         row = owned(connection, owner, job_id, True)
         expected = min(PART_BYTES, row["size_bytes"] - (part_number-1)*PART_BYTES)
         if row["state"] != "uploading" or part_number < 1 or part_number > math.ceil(row["size_bytes"]/PART_BYTES):
@@ -190,12 +213,22 @@ async def upload_part(job_id: UUID, part_number: int, request: Request, owner: O
             raise HTTPException(400, "Часть файла передана не полностью.")
         if part_number == 1 and not (data[4:8] == b"ftyp" or data[:4] == b"\x1aE\xdf\xa3"):
             raise HTTPException(415, "Не удалось определить формат видео.")
+        digest = hashlib.sha256(data).hexdigest()
+        previous = connection.execute("SELECT sha256,size_bytes FROM video_parts WHERE job_id=%s AND part_number=%s", (job_id, part_number)).fetchone()
+        if previous and (previous["sha256"] != digest or previous["size_bytes"] != len(data)):
+            raise HTTPException(409, "Содержимое загруженной части изменилось. Начните новую загрузку.")
+        media_storage.check_space(connection)
         directory = job_directory(job_id)
         temporary = directory / f"{uuid4()}.tmp"
         try:
-            temporary.write_bytes(data)
-            os.replace(temporary, directory / f"part-{part_number}")
-            connection.execute("INSERT INTO video_parts(job_id,part_number,size_bytes,sha256) VALUES (%s,%s,%s,%s) ON CONFLICT(job_id,part_number) DO UPDATE SET size_bytes=excluded.size_bytes,sha256=excluded.sha256", (job_id,part_number,len(data),hashlib.sha256(data).hexdigest()))
+            with media_storage.storage_errors():
+                with temporary.open("xb") as destination:
+                    os.chmod(temporary, 0o600)
+                    destination.write(data)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                os.replace(temporary, directory / f"part-{part_number}")
+            connection.execute("INSERT INTO video_parts(job_id,part_number,size_bytes,sha256) VALUES (%s,%s,%s,%s) ON CONFLICT(job_id,part_number) DO NOTHING", (job_id,part_number,len(data),digest))
         finally:
             temporary.unlink(missing_ok=True)
     return {"uploaded": True, "part_number": part_number}
@@ -203,6 +236,7 @@ async def upload_part(job_id: UUID, part_number: int, request: Request, owner: O
 @app.post("/v1/videos/{job_id}/complete")
 def complete_video(job_id: UUID, owner: Owner):
     with database() as connection:
+        media_storage.lock(connection)
         row = owned(connection, owner, job_id, True)
         if row["state"] in ("queued", "processing", "ready"):
             return {"video": public(row)}
@@ -213,14 +247,24 @@ def complete_video(job_id: UUID, owner: Owner):
             raise HTTPException(409, "Переданы не все части видео.")
         directory = job_directory(job_id); digest = hashlib.sha256()
         temporary = directory / "source.pending"
+        media_storage.check_space(connection)
         try:
-            with temporary.open("wb") as destination:
+            with media_storage.storage_errors(), temporary.open("wb") as destination:
+                os.chmod(temporary, 0o600)
                 for number, part in enumerate(parts,1):
-                    data = (directory / f"part-{number}").read_bytes()
-                    if part["part_number"] != number or hashlib.sha256(data).hexdigest() != part["sha256"]:
+                    path = directory / f"part-{number}"
+                    expected = min(PART_BYTES, row["size_bytes"] - (number-1)*PART_BYTES)
+                    if (part["part_number"] != number or part["size_bytes"] != expected
+                            or not path.is_file() or path.stat().st_size != expected):
+                        raise HTTPException(409, "Проверка целостности видео не прошла.")
+                    data = path.read_bytes()
+                    if len(data) != expected or hashlib.sha256(data).hexdigest() != part["sha256"]:
                         raise HTTPException(409, "Проверка целостности видео не прошла.")
                     destination.write(data); digest.update(data)
-            os.replace(temporary, directory / "source")
+                destination.flush()
+                os.fsync(destination.fileno())
+            with media_storage.storage_errors():
+                os.replace(temporary, directory / "source")
             row = connection.execute("UPDATE video_jobs SET state='queued',source_sha256=%s,updated_at=now() WHERE id=%s RETURNING *", (digest.hexdigest(),job_id)).fetchone()
         finally:
             temporary.unlink(missing_ok=True)
@@ -244,6 +288,7 @@ def source(job_id: UUID, owner: Owner):
 def delete_video(job_id: UUID, owner: Owner):
     from .openai_provider import forget_output
     with database() as connection:
+        media_storage.lock(connection)
         connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))', (owner,))
         row=connection.execute("SELECT id FROM video_jobs WHERE id=%s AND owner_id=%s FOR UPDATE",(job_id,owner)).fetchone()
         if not row:

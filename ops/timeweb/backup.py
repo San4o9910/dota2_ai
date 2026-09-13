@@ -138,6 +138,23 @@ def verify_restored_database(query):
         if portal['tables']!=5 or (singleton and portal['accounts']>1) or portal['orphan_sessions'] or portal['orphan_profiles']:
             raise CheckError('backup_portal_restore_invariants_failed')
         state['portal']=portal
+    if '023_portal_invites_recovery.sql' in migrations:
+        access=query("""SELECT json_build_object(
+            'tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema()
+                AND table_name IN ('portal_invitations','portal_recovery_codes')),
+            'platform_owners',(SELECT count(*) FROM portal_accounts WHERE is_platform_owner),
+            'orphan_invitations',(SELECT count(*) FROM portal_invitations i
+                LEFT JOIN portal_accounts a ON a.owner_id=i.invited_by WHERE a.owner_id IS NULL),
+            'orphan_recovery_codes',(SELECT count(*) FROM portal_recovery_codes r
+                LEFT JOIN portal_accounts a ON a.owner_id=r.owner_id WHERE a.owner_id IS NULL),
+            'invalid_tokens',(SELECT count(*) FROM portal_invitations WHERE token_hash !~ '^[0-9a-f]{64}$'
+                OR expires_at<=created_at)+(SELECT count(*) FROM portal_recovery_codes
+                WHERE token_hash !~ '^[0-9a-f]{64}$'));
+        """)
+        if (access['tables']!=2 or access['platform_owners']>1 or access['orphan_invitations']
+                or access['orphan_recovery_codes'] or access['invalid_tokens']):
+            raise CheckError('backup_account_access_restore_invariants_failed')
+        state['account_access']=access
     if '005_replay_analysis.sql' in migrations:
         replay=query(REPLAY_RESTORE_SQL)
         if replay['tables']!=3 or replay['orphan_jobs'] or replay['orphan_parts'] or replay['invalid_ready_identity']:
@@ -156,6 +173,20 @@ def verify_restored_database(query):
             event('backup_openai_restore_diagnostics',**openai)
             raise CheckError('backup_openai_restore_invariants_failed')
         state['openai']=openai
+    # An older snapshot can contain credentials already consumed or revoked on
+    # the original server. Invalidate bearer credentials in the disconnected
+    # restore copy; a recovery must never resurrect those capabilities.
+    if '004_standalone_portal.sql' in migrations:
+        query("""WITH revoked AS (DELETE FROM portal_sessions RETURNING 1)
+            SELECT json_build_object('sessions_revoked',count(*)) FROM revoked;""")
+        state['restored_sessions_revoked']=True
+    if '023_portal_invites_recovery.sql' in migrations:
+        query("""WITH invitations AS (UPDATE portal_invitations SET used_at=now()
+            WHERE used_at IS NULL RETURNING 1), codes AS (UPDATE portal_recovery_codes SET used_at=now()
+            WHERE used_at IS NULL RETURNING 1)
+            SELECT json_build_object('invitations_revoked',(SELECT count(*) FROM invitations),
+                'recovery_codes_revoked',(SELECT count(*) FROM codes));""")
+        state['restored_access_tokens_revoked']=True
     # Both writes target the disconnected drill copy. Never reset money, holds,
     # expiry or a prior accounting freeze, and never enable either provider.
     query("""UPDATE video_ai_budget SET enabled=false,
@@ -281,7 +312,9 @@ def backup(cloud,ssh,temporary):
             raise CheckError('backup_download_hash_mismatch')
         verified=verify_restore(restored)
         manifest={'sha256':digest,'bytes':dump.stat().st_size,'source_vm':SERVER,'created_at':datetime.now(timezone.utc).isoformat(),
-            'restore_verified':True,'schema':verified,'restore_budget_action':'disable until provider spend reconciled'}
+            'restore_verified':True,'schema':verified,'restore_budget_action':'disable until provider spend reconciled',
+            'restore_auth_action':'revoke all sessions, invitations and recovery codes before opening access',
+            'media_included':False}
         client.put_object(Bucket=name,Key=key+'.json',Body=json.dumps(manifest).encode(),ContentType='application/json')
         verified_success=True
     finally:

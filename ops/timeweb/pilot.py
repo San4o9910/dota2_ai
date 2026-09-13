@@ -101,7 +101,32 @@ class Cloud:
         return value
 
 
-def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
+class BootstrapDeferred(CheckError):
+    """This attempt proved no stop was attempted; leave live containers alone."""
+
+
+def bootstrap_deferred(result, attempt):
+    if result.returncode != 75 or not isinstance(attempt, str) or not re.fullmatch('[0-9a-f]{32}', attempt):
+        return False
+    stages = [line for line in result.stdout.splitlines() if line.startswith(b'NARMA_BOOTSTRAP_STAGE:')]
+    if not stages or stages[-1] != b'NARMA_BOOTSTRAP_STAGE:quiesce_workers':
+        return False
+    if result.stderr.splitlines().count(b'NARMA_BOOTSTRAP_FAILURE:quiesce_workers:75') != 1:
+        return False
+    receipts = []
+    for line in result.stdout.splitlines():
+        try:
+            value = json.loads(line)
+        except (ValueError, UnicodeError):
+            continue
+        if isinstance(value, dict) and value.get('event') == 'deployment_quiescence_failed':
+            receipts.append(value)
+    return (len(receipts) == 1 and set(receipts[0]) == {'event', 'code', 'disposition', 'attempt'}
+        and receipts[0]['disposition'] == 'deferred_before_stop' and receipts[0]['attempt'] == attempt
+        and isinstance(receipts[0]['code'], str) and bool(re.fullmatch('deployment_[a-z_]{1,80}', receipts[0]['code'])))
+
+
+def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command", deferred_attempt=None):
     # Never expose raw stdout/stderr from commands that may handle secrets.
     result = subprocess.run(argv, input=input, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, timeout=timeout)
@@ -134,7 +159,7 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
                 item=json.loads(line)
                 event('provider_usage_diagnostic',keys=item.get('keys'),usage=item.get('usage'),billing_status=item.get('billing_status'))
     if bootstrap:
-        stages = {"lock", "cloud_init", "packages", "docker_firewall", "stop_worker", "prebuilt_images",
+        stages = {"lock", "cloud_init", "packages", "docker_firewall", "quiesce_workers", "stop_worker", "prebuilt_images",
                   "build", "database_api", "readiness", "ready"}
         for line in (result.stdout + b"\n" + result.stderr).splitlines():
             vision_state = re.fullmatch(rb"NARMA_GEMINI_CHECK:(passed|previously_passed|previous_attempt_unresolved|failed)", line)
@@ -175,10 +200,63 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
                 except (ValueError, TypeError):
                     pass
     if result.returncode:
+        if bootstrap and phase == 'bootstrap' and bootstrap_deferred(result, deferred_attempt):
+            event('deployment_deferred', reason='workers_not_proved_idle', live_workers_preserved=True)
+            raise BootstrapDeferred('deployment_deferred_before_stop')
         phases = {"command", "release_directory", "source_transfer", "secret_install", "bootstrap", "gemini_check"}
         safe_phase = phase if phase in phases else "command"
         raise CheckError("command_failed_" + safe_phase + "_exit_" + str(result.returncode))
     return result.stdout
+
+
+def restore_bootstrap_failure(error, ssh, release, sha, hostname):
+    if isinstance(error, BootstrapDeferred):
+        try:
+            command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py rollback-tags " + sha], timeout=150)
+            event('settings_and_image_tags_restored_before_stop')
+        except Exception:
+            event('settings_and_image_tags_restore_unconfirmed')
+        return
+    try:
+        command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py rollback " + sha], timeout=150)
+        event("previous_images_and_api_restored")
+    except Exception:
+        event("previous_images_and_api_restore_unconfirmed")
+    try:
+        command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+' --rollback-only'],timeout=150)
+        event('previous_worker_restored_after_bootstrap_failure')
+    except Exception:
+        event('previous_worker_restore_unconfirmed')
+
+
+def prepare_before_bootstrap(ssh, release, sha, deployment_attempt, secret_input, image_archive,
+        *, server_id, activate_hermes=False, prepare_chatgpt_auth=False, prepare_openai_api=False):
+    """Prepare files/images without changing running containers or draining work.
+
+On failure, loaded image tags/cache may remain pending. The next attempt
+reinstalls and revalidates them; stale image checkpoints never stop live work.
+"""
+    try:
+        command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
+        event("installing_private_services", server_id=server_id, release=sha)
+        command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
+        if not activate_hermes and not prepare_chatgpt_auth and not prepare_openai_api:
+            # Refuse an update that would silently disable an active runtime.
+            deploy_hermes(ssh, release, sha)
+        transfer_image_archive(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py receive " + sha], image_archive)
+        command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py install " + sha], timeout=1000)
+        event("prebuilt_images_installed", release=sha, immutable_ids_verified=True)
+    except Exception:
+        # This attempt has not invoked bootstrap or changed containers. Restore
+        # its settings only; do not consult a possibly stale image checkpoint.
+        rollback_code = prebootstrap_rollback_code(release, sha, deployment_attempt,
+            prepare_chatgpt_auth=prepare_chatgpt_auth, prepare_openai_api=prepare_openai_api)
+        try:
+            command(ssh + ['python3 -c ' + shlex.quote(rollback_code)], timeout=30)
+            event('provider_settings_restored_before_bootstrap')
+        except Exception:
+            event('provider_settings_restore_unconfirmed')
+        raise
 
 
 def emit_image_failure(line):
@@ -691,43 +769,15 @@ print(json.dumps({'providers':providers,'openai_key_present':bool(v.get('OPENAI_
                                       "prepare_openai_api":prepare_openai_api,
                                       "openai_activation_explicit":explicit_openai,
                                       **({"openai_key":incoming_openai_key} if incoming_openai_key else {})}).encode()
+            prepare_before_bootstrap(ssh, release, sha, deployment_attempt, secret_input, image_archive,
+                server_id=server_id, activate_hermes=activate_hermes,
+                prepare_chatgpt_auth=prepare_chatgpt_auth, prepare_openai_api=prepare_openai_api)
             try:
-                command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
-                event("installing_private_services", server_id=server_id, release=sha)
-                command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
-                if not activate_hermes and not prepare_chatgpt_auth and not prepare_openai_api:
-                    # Fail before stopping/changing services if this update would
-                    # silently disable a previously active Hermes runtime.
-                    deploy_hermes(ssh, release, sha)
-            except Exception:
-                # A failure before bootstrap must also restore provider selection.
-                # This invokes only settings rollback; it never stops live services
-                # or removes a first-installed API/encryption key.
-                rollback_code = prebootstrap_rollback_code(release, sha, deployment_attempt,
-                    prepare_chatgpt_auth=prepare_chatgpt_auth, prepare_openai_api=prepare_openai_api)
-                try:
-                    command(ssh + ['python3 -c ' + shlex.quote(rollback_code)], timeout=30)
-                    event('provider_settings_restored_before_bootstrap')
-                except Exception:
-                    event('provider_settings_restore_unconfirmed')
-                raise
-            try:
-                transfer_image_archive(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py receive " + sha], image_archive)
-                command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py install " + sha], timeout=1000)
-                event("prebuilt_images_installed", release=sha, immutable_ids_verified=True)
-                command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha + " --prebuilt"], timeout=1200, bootstrap=True, phase="bootstrap")
+                command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha + " --prebuilt " + deployment_attempt],
+                    timeout=1200, bootstrap=True, phase="bootstrap", deferred_attempt=deployment_attempt)
                 ensure_https(ssh,release,hostname,host)
-            except Exception:
-                try:
-                    command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py rollback " + sha], timeout=150)
-                    event("previous_images_and_api_restored")
-                except Exception:
-                    event("previous_images_and_api_restore_unconfirmed")
-                try:
-                    command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+' --rollback-only'],timeout=150)
-                    event('previous_worker_restored_after_bootstrap_failure')
-                except Exception:
-                    event('previous_worker_restore_unconfirmed')
+            except Exception as error:
+                restore_bootstrap_failure(error, ssh, release, sha, hostname)
                 raise
             event("private_services_ready", server_id=server_id, release=sha,
                 public_application=False, worker_enabled=False,
