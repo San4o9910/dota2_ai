@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-          ref: 4ac76933298c3e71571add744f80e52fde7061e5
+          ref: 9a2e16d3bdccda37751528f28996e52085a5fdaa
       - name: Prepare bounded backup runtime before loading credentials
         run: |
           python3 -m venv /tmp/narma-backup-env
