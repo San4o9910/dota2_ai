@@ -67,7 +67,7 @@ report.insights.pace=report.insights.gold.bins.map((bin,index)=>({...bin,last_hi
 try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
-    let authenticated=false, bound=false, job=null, uploaded=false, legacy=false, poolFailed=false, poolSaveFailed=false, learningEmpty=true, learningFailed=false, connectionMissing=false;
+    let authenticated=false, bound=false, job=null, uploaded=false, legacy=false, poolFailed=false, poolSaveFailed=false, learningEmpty=true, learningFailed=false, connectionMissing=false, archivedCoachingState='saved';
     const poolMatches=Array.from({length:8},(_,index)=>({job_id:'pool-'+index,match_id:String(8984000000+index),hero:index===7?'npc_dota_hero_lion':'npc_dota_hero_necrolyte',label:index===7?'Lion':'Necrophos',position:index===7?5:index===6?null:2,outcome:index===6?null:index%2?'loss':'win',played_at:index===6?null:new Date(Date.now()-(50-index*7)*86400000).toISOString(),date_source:index===6?'analysis':'user',chronology_at:new Date(Date.now()-(50-index*7)*86400000).toISOString(),metrics:{deaths_per_30:10-index,gpm:400+index*20,xpm:500+index*20,last_hits_10:30+index,net_worth_10:4000+index*100,item_delay_seconds:index===3?null:120-index*10}}));
     const favorites=new Set(), goals=[], poolWrites=[], externalRequests=[];
     let learningPosition=null, learningAlias=false;
@@ -157,6 +157,13 @@ try {
       else if(job&&endpoint===`/api/replays/${job.id}/source`&&method==='DELETE') {job.source_retained=false;body={source_deleted:true,report_retained:true};}
       else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,hero_context:legacy?{...heroContext,hero:'npc_dota_hero_lion',label:'Lion'}:heroContext,parts:uploaded?[1]:[],archived_report:job.state==='ready'?{id:1,created_at:new Date().toISOString(),hero_context:{...heroContext,summary:'Контекст сохранённого разбора.',abilities:[{...heroContext.abilities[0],casts:7}]},report:{...report,metrics:{...report.metrics,kills:9},evidence:[{id:'old-death',type:'death',time:500,title:'Старый эпизод'}],coaching:{status:'ready',summary:'Сохранённый комментарий',points:[{title:'Сохранённый эпизод',observation:'Предыдущий разбор.',evidence_ids:['old-death']}]}}}:null,report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{}),...(connectionMissing?{coaching:{status:'unavailable',failure_code:'CHATGPT_NOT_CONNECTED',points:[]}}:{})}:null};
       else throw Error(`Unexpected frontend API request: ${method} ${endpoint}`);
+      if(job&&endpoint===`/api/replays/${job.id}`) {
+        body.coaching_status=width===390&&!legacy&&!connectionMissing?{state:'ready',provider:'openai_api',verified_openai:true,reason_code:null,usage:{input_tokens:1200,output_tokens:300,cached_input_tokens:400},billing_state:'settled',charged_microusd:2750}:{state:'unavailable',provider:'openai_api',verified_openai:false,reason_code:connectionMissing?'CHATGPT_NOT_CONNECTED':'OPENAI_BUDGET_EXCEEDED',usage:null,billing_state:'none',charged_microusd:null};
+        if(body.archived_report) {
+          body.archived_report.coaching_status={state:archivedCoachingState,provider:null,verified_openai:false,reason_code:archivedCoachingState==='context_changed'?'REPLAY_COACH_CONTEXT_CHANGED':null,usage:null,billing_state:'none',charged_microusd:null};
+          if(archivedCoachingState==='unavailable'||archivedCoachingState==='context_changed')body.archived_report.report.coaching={status:archivedCoachingState,summary:'',points:[]};
+        }
+      }
       await route.fulfill({status,json:body,headers:responseHeaders});
     });
     await page.goto(origin+'/replays');
@@ -231,11 +238,46 @@ try {
     assert.notEqual(replayCreates[2].id,replayCreates[0].id,'Changing context after a failed upload creates a distinct request.');
     assert.deepEqual({position:replayCreates[2].position,mmr:replayCreates[2].mmr,training_level:replayCreates[2].training_level},{position:2,mmr:6500,training_level:'advanced'});
     await page.getByText('17 / 16 / 20',{exact:true}).waitFor();
+    if(width===390) {
+      assert.match(await page.locator('#report-ai-status').textContent(),/Комментарий OpenAI подтверждён/);
+      assert.match(await page.locator('#report-ai-status').textContent(),/Учтено для этого разбора: 1\s?200 токенов на входе · 300 в ответе/);
+      assert.match(await page.locator('#report-ai-status').textContent(),/400 из кэша/);
+      assert.match(await page.locator('#report-ai-status').textContent(),/\$0,00275/);
+    } else {
+      assert.match(await page.locator('#report-ai-status').textContent(),/без нового комментария ИИ/);
+      assert.match(await page.locator('#report-ai-status').textContent(),/остановлен лимитом расходов/);
+      assert.equal(await page.locator('.report-ai-usage').count(),0,'Missing accounting is not displayed as zero token usage.');
+    }
+    assert.equal(await page.evaluate(()=>{
+      const top=id=>document.getElementById(id).getBoundingClientRect().top;
+      return top('coaching-heading')<top('next-game-heading')&&top('next-game-plan')<top('report-learning')&&top('next-game-heading')<top('metrics')&&top('metrics')<top('economy-heading');
+    }),true,'Grounded coaching and the next-game plan precede raw statistics and charts.');
     if(screenshotDir) {await page.locator('#report-hero').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(screenshotDir,`portal-${width}-hero-header.png`)});}
     assert.equal(await page.locator('#nickname-field').isHidden(),true);
     assert.equal(await page.locator('#timeline-value').textContent(),'78:41');
     await page.locator('#economy-heading').scrollIntoViewIfNeeded();
     if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-charts.png`)});
+    assert.equal(await page.locator('#combat-strip svg').count(),0,'Episode navigation does not depend on tiny overlapping SVG targets.');
+    assert.equal(await page.getByRole('button',{name:'Смерти · 1',exact:true,pressed:true}).count(),1);
+    await page.locator('.episode-choice').first().focus();await page.locator('.episode-choice').first().press('Enter');
+    assert.equal(await page.locator('#timeline-value').textContent(),'10:00');
+    assert.equal(await page.locator('.episode-choice[aria-pressed=true]').count(),1);
+    assert.match(await page.locator('.episode-detail').textContent(),/Время вне игры по реплею: 0:30/);
+    await page.getByRole('button',{name:'За 30 с до события',exact:true}).click();
+    assert.equal(await page.locator('#timeline-value').textContent(),'9:30');
+    assert.equal(await page.locator('#timeline').getAttribute('aria-valuetext'),'9:30');
+    assert.match(await page.locator('#timeline-snapshot').textContent(),/На графиках: 9:30.*Последняя запись: 9:00.*Убийства:.*Смерти:.*Помощи:/);
+    assert.equal(await page.locator('#gold-chart .chart-cursor').getAttribute('x1'),await page.locator('#xp-chart .chart-cursor').getAttribute('x1'));
+    await page.getByRole('button',{name:'В момент события',exact:true}).click();
+    assert.equal(await page.locator('#timeline-value').textContent(),'10:00');
+    if(screenshotDir) await page.locator('.episode-review').screenshot({path:path.join(screenshotDir,`portal-${width}-episodes.png`)});
+    await page.getByRole('button',{name:'Убийства · 0',exact:true}).click();
+    assert.equal(await page.locator('.episode-choice').count(),0,'Totals do not manufacture missing event timestamps.');
+    assert.match(await page.locator('.episode-detail').textContent(),/нет таймкодов/);
+    await page.getByRole('button',{name:'Ключевые предметы · 2',exact:true}).click();
+    await page.getByRole('button',{name:'21:40 · Покупка · Blink',exact:true}).click();
+    assert.equal(await page.locator('#timeline-value').textContent(),'21:40');
+    await page.getByRole('button',{name:'Смерти · 1',exact:true}).click();
     await page.getByRole('button',{name:'10:00 · Смерть',exact:true}).first().click();
     assert.equal(await page.locator('#timeline-value').textContent(),'10:00');
     assert.equal(await page.locator('#gold-chart .chart-cursor').getAttribute('x1'),await page.locator('#xp-chart .chart-cursor').getAttribute('x1'));
@@ -330,6 +372,8 @@ try {
     await page.locator('#item-rail .item-chip').nth(1).click();
     await page.getByRole('button',{name:'Предыдущий тренерский разбор',exact:true}).click();
     await page.getByRole('heading',{name:'Сохранённый эпизод',exact:true}).waitFor();
+    assert.match(await page.locator('#report-ai-status').textContent(),/Показан сохранённый комментарий/);
+    assert.equal(await page.locator('.report-ai-usage').count(),0,'An archived comment does not inherit the current report call usage.');
     assert.equal(await page.locator('#item-cards .item-card:visible h4').textContent(),'Radiance','An archived report starts with its own first item.');
     assert.match(await page.locator('#hero-context').textContent(),/Контекст сохранённого разбора/);
     assert.match(await page.locator('#hero-context .hero-abilities').textContent(),/7 применений/);
@@ -341,6 +385,20 @@ try {
     await page.getByRole('button',{name:'Вернуться к текущему разбору',exact:true}).click();
     assert.equal(await page.locator('#item-cards .item-card:visible h4').textContent(),'Radiance','Current-report selection never inherits the archived selection.');
     assert.equal(await page.locator('#events [data-evidence-id=old-death]').count(),0);
+    for(const [archiveState,heading] of [['unavailable','Статистика готова · без нового комментария ИИ'],['context_changed','Контекст изменился · комментарий требует обновления'],['unknown','Источник комментария не подтверждён']]) {
+      archivedCoachingState=archiveState;
+      const refreshedArchive=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/replays/${job.id}`);
+      await page.getByRole('button',{name:'Обновить',exact:true}).click();
+      await (await refreshedArchive).finished();
+      await page.waitForFunction(label=>document.querySelector('#previous-report-toggle').textContent===label,archiveState==='unknown'?'Предыдущий тренерский разбор':'Предыдущая версия разбора');
+      await page.locator('#previous-report-toggle').click();
+      assert.equal(await page.locator('#report-ai-status .report-ai-title').textContent(),heading,'Opening an archive preserves its explicit coaching failure/provenance verdict.');
+      assert.doesNotMatch(await page.locator('#report-ai-status').textContent(),/Показан сохранённый комментарий|Комментарий OpenAI подтверждён/);
+      assert.equal(await page.locator('.report-ai-usage').count(),0);
+      if(archiveState!=='unknown')assert.equal(await page.locator('#coaching .report-point').count(),0,'A factual-only or stale-context archive has no ready coaching points.');
+      await page.locator('#previous-report-toggle').click();
+    }
+    archivedCoachingState='saved';
     connectionMissing=true;
     await page.getByRole('button',{name:'Обновить',exact:true}).click();
     const coachingConnect=page.locator('#coaching a.coaching-connect');

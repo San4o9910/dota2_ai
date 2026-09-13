@@ -351,6 +351,10 @@ def test_coach_reuses_exact_paid_response_without_second_dispatch(job, monkeypat
     with database() as connection:
         calls = connection.execute('SELECT * FROM openai_api_calls WHERE owner_id=%s', (job['owner_id'],)).fetchall()
     assert len(calls) == 1 and calls[0]['charged_microusd'] == 1000
+    assert first['provider'] == 'openai' and first['usage_kind'] == 'openai_api'
+    assert first['model'] == openai_provider.MODEL == calls[0]['model']
+    assert first['call_id'] == str(calls[0]['id'])
+    assert calls[0]['source_sha256'] == job['source_sha256'] and calls[0]['video_job_id'] == job['id']
 
 
 def test_run_selective_persists_plan_observations_and_coaching(job, monkeypatch):

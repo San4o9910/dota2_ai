@@ -23,6 +23,7 @@ from preflight import CheckError, NoRedirect, ORIGIN
 from prebuilt_images import ImageError, prepare_bundle
 from stratz_secrets import build_stats_payload, build_stats_source
 from openai_secrets import validate_key as validate_openai_key
+from coaching_evidence import collect_rollout_snapshot
 
 NAME = "narma-vision-pilot-01"
 MARKER = "NARMA managed pilot San4o9910/dota2_ai 2026-09-06"
@@ -827,6 +828,7 @@ print(json.dumps({'providers':providers,'openai_key_present':bool(v.get('OPENAI_
             event('post_activation_allowance',enabled=state.get('enabled'),
                 limit_microusd=state.get('limit_microusd'),spent_microusd=state.get('spent_microusd'),
                 reserved_microusd=state.get('reserved_microusd'))
+            collect_rollout_snapshot(ssh, release, command, event)
             handoff=Path('ops/timeweb/bridge-handoff.json')
             if handoff.exists():
                 expected=json.loads(handoff.read_text())

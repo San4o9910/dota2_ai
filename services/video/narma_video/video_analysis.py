@@ -229,7 +229,9 @@ def coach(job, results):
     result = validate_coaching(json.loads(text), ids)
     if len(result.next_game) != 1:
         raise ValueError('REPLAY_COACH_RESPONSE_INVALID')
-    return {'status': 'ready', **result.model_dump(mode='json')}
+    return {'status': 'ready', 'provider': 'openai', 'usage_kind': 'openai_api',
+            'model': openai_provider.MODEL, 'call_id': str(call['id']),
+            **result.model_dump(mode='json')}
 
 
 def run_selective(job, vision=None):
