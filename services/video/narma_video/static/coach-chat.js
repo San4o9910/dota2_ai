@@ -2,7 +2,8 @@
 const mounts=new WeakMap();
 const el=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
 const labels={foundations:'Основы · по шагам',application:'Применение · выбор вариантов',advanced:'Сложные решения · компромиссы'};
-const time=value=>`${Math.floor(Math.max(0,value)/60)}:${String(Math.floor(Math.max(0,value)%60)).padStart(2,'0')}`;
+const time=value=>`${value<0?'−':''}${Math.floor(Math.abs(value)/60)}:${String(Math.floor(Math.abs(value)%60)).padStart(2,'0')}`;
+const events={death:'Смерть',kill:'Убийство',assist:'Помощь',purchase:'Покупка',item_used:'Применение предмета',item_observed:'Предмет у героя',buyback:'Выкуп',respawn:'Возвращение',tower:'Башня'};
 
 export function mountCoachChat(host,{api,jobId,reportHash,evidence=[],context={},identity,isCurrent=()=>true,onEvidence=()=>{}}){
   const key=JSON.stringify([identity,jobId,reportHash,context]);
@@ -20,7 +21,7 @@ export function mountCoachChat(host,{api,jobId,reportHash,evidence=[],context={}
   input.rows=3;input.maxLength=2000;input.required=true;input.placeholder='Что стоило проверить перед этим решением?';field.append(input);
   const episodeLabel=el('label','Эпизод для обсуждения'),episode=el('select');episode.append(new Option('Весь матч',''));
   const eventMap=new Map(evidence.filter(item=>typeof item?.id==='string'&&Number.isFinite(item.time)).map(item=>[item.id,item]));
-  for(const item of [...eventMap.values()].sort((a,b)=>a.time-b.time))episode.append(new Option(`${time(item.time)} · ${String(item.title??item.label??item.type).slice(0,85)}`,item.id));
+  for(const item of [...eventMap.values()].sort((a,b)=>a.time-b.time))episode.append(new Option(`${time(item.time)} · ${String(item.title??item.label??events[item.type]??'Событие').slice(0,85)}`,item.id));
   episodeLabel.append(episode);
   const send=el('button','Спросить тренера','primary');send.type='submit';send.disabled=true;
   const refresh=el('button','Обновить разговор','quiet');refresh.type='button';

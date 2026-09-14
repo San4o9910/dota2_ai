@@ -9,6 +9,7 @@
   --text: #fffdf1;
   --muted: #b5c2c6;
   --accent: #ff4103;
+  --accent-text: #ff9a78;
   --accent-ink: #001621;
   --teal: #8ad6c5;
   --danger: #f1a89d;
@@ -80,7 +81,7 @@ h1, .home-lead h1 { font-family: var(--display); font-weight: 400; font-size: cl
 .mode-step { display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 14px; padding: 20px 0; border-top: 1px solid var(--line); }
 .mode-step h4 { margin: 0 0 9px; font-size: 17px; font-weight: 650; }
 .mode-step p { margin: 0; font-size: 15px; line-height: 1.8; white-space: pre-line; overflow-wrap: anywhere; }
-.mode-number { color: var(--accent); font-size: 12px; padding-top: 3px; font-variant-numeric: tabular-nums; }
+.mode-number { color: var(--accent-text); font-size: 12px; padding-top: 3px; font-variant-numeric: tabular-nums; }
 .coach-chat { margin: 36px 0 12px; padding: 28px; border: 1px solid var(--line); border-top: 3px solid var(--accent); background: var(--bg); min-width: 0; scroll-margin-top: 28px; }
 .chat-heading h3 { font-family: var(--display); font-size: 30px; line-height: 1.2; font-weight: 400; margin: 8px 0 16px; }
 .chat-log { max-height: 560px; overflow: auto; padding: 6px 4px 6px 0; overscroll-behavior: contain; }

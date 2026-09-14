@@ -126,6 +126,23 @@ def test_background_turn_is_durable_and_blocks_duplicate_dispatch(replay, monkey
     assert len(calls) == 1 and chat.history(job['owner_id'], job['id'])['turns'][0]['state'] == 'succeeded'
 
 
+def test_changed_report_during_answer_cannot_publish_old_context(replay, monkeypatch):
+    job, current = replay
+    def change():
+        facts = deepcopy(current['result_payload']);facts['metrics']['kills'] += 1
+        with database() as connection:
+            connection.execute('UPDATE replay_jobs SET result_payload=%s WHERE id=%s', (Jsonb(facts), job['id']))
+    fake_provider(monkeypatch, before=change)
+    body = command(current)
+    assert chat.ask(job['owner_id'], job['id'], body)['context_changed'] is True
+    assert chat.history(job['owner_id'], job['id'])['turns'] == []
+    with database() as connection:
+        turn = connection.execute('SELECT * FROM coach_chat_turns WHERE id=%s', (body.id,)).fetchone()
+        call = connection.execute('SELECT * FROM openai_api_calls WHERE task_id=%s', (body.id,)).fetchone()
+        assert turn['state'] == 'failed' and turn['answer'] is None
+        assert call['output_text'] is None and call['charged_microusd'] > 0
+
+
 @pytest.mark.parametrize('failure', ['unknown_usage', 'invalid_evidence'])
 def test_failed_paid_response_never_retries_or_releases_unknown_cost(replay, monkeypatch, failure):
     job, current = replay

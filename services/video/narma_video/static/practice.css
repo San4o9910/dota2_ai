@@ -1,4 +1,4 @@
-.practice { color: var(--text, #fffdf1); line-height: 1.55; --practice-surface: var(--surface, #0b2530); --practice-line: var(--line, #53666c); --practice-muted: var(--muted, #b5c2c6); --practice-gold: var(--accent, #dfbd79); --practice-teal: var(--teal, #7dd9c4); }
+.practice { color: var(--text, #fffdf1); line-height: 1.55; --practice-surface: var(--surface, #0b2530); --practice-line: var(--line, #53666c); --practice-muted: var(--muted, #b5c2c6); --practice-gold: var(--accent-text, #dfbd79); --practice-teal: var(--teal, #7dd9c4); }
 .practice *, .practice *::before, .practice *::after { box-sizing: border-box; }
 .practice h2, .practice h3, .practice h4, .practice p { margin: 0; }
 .practice h2 { font-size: clamp(1.5rem, 3.3vw, 2rem); line-height: 1.2; letter-spacing: -.025em; }
