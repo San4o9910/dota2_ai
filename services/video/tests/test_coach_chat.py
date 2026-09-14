@@ -4,7 +4,7 @@ import json
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException, FastAPI
+from fastapi import HTTPException, FastAPI, BackgroundTasks
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
@@ -21,7 +21,7 @@ ANSWER = {'answer': 'В журнале после смерти записан в
 def replay(owned):
     job, facts = owned
     with database() as connection:
-        connection.execute("UPDATE replay_jobs SET state='ready',result_payload=%s WHERE id=%s", (Jsonb(facts), job['id']))
+        connection.execute("UPDATE replay_jobs SET state='ready',progress=100,lease_token=NULL,lease_expires_at=NULL,result_payload=%s WHERE id=%s", (Jsonb(facts), job['id']))
         current = chat._current(connection, job['owner_id'], job['id'])
     return job, current
 
@@ -111,6 +111,21 @@ def test_disabled_allowance_cannot_create_chat_call(replay, monkeypatch):
     assert chat.history(job['owner_id'], job['id'])['turns'] == []
 
 
+def test_background_turn_is_durable_and_blocks_duplicate_dispatch(replay, monkeypatch):
+    job, current = replay;calls = fake_provider(monkeypatch);background = BackgroundTasks()
+    body = command(current)
+    first = chat.ask(job['owner_id'], job['id'], body, background)
+    assert first['turn']['state'] == 'running' and not calls
+    assert chat.ask(job['owner_id'], job['id'], body, background) == first
+    assert len(background.tasks) == 1
+    with pytest.raises(HTTPException) as caught:
+        chat.ask(job['owner_id'], job['id'], command(current), background)
+    assert caught.value.status_code == 409
+    task = background.tasks[0]
+    task.func(*task.args, **task.kwargs)
+    assert len(calls) == 1 and chat.history(job['owner_id'], job['id'])['turns'][0]['state'] == 'succeeded'
+
+
 @pytest.mark.parametrize('failure', ['unknown_usage', 'invalid_evidence'])
 def test_failed_paid_response_never_retries_or_releases_unknown_cost(replay, monkeypatch, failure):
     job, current = replay
@@ -133,8 +148,7 @@ def test_deletion_during_answer_hides_text_but_settles_cost(replay, monkeypatch)
             provider.forget_output(connection, owner_id=job['owner_id'], job_id=job['id'])
     calls = fake_provider(monkeypatch, before=remove)
     body = command(current)
-    with pytest.raises(HTTPException):
-        chat.ask(job['owner_id'], job['id'], body)
+    assert chat.ask(job['owner_id'], job['id'], body)['context_changed'] is True
     assert len(calls) == 1
     with database() as connection:
         turn = connection.execute('SELECT * FROM coach_chat_turns WHERE id=%s', (body.id,)).fetchone()

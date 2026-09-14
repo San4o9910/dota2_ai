@@ -14,7 +14,7 @@ function dependency(name) {
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const files=Object.fromEntries(['/register','/login','/coach','/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
-Object.assign(files,{'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
+Object.assign(files,{'/assets/vision-theme.css':['vision-theme.css','text/css'],'/assets/coach-chat.js':['coach-chat.js','text/javascript'],'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type',file[1]); response.end(await readFile(path.join(root,file[0])));
@@ -77,7 +77,7 @@ function personalCoachFixtures() {
   function detail(id,{unavailable=false}={}) {
     const match=history.find(item=>item.job_id===id);assert.ok(match);
     const event={id:`${id}-death`,type:'death',time:id==='coach-new'?720:600,title:'Возвращение и смерть',details:'Синтетический факт для проверки перехода.'};
-    const coaching=id==='coach-new'?{status:'ready',schema_version:'narma.replay-coaching.v2',summary:'Начни с решения о возвращении на линию.',points:[structuredPoint],next_game:[{title:'Одна проверка до возвращения',action:'До выхода назови цель и безопасный путь.',measure:'После игры проверь три таких решения.',evidence_ids:[event.id]}]}:{status:'ready',summary:'Сохранённый комментарий старого формата.',points:[{title:'Старое наблюдение',observation:'В реплее есть смерть на десятой минуте.',advice:'Проверь положение перед возвращением.',evidence_ids:[event.id]}],next_game:[]};
+    const coaching=id==='coach-new'?{status:'ready',schema_version:'narma.replay-coaching.v3',training_level:'advanced',lesson:{first:'Сравни возвращение с ожиданием.',second:'Проверь доступную информацию перед решением.',third:'При потере цели отмени возвращение.',evidence_ids:[event.id]},summary:'Начни с решения о возвращении на линию.',points:[structuredPoint],next_game:[{title:'Одна проверка до возвращения',action:'До выхода назови цель и безопасный путь.',measure:'После игры проверь три таких решения.',evidence_ids:[event.id]}]}:{status:'ready',summary:'Сохранённый комментарий старого формата.',points:[{title:'Старое наблюдение',observation:'В реплее есть смерть на десятой минуте.',advice:'Проверь положение перед возвращением.',evidence_ids:[event.id]}],next_game:[]};
     coaching.context={position:match.position};
     if(unavailable){coaching.status='unavailable';coaching.failure_code='OPENAI_BUDGET_EXCEEDED';}
     return {replay:{id,state:'ready',progress:100,match_id:match.match_id,nickname:profile.nickname,created_at:match.played_at,source_retained:true},report:{...structuredClone(report),match_id:match.match_id,player:{...report.player,match_id:match.match_id},evidence:[event],coaching,coverage:{...report.coverage,source_sha256:match.source_sha256}},report_sha256:match.report_sha256,hero_context:null,parts:[],archived_report:null,coaching_status:unavailable?{state:'unavailable',provider:'openai_api',verified_openai:false,reason_code:'OPENAI_BUDGET_EXCEEDED',usage:null,billing_state:'none',charged_microusd:null}:{state:'ready',provider:'openai_api',verified_openai:true,reason_code:null,usage:{input_tokens:1000,output_tokens:200,cached_input_tokens:0},billing_state:'settled',charged_microusd:2000}};
@@ -919,6 +919,8 @@ try {
     await page.locator('#coach-refresh').click();
     await page.locator('#coach-decisions .decision-details').waitFor();
     assert.equal(await page.locator('#coach-match-select').inputValue(),'coach-new');
+    assert.equal(await page.locator('#coach-match-detail .mode-step').count(),3);
+    await page.locator('#coach-match-detail').getByRole('heading',{name:'Цена альтернативы',exact:true}).waitFor();
     assert.equal(await page.locator('#coach-matches .coach-match-row').count(),2);
     assert.match(await page.locator('#coach-match-detail').textContent(),/Матч 8984100002/);
     assert.match(await page.locator('#coach-next-game').textContent(),/До выхода назови цель и безопасный путь/);

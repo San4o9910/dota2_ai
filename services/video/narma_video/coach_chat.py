@@ -3,7 +3,7 @@ import hashlib
 import json
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -120,7 +120,7 @@ def history(owner_id, job_id):
             reject(404, 'COACH_CHAT_SOURCE', 'Готовый разбор не найден. Обнови список матчей.')
         # An interrupted turn is never resent; an uncertain paid hold stays in the ledger.
         connection.execute("""UPDATE coach_chat_turns SET state='failed',error_code='COACH_CHAT_INTERRUPTED',
-            finished_at=now() WHERE owner_id=%s AND state='running' AND lease_until<=clock_timestamp()""", (owner_id,))
+            input_data=NULL,finished_at=now() WHERE owner_id=%s AND state='running' AND lease_until<=clock_timestamp()""", (owner_id,))
         allowance = budget.status(connection)
         return {'turns': [_public(row) for row in _history(connection, owner_id, current)],
                 'report_sha256': current['report_sha256'], 'context': current['chat_context'],
@@ -137,7 +137,7 @@ def validate_answer(value, evidence_ids):
     return result.model_dump()
 
 
-def ask(owner_id, job_id, body):
+def ask(owner_id, job_id, body, background=None):
     from .replay_coach import prepare_evidence
     with database() as connection:
         _locks(connection, owner_id)
@@ -181,9 +181,18 @@ def ask(owner_id, job_id, body):
             if code.startswith('OPENAI_BUDGET'):
                 reject(429, 'COACH_CHAT_BUDGET', 'Лимит ИИ сейчас недоступен. Сохранённые ответы можно читать.')
             reject(503, 'COACH_CHAT_UNAVAILABLE', 'Тренер временно недоступен. Вопрос не отправлен.')
+    if background is not None:
+        # Respond before the reverse-proxy timeout. The durable turn remains
+        # readable while the bounded call runs; a restart never resends it.
+        background.add_task(_answer, owner_id, body.id, lease, call['id'], data, ids)
+        return {'turn': _public(turn)}
+    return _answer(owner_id, body.id, lease, call['id'], data, ids)
+
+
+def _answer(owner_id, turn_id, lease, call_id, data, ids):
     answer, code = None, None
     try:
-        response = provider.perform_reserved(call['id'], owner_id, INSTRUCTIONS, data,
+        response = provider.perform_reserved(call_id, owner_id, INSTRUCTIONS, data,
                                              Answer.model_json_schema(), max_output_tokens=2400)
         answer = validate_answer(json.loads(response['text']), ids)
     except Exception:
@@ -191,14 +200,16 @@ def ask(owner_id, job_id, body):
         code = 'COACH_CHAT_RESPONSE_UNAVAILABLE'
     with database() as connection:
         _locks(connection, owner_id)
-        active = source_for_call(connection, owner_id, body.id, lease)
+        active = source_for_call(connection, owner_id, turn_id, lease)
         if not active or not active['live']:
             connection.execute("""UPDATE coach_chat_turns SET state='failed',answer=NULL,input_data=NULL,
-                error_code='COACH_CHAT_CHANGED',finished_at=now() WHERE id=%s AND owner_id=%s AND state='running'""", (body.id, owner_id))
-            reject(409, 'COACH_CHAT_CHANGED', 'Контекст матча изменился. Открой актуальный разбор.')
+                error_code='COACH_CHAT_CHANGED',finished_at=now() WHERE id=%s AND owner_id=%s AND state='running'""", (turn_id, owner_id))
+            # A background response is already sent; commit the failed state
+            # without throwing after the HTTP response or rolling it back.
+            return {'turn': None, 'context_changed': True}
         turn = connection.execute('''UPDATE coach_chat_turns SET answer=%s,state=%s,error_code=%s,
             input_data=NULL,finished_at=now() WHERE id=%s AND owner_id=%s RETURNING *''',
-            (Jsonb(answer) if answer else None, 'succeeded' if answer else 'failed', code, body.id, owner_id)).fetchone()
+            (Jsonb(answer) if answer else None, 'succeeded' if answer else 'failed', code, turn_id, owner_id)).fetchone()
         return {'turn': _public(turn)}
 
 
@@ -209,9 +220,9 @@ def attach_coach_chat(app):
     def get_chat(job_id: UUID, account=Depends(account_required)):
         return history(account['owner_id'], job_id)
 
-    @router.post('/{job_id}/chat', dependencies=[Depends(csrf)])
-    async def post_chat(job_id: UUID, request: Request, account=Depends(account_required)):
+    @router.post('/{job_id}/chat', status_code=202, dependencies=[Depends(csrf)])
+    async def post_chat(job_id: UUID, request: Request, background: BackgroundTasks, account=Depends(account_required)):
         body = await json_body(request, Question)
-        return await run_in_threadpool(ask, account['owner_id'], job_id, body)
+        return await run_in_threadpool(ask, account['owner_id'], job_id, body, background)
 
     app.include_router(router)
