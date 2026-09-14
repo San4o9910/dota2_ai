@@ -1,6 +1,8 @@
 name: Deep learning and public builds verification
 
 on:
+  pull_request:
+    branches: [codex/openai-video-coach]
   push:
     branches: [codex/deep-learning-workshop-builds, codex/openai-video-coach, codex/production-readiness]
   workflow_dispatch:
