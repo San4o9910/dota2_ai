@@ -314,6 +314,8 @@ from .web import attach_web
 attach_web(app)
 from .replay_jobs import attach_replays
 attach_replays(app)
+from .coach_chat import attach_coach_chat
+attach_coach_chat(app)
 from .replay_archive import attach_replay_archive
 attach_replay_archive(app)
 from .hero_pool import attach_hero_pool

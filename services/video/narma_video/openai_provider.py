@@ -148,6 +148,9 @@ def _source(connection, *, owner_id, kind, job_id=None, video_job_id=None, task_
             (video_job_id, owner_id, lease_token)).fetchone()
         if row and row.get('storage_deleted_at') is not None:
             row = None
+    elif kind == 'chat' and task_id and not job_id and not video_job_id:
+        from .coach_chat import source_for_call
+        row = source_for_call(connection, owner_id, task_id, lease_token)
     elif kind == 'hermes' and task_id and not job_id and not video_job_id:
         row = connection.execute('''SELECT *,lease_until>clock_timestamp() AS live FROM hermes_tasks
             WHERE id=%s AND owner_id=%s AND state='running' AND lease_token=%s
@@ -173,12 +176,15 @@ def _source(connection, *, owner_id, kind, job_id=None, video_job_id=None, task_
     elif kind == 'video':
         live = connection.execute('SELECT lease_expires_at>clock_timestamp() AS live FROM video_jobs WHERE id=%s',
                                   (video_job_id,)).fetchone()
+    elif kind == 'chat':
+        live = connection.execute('SELECT lease_until>clock_timestamp() AS live FROM coach_chat_turns WHERE id=%s',
+                                  (task_id,)).fetchone()
     else:
         live = connection.execute('SELECT lease_until>clock_timestamp() AS live FROM hermes_tasks WHERE id=%s',
                                   (task_id,)).fetchone()
     if not live or not live['live']:
         raise ProviderError('OPENAI_LEASE_LOST')
-    digest = row.get('snapshot_sha256' if kind == 'hermes' else 'source_sha256')
+    digest = row.get('snapshot_sha256' if kind in ('hermes', 'chat') else 'source_sha256')
     if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
         raise ProviderError('OPENAI_REQUEST_INVALID')
     if source_sha256 is not None and digest != source_sha256:
@@ -399,6 +405,15 @@ def forget_output(connection, *, owner_id, video_job_id=None, job_id=None):
     """
     if bool(video_job_id) == bool(job_id):
         raise ProviderError('OPENAI_REQUEST_INVALID')
+    if job_id:
+        connection.execute('''UPDATE openai_api_calls SET output_text=NULL,output_sha256=NULL,
+            state=CASE WHEN state='succeeded' THEN 'failed' ELSE state END,error_code='OPENAI_SOURCE_DELETED'
+            WHERE owner_id=%s AND kind='chat' AND task_id IN
+                (SELECT id FROM coach_chat_turns WHERE owner_id=%s AND job_id=%s)''',
+            (owner_id, owner_id, job_id))
+        connection.execute('''UPDATE coach_chat_turns SET state='deleted',question='',input_data=NULL,
+            answer=NULL,context='{}',evidence_id=NULL,finished_at=now()
+            WHERE owner_id=%s AND job_id=%s''', (owner_id, job_id))
     return connection.execute('''UPDATE openai_api_calls SET output_text=NULL,output_sha256=NULL,
         state=CASE WHEN state='succeeded' THEN 'failed' ELSE state END,
         error_code='OPENAI_SOURCE_DELETED'

@@ -79,6 +79,46 @@ class ReplayCoachingV2(BaseModel):
     next_game: list[NextGameTask] = Field(min_length=1, max_length=1)
 
 
+class ModeLesson(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    first: str = Field(min_length=1, max_length=700)
+    second: str = Field(min_length=1, max_length=700)
+    third: str = Field(min_length=1, max_length=700)
+    evidence_ids: list[str] = Field(min_length=1, max_length=8)
+
+
+class ReplayCoachingV3(ReplayCoachingV2):
+    schema_version: Literal['narma.replay-coaching.v3']
+    training_level: Literal['foundations', 'application', 'advanced']
+    lesson: ModeLesson
+
+
+MODE_LESSONS = {
+    'foundations': ('Понятие простыми словами', 'Действие по шагам', 'Сигнал для проверки'),
+    'application': ('Сравнение вариантов', 'Условие выбора', 'Исключение'),
+    'advanced': ('Цена альтернативы', 'Неизвестное и окно решения', 'Условие отмены плана'),
+}
+
+
+def mode_contract(level):
+    if level not in MODE_LESSONS:
+        return API_SYSTEM_V2, ReplayCoachingV2.model_json_schema(), COACHING_SCHEMA_V2
+    labels = MODE_LESSONS[level]
+    instructions = API_SYSTEM_V2 + (
+        '\nДля этого запроса версия ответа narma.replay-coaching.v3. '
+        f'training_level обязан быть {level}. lesson — главный учебный разбор одного '
+        'подтверждённого эпизода, а не повтор summary. '
+        f'lesson.first: {labels[0]}. lesson.second: {labels[1]}. lesson.third: {labels[2]}. '
+        'Свяжи объяснение с текущим героем, выбранной позицией и evidence_ids. '
+        'Не выдумывай недостающие факты. Глубина меняет способ объяснения и выбор '
+        'учебного вопроса, но не статистику матча. Сохрани ровно один практический фокус.'
+    )
+    schema = ReplayCoachingV3.model_json_schema()
+    # Constrain the actual response, not just a free-form prompt hint.
+    schema['properties']['training_level'] = {'type': 'string', 'const': level}
+    return instructions, schema, 'narma.replay-coaching.v3'
+
+
 SYSTEM = """Ты тренер по Dota. Разбери одного закреплённого игрока по фактам из реплея.
 Разбор относится именно к player.hero: не подменяй героя и не своди план к одинаковому
 фарму для всех героев. Учитывай его записанные ability_usage, item_usage и покупки.
@@ -289,7 +329,7 @@ def usage_facts(rows):
     return result
 
 
-def validate_coaching(value, evidence_ids, *, expected_schema=None):
+def validate_coaching(value, evidence_ids, *, expected_schema=None, expected_level=None):
     """Read old saved outputs and validate every field of new decision cards.
 
     Newly requested v2 responses cannot silently downgrade to the legacy shape.
@@ -299,10 +339,18 @@ def validate_coaching(value, evidence_ids, *, expected_schema=None):
         version = value.get('schema_version') if isinstance(value, dict) else None
         if expected_schema is not None and version != expected_schema:
             raise ValueError('schema mismatch')
-        result = (ReplayCoachingV2 if version is not None else ReplayCoaching).model_validate(value)
+        if expected_level is not None and value.get('training_level') != expected_level:
+            raise ValueError('training level mismatch')
+        model = ReplayCoachingV3 if version == 'narma.replay-coaching.v3' else ReplayCoachingV2 if version is not None else ReplayCoaching
+        result = model.model_validate(value)
     except (ValidationError, TypeError, ValueError):
         raise ValueError('REPLAY_COACH_RESPONSE_INVALID') from None
     texts = [result.summary]
+    if isinstance(result, ReplayCoachingV3):
+        lesson = result.lesson
+        if len(set(lesson.evidence_ids)) != len(lesson.evidence_ids) or not set(lesson.evidence_ids) <= evidence_ids:
+            raise ValueError('REPLAY_COACH_EVIDENCE_MISMATCH')
+        texts.extend([lesson.first, lesson.second, lesson.third])
     for point in [*result.points, *result.next_game]:
         if len(set(point.evidence_ids)) != len(point.evidence_ids) or any(
             evidence_id not in evidence_ids for evidence_id in point.evidence_ids
@@ -656,8 +704,7 @@ def reserve_api_replay(job, factual_report, context, encoded):
             or str(factual_report.get('match_id')) != job['match_id']
             or coverage.get('source_sha256') != job['source_sha256']):
         raise ValueError('REPLAY_COACH_INPUT_INVALID')
-    schema = ReplayCoachingV2.model_json_schema()
-    instructions = API_SYSTEM_V2
+    instructions, schema, contract = mode_contract(context.get('training_level'))
     with database() as connection:
         connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (job['owner_id'],))
         connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))', (job['owner_id'],))
@@ -687,21 +734,19 @@ def reserve_api_replay(job, factual_report, context, encoded):
         previous = connection.execute('''SELECT request_sha256 FROM openai_api_calls
             WHERE owner_id=%s AND job_id=%s AND source_sha256=%s''',
             (job['owner_id'], job['id'], job['source_sha256'])).fetchone()
-        contract = COACHING_SCHEMA_V2
         if previous:
-            legacy_schema = ReplayCoaching.model_json_schema()
-            legacy_digest = openai_provider.request_digest(SYSTEM, encoded, legacy_schema)
-            if previous['request_sha256'] == legacy_digest:
-                schema, instructions, digest = legacy_schema, SYSTEM, legacy_digest
-                contract = 'legacy'
-        if contract == COACHING_SCHEMA_V2:
-            # A larger new schema must not reject already-paid legacy text
-            # whose exact original request still fits the unchanged limit.
-            digest = openai_provider.request_digest(instructions, encoded, schema)
+            for old_contract, old_instructions, old_model in (
+                    ('legacy', SYSTEM, ReplayCoaching), (COACHING_SCHEMA_V2, API_SYSTEM_V2, ReplayCoachingV2)):
+                old_schema = old_model.model_json_schema()
+                old_digest = openai_provider.request_digest(old_instructions, encoded, old_schema)
+                if previous['request_sha256'] == old_digest:
+                    schema, instructions, contract = old_schema, old_instructions, old_contract
+                    break
+        digest = openai_provider.request_digest(instructions, encoded, schema)
         row = openai_provider.reserve_call(connection, owner_id=job['owner_id'],
             request_key=f"replay:{job['id']}:{digest}", instructions=instructions, input_data=encoded,
             schema=schema, kind='replay', job_id=job['id'], lease_token=job['lease_token'])
-        return {**row, '_coaching_contract': contract}
+        return {**row, '_coaching_contract': contract, '_instructions': instructions, '_schema': schema}
 
 
 def analyze_api_replay(job, factual_report, context, encoded, evidence_ids):
@@ -711,8 +756,8 @@ def analyze_api_replay(job, factual_report, context, encoded, evidence_ids):
     elif row['state'] == 'reserved':
         legacy = row.get('_coaching_contract') == 'legacy'
         response = openai_provider.perform_reserved(row['id'], job['owner_id'],
-            SYSTEM if legacy else API_SYSTEM_V2, encoded,
-            (ReplayCoaching if legacy else ReplayCoachingV2).model_json_schema())
+            row.get('_instructions', SYSTEM if legacy else API_SYSTEM_V2), encoded,
+            row.get('_schema', (ReplayCoaching if legacy else ReplayCoachingV2).model_json_schema()))
         output = response['text']
     else:
         raise openai_provider.ProviderError('OPENAI_CALL_ALREADY_ATTEMPTED')
@@ -721,8 +766,10 @@ def analyze_api_replay(job, factual_report, context, encoded, evidence_ids):
     except (TypeError, ValueError):
         raise ValueError('REPLAY_COACH_RESPONSE_INVALID') from None
     # Accounting has already committed; bad advice cannot release a paid attempt.
-    expected = COACHING_SCHEMA_V2 if row.get('_coaching_contract') == COACHING_SCHEMA_V2 else None
-    return validate_coaching(value, evidence_ids, expected_schema=expected), str(row['id'])
+    contract = row.get('_coaching_contract')
+    expected = contract if contract in (COACHING_SCHEMA_V2, 'narma.replay-coaching.v3') else None
+    return validate_coaching(value, evidence_ids, expected_schema=expected,
+        expected_level=context.get('training_level') if expected == 'narma.replay-coaching.v3' else None), str(row['id'])
 
 
 def enrich_report(job, factual_report, coach=None):
