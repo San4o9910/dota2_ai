@@ -7,12 +7,26 @@ claim.
 
 ## Access and source files
 
-The existing sole portal account becomes the platform owner in migration 023.
-The owner issues email-bound invitations after re-entering their password. The
-recipient opens the invitation and chooses a password. Invitations expire after
-24 hours and work once. No mail is sent by the application: the owner shares the
-link with the intended recipient. The account admission ceiling is a guardrail,
-not a claim that this VM can process that many simultaneous games.
+The existing platform owner remains unchanged. Public registration is available at
+`/register` after the owner has initialized the platform. Visitors supply email,
+a password of 12–256 characters and matching confirmation. Registration creates
+an isolated ordinary account and signs it in; it never grants platform authority,
+reuses an existing account or calls an AI provider. `/login` opens the login form.
+Email is a login identifier, **not verified email ownership**. No confirmation or
+password-recovery emails are sent. Save the offline recovery codes after signup.
+
+The shared admission ceiling remains 25 accounts including the owner. Existing
+unexpired invitations reserve seats; public signup cannot claim an invited email
+without its token. All account admission paths serialize under the same database
+lock. Registration is rate limited independently of login and does not increase,
+reset or extend any AI allowance. The ceiling is a pilot guardrail, not a claim
+that the VM can process 25 simultaneous games.
+
+The owner can still issue email-bound one-use invitations after re-entering their
+password. Invitations expire after 24 hours and must be shared privately.
+This registration release does not delete or replace existing accounts. Removing
+an old account requires identifying its exact owner and preserving provider cost
+records; public signup never takes over its matches or administrator rights.
 
 Every account can generate five offline recovery codes after password
 reauthentication. Store them privately outside the application. A code resets the
@@ -35,7 +49,7 @@ space while preserving an available report.
    preserved. Do not refill a budget to make a deployment pass. If the idle-worker
    preflight reports active work, allow it to finish before the next deployment.
 3. Verify the new version's readiness, sign in with the existing account, generate
-   recovery codes, then exercise one invitation with a separate test account.
+   recovery codes, then exercise registration with a separate test account and verify isolation.
 4. Register the operational monitor on the default branch with a tested immutable
    checkout reference. Confirm GitHub Actions notification preferences and an
    actual notification receipt. Workflow code alone does not prove delivery.

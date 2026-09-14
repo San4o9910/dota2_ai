@@ -343,6 +343,8 @@ def explore_page():
 
 
 @app.get('/setup')
+@app.get('/register')
+@app.get('/login')
 @app.get('/coach')
 @app.get('/videos')
 @app.get('/replays')

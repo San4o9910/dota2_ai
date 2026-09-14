@@ -157,6 +157,8 @@ def rate_limit(request: Request, purpose: str, email: str = ""):
     # short global window bounds KDF load without limiting all users together
     # to only sixty logins per fifteen minutes.
     buckets = [("global-v2-" + purpose, 120, 60), (source, 60, 900), (identity, 10, 900)]
+    if purpose == "register":
+        buckets = [("global-v2-register", 10, 60), (source, 5, 900), (identity, 3, 900)]
     if email:
         target = hashlib.sha256((purpose + "\0email\0" + email).encode()).hexdigest()
         buckets.append((target, 10, 900))
@@ -330,6 +332,7 @@ def attach_web(app):
         coaching = {'mode': 'unavailable', 'available': False, 'personal_connect': False}
         with database() as connection:
             configured = bool(connection.execute("SELECT 1 FROM portal_accounts LIMIT 1").fetchone())
+            registration_available = bool(connection.execute("SELECT 1 FROM portal_accounts WHERE is_platform_owner LIMIT 1").fetchone())
             if account:
                 selected = os.environ.get('REPLAY_COACH_PROVIDER', 'gemini')
                 if selected == 'openai_api':
@@ -342,6 +345,7 @@ def attach_web(app):
                         coaching = {'mode': 'personal', 'available': bool(current and current['available']),
                                     'personal_connect': chatgpt_auth.configured()}
         return {"authenticated": bool(account), "setup_required": not configured,
+                "registration_available": registration_available,
                 "user": {"email": account["email"], "is_platform_owner": account["is_platform_owner"]} if account else None,
                 "profile": profile_for(account["owner_id"]) if account else None, 'coaching': coaching}
 

@@ -13,7 +13,7 @@ function dependency(name) {
 }
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
-const files=Object.fromEntries(['/coach','/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
+const files=Object.fromEntries(['/register','/login','/coach','/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
 Object.assign(files,{'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
@@ -778,6 +778,84 @@ try {
     assert.equal(await page.locator('#pilot-invitations').isHidden(),true);
     assert.deepEqual(commands.find(command=>command.endpoint==='/api/auth/accept-invitation').body,{email:'guest@example.test',password:'Synthetic passphrase 2026',token:inviteToken});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);await page.close();
+  }
+
+  // Public registration: isolated synthetic accounts, no live signup or AI calls.
+  for(const width of [390,1440]) {
+    const page=await browser.newPage({viewport:{width,height:1000}}),errors=[],writes=[];
+    const fixtures=personalCoachFixtures();
+    let authenticated=false,available=true,signupError=true,releaseSignup,signupStarted;
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.route('**/*',async route=>{
+      if(new URL(route.request().url()).origin!==origin)await route.abort();else await route.fallback();
+    });
+    await page.route('**/api/**',async route=>{
+      const request=route.request(),endpoint=new URL(request.url()).pathname;
+      let body,status=200;
+      if(request.method()!=='GET')writes.push({endpoint,body:request.postDataJSON()});
+      if(endpoint==='/api/session')body={authenticated,setup_required:false,registration_available:available,user:authenticated?{email:'new@example.test',is_platform_owner:false}:null,coaching:{mode:'platform',available:false,personal_connect:false}};
+      else if(endpoint==='/api/auth/register') {
+        if(signupError){status=409;body={detail:'Аккаунт с этой почтой уже существует. Войдите или восстановите доступ.'};}
+        else {await new Promise(resolve=>{releaseSignup=resolve;signupStarted();});authenticated=true;status=201;body={authenticated:true};}
+      }
+      else if(endpoint==='/api/auth/logout'){authenticated=false;body={authenticated:false};}
+      else if(endpoint==='/api/auth/login'){authenticated=true;body={authenticated:true};}
+      else if(endpoint==='/api/profile')body={profile:null};
+      else if(endpoint==='/api/replays')body={replays:[],worker_ready:true};
+      else if(endpoint==='/api/hero-pool')body=fixtures.pool(true);
+      else if(endpoint==='/api/learning')body=fixtures.learning(true);
+      else throw Error(`Unexpected registration request ${endpoint}`);
+      await route.fulfill({status,json:body});
+    });
+    await page.goto(origin+'/login');
+    await page.locator('#auth-switch').getByText('Нет аккаунта? Создать аккаунт').waitFor();
+    await page.locator('#auth-switch').click();
+    assert.equal(new URL(page.url()).pathname,'/register');
+    await page.locator('#auth-title').getByText('Создай аккаунт NARMA VISION').waitFor();
+    assert.equal(await page.locator('#password').getAttribute('autocomplete'),'new-password');
+    assert.equal(await page.locator('#password-confirmation').isEnabled(),true);
+    assert.equal(await page.locator('#forgot-password').isHidden(),true);
+    await page.locator('#email').fill('new@example.test');
+    await page.locator('#password').fill('Synthetic passphrase 2026');
+    await page.locator('#password-confirmation').fill('Synthetic different passphrase');
+    await page.locator('#auth-submit').click();
+    await page.locator('#notice').getByText('Пароли не совпадают. Проверь повторный ввод.').waitFor();
+    assert.equal(writes.length,0);
+    await page.locator('#password-confirmation').fill('Synthetic passphrase 2026');
+    await page.locator('#auth-submit').click();
+    await page.locator('#notice').getByText(/Аккаунт с этой почтой уже существует/).waitFor();
+    await page.waitForFunction(()=>!document.querySelector('#auth-submit').disabled);
+    assert.deepEqual(writes[0],{endpoint:'/api/auth/register',body:{email:'new@example.test',password:'Synthetic passphrase 2026',password_confirmation:'Synthetic passphrase 2026'}});
+    assert.equal(await page.locator('#workspace').isHidden(),true);
+    // Browser Back switches to login without leaving a required hidden field.
+    await page.goBack();
+    assert.equal(new URL(page.url()).pathname,'/login');
+    await page.locator('#auth-title').getByText('Вход в NARMA VISION',{exact:true}).waitFor();
+    assert.equal(await page.locator('#password-confirmation').isEnabled(),false);
+    await page.locator('#forgot-password').click();assert.equal(await page.locator('#auth-switch').isHidden(),true);
+    await page.locator('#return-login').click();await page.locator('#auth-switch').waitFor();
+    await page.goto(origin+'/register');await page.locator('#auth-submit').waitFor();
+    await page.locator('#email').fill('new@example.test');
+    await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#password-confirmation').fill('Synthetic passphrase 2026');
+    signupError=false;const started=new Promise(resolve=>{signupStarted=resolve;});
+    await page.locator('#auth-submit').click();await started;
+    assert.equal(await page.locator('#auth-submit').isDisabled(),true);
+    assert.equal(await page.locator('#auth-switch').isDisabled(),true);
+    assert.equal(writes.filter(write=>write.endpoint==='/api/auth/register').length,2);
+    releaseSignup();await page.locator('#workspace').waitFor();await page.locator('#coach').waitFor();
+    assert.equal(new URL(page.url()).pathname,'/coach');
+    await page.locator('#notice').getByText(/Аккаунт создан/).waitFor();
+    assert.equal(await page.locator('#password').inputValue(),'');assert.equal(await page.locator('#password-confirmation').inputValue(),'');
+    assert.equal(await page.locator('#pilot-invitations').isHidden(),true);
+    await page.locator('#logout').click();await page.locator('#auth').waitFor();
+    await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#auth-submit').click();await page.locator('#workspace').waitFor();
+    assert.deepEqual(writes.find(write=>write.endpoint==='/api/auth/login').body,{email:'new@example.test',password:'Synthetic passphrase 2026'});
+    await page.locator('#logout').click();available=false;
+    await page.goto(origin+'/register');await page.locator('#registration-unavailable').waitFor();
+    assert.equal(await page.locator('#auth-submit').isDisabled(),true);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    assert.ok(writes.every(write=>['/api/auth/register','/api/auth/login','/api/auth/logout'].includes(write.endpoint)));
+    assert.deepEqual(errors,[]);await page.close();
   }
 
   // Personal coaching is a read-only projection of the owner's saved reports.

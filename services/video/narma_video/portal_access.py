@@ -1,4 +1,4 @@
-"""Closed-pilot invitations and offline, one-use account recovery.
+"""Bounded public registration, invitations and one-use account recovery.
 
 Only hashes are stored. Raw invitation/recovery credentials are returned once
 in no-store responses and never sent to an email service or written to logs.
@@ -35,6 +35,13 @@ class AcceptInvite(BaseModel):
     password: str = Field(min_length=12, max_length=256)
 
 
+class Register(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=12, max_length=256)
+    password_confirmation: str = Field(min_length=12, max_length=256)
+
+
 class Recover(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: str = Field(min_length=3, max_length=254)
@@ -44,6 +51,33 @@ class Recover(BaseModel):
 
 def token_hash(kind, value):
     return hashlib.sha256((kind + "\0" + value).encode()).hexdigest()
+
+
+def register_account(request, body):
+    from . import web
+    email = web.email_normalized(body.email)
+    web.rate_limit(request, "register", email)
+    if body.password != body.password_confirmation:
+        web.reject(400, "PORTAL_PASSWORD_CONFIRMATION", "Пароли не совпадают. Проверь повторный ввод.")
+    if web.session_account(request):
+        web.reject(409, "PORTAL_ALREADY_SIGNED_IN", "Чтобы создать другой аккаунт, сначала выйдите из текущего.")
+    with database() as connection:
+        # All admission paths use the same lock; invitations reserve seats.
+        connection.execute("SELECT pg_advisory_xact_lock(%s)", (web.PORTAL_LOCK,))
+        if not connection.execute("SELECT 1 FROM portal_accounts WHERE is_platform_owner LIMIT 1").fetchone():
+            web.reject(503, "PORTAL_REGISTRATION_UNAVAILABLE", "Регистрация станет доступна после настройки платформы владельцем.")
+        if connection.execute("SELECT 1 FROM portal_accounts WHERE email=%s", (email,)).fetchone():
+            web.reject(409, "PORTAL_ACCOUNT_EXISTS", "Аккаунт с этой почтой уже существует. Войдите или восстановите доступ.")
+        if connection.execute("SELECT 1 FROM portal_invitations WHERE email=%s AND used_at IS NULL AND expires_at>now()", (email,)).fetchone():
+            web.reject(409, "PORTAL_INVITATION_PENDING", "Для этой почты есть приглашение. Откройте личную ссылку из приглашения.")
+        accounts = connection.execute("SELECT count(*) AS n FROM portal_accounts").fetchone()["n"]
+        pending = connection.execute("SELECT count(*) AS n FROM portal_invitations WHERE used_at IS NULL AND expires_at>now()").fetchone()["n"]
+        if accounts + pending >= MAX_PILOT_ACCOUNTS:
+            web.reject(409, "PORTAL_PILOT_FULL", "Все места тестового доступа заняты. Попробуйте зарегистрироваться позже.")
+        account = connection.execute("""INSERT INTO portal_accounts(owner_id,email,password_hash,is_platform_owner)
+            VALUES (%s,%s,%s,false) RETURNING owner_id,email""",
+            ("portal_" + uuid4().hex, email, web.password_hash(body.password))).fetchone()
+        return web.with_session(connection, account, 201)
 
 
 def reauthenticated(connection, request, account, password, *, owner_only=False):
@@ -151,6 +185,10 @@ def recover_account(request, body):
 
 def attach(router):
     from . import web
+
+    @router.post("/auth/register", dependencies=[Depends(web.csrf)])
+    async def register(request: Request):
+        return await run_in_threadpool(register_account, request, await web.json_body(request, Register))
 
     @router.get("/auth/security")
     def security(account=Depends(web.account_required)):
