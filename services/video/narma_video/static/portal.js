@@ -1,6 +1,7 @@
 import { roleGuidance } from './role-guidance.js';
 import { createVideoWorkspace } from './video-workspace.js';
 import { createPersonalCoach, renderDecisionPoints } from './personal-coach.js';
+import { mountCoachChat, renderModeLesson } from './coach-chat.js';
 const $ = id => document.getElementById(id);
 const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set(),chatgpt:null,chatgptRequest:0,chatgptController:null,chatgptTimer:null,chatgptClock:null};
 const entry = new URLSearchParams(location.hash.slice(1));
@@ -558,7 +559,7 @@ function focusEvidence(id) {
   row?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
 }
 function renderPoints(target, points, schemaVersion) {
-  if(schemaVersion==='narma.replay-coaching.v2')return renderDecisionPoints(target,points,{schemaVersion,evidence:state.evidence,onEvidence:focusEvidence});
+  if(['narma.replay-coaching.v2','narma.replay-coaching.v3'].includes(schemaVersion))return renderDecisionPoints(target,points,{schemaVersion,evidence:state.evidence,onEvidence:focusEvidence});
   target.replaceChildren();
   for(const point of points??[]) {
     const article=node('article',undefined,'report-point'); article.append(node('h4',point.title??'Эпизод'));
@@ -658,6 +659,10 @@ function renderDetail() {
   drawBars('income-chart',insight().gold?.bins??[],'income',duration); drawBars('farm-chart',insight().pace??[],'last_hits',duration); drawCombat(duration); renderSources(); renderItems(); renderHeroContext(); renderTraining(); renderReportLearning();
   renderPoints($('findings'),report.findings); renderEvents();
   const coach=report.coaching; $('coaching-section').hidden=false;
+  renderModeLesson($('report-mode-lesson'),coach?.status==='ready'?coach:null,{evidence:state.evidence,onEvidence:focusEvidence});
+  const chat=$('report-chat'),identity=state.user;
+  chat.hidden=job.state!=='ready'||state.showArchived||detail.report_is_previous===true;
+  if(!chat.hidden)mountCoachChat(chat,{api,jobId:job.id,reportHash:detail.report_sha256,evidence:report.evidence??[],context:{...job.training_context,position:detail.hero_context?.position},identity:identity?.email??identity?.id,isCurrent:()=>state.user===identity&&state.selected===job.id&&!state.showArchived,onEvidence:focusEvidence});
   if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points,coach.schema_version); }
   else {
     const needsConnection=coach?.failure_code==='CHATGPT_NOT_CONNECTED'&&state.coaching?.personal_connect===true;

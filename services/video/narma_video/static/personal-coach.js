@@ -1,4 +1,5 @@
 // Personal overview of owned, saved reports. Opening this page never generates a report.
+import { mountCoachChat, renderModeLesson } from './coach-chat.js';
 const el=(tag,text,className)=>{const item=document.createElement(tag);if(text!==undefined)item.textContent=String(text);if(className)item.className=className;return item;};
 const text=value=>typeof value==='string'&&value.trim()?value.trim():'';
 const list=value=>Array.isArray(value)?value:[];
@@ -18,7 +19,7 @@ export function renderDecisionPoints(target,points,{schemaVersion,evidence=new M
   target.replaceChildren();
   for(const point of list(points).slice(0,12)){
     if(!point||typeof point!=='object')continue;
-    const v2=schemaVersion==='narma.replay-coaching.v2';
+    const v2=['narma.replay-coaching.v2','narma.replay-coaching.v3'].includes(schemaVersion);
     const article=el('article',undefined,`report-point${v2?' decision-point':''}`);
     if(v2){
       article.dataset.pointKind=point.kind==='strength'?'strength':'review';
@@ -123,19 +124,23 @@ export function createPersonalCoach({api,onNavigate,onOpenReplay,heroName,heroIc
       const heading=el('div',undefined,'coach-match-context');heading.append(heroIcon(match.hero,{className:'coach-portrait',lazy:true}),el('div'));
       heading.lastChild.append(el('h3',context(match)),el('p',`Матч ${match.match_id} · ${dateLabel(match)}`,'help'));body.append(heading);
       if(!current){body.append(el('p','Этот отчёт обновляется или его контекст изменился. Для актуального фокуса выбери другой готовый матч либо обнови страницу тренера.','muted'),matchButton(match,'Открыть состояние разбора'));return;}
+      const chat=el('section');
+      const attachChat=()=>{body.append(chat);mountCoachChat(chat,{api,jobId:match.job_id,reportHash:detail.report_sha256,evidence:list(report.evidence),context:job.training_context??{},identity:view.identity,isCurrent:()=>valid(epoch)&&selection===view.selection,onEvidence:id=>openMatch(match,id)});};
       const coaching=report.coaching,status=detail.coaching_status;
       const usable=coaching?.status==='ready'&&text(coaching.summary)&&['ready','saved'].includes(status?.state)&&(status.provider!=='openai_api'||status.state==='saved'||status.verified_openai===true);
       if(!usable){
         const copy=status?.state==='context_changed'?'Позиция или контекст изменились. Прежний комментарий ИИ к ним не применяется.':status?.state==='unknown'?'Источник комментария не подтверждён. Открой отчёт, чтобы проверить его статус.':'Для этого матча нет готового комментария ИИ. Факты и события доступны в полном отчёте.';
-        body.append(el('p',copy,'coach-unavailable'),matchButton(match,'Открыть факты и статус ИИ'));return;
+        body.append(el('p',copy,'coach-unavailable'),matchButton(match,'Открыть факты и статус ИИ'));attachChat();return;
       }
       body.append(el('p',status.state==='saved'?'Сохранённый комментарий ИИ':'Комментарий ИИ из разбора','coach-source'),el('p',coaching.summary,'coach-summary'));
       const next=list(coaching.next_game).find(item=>text(item?.action));
       if(next){const plan=el('div',undefined,'coach-next-game');plan.id='coach-next-game';plan.append(el('p','Твой фокус на следующую игру','decision-label'),el('h3',text(next.title)||'Одно действие для проверки'),el('p',next.action));if(text(next.measure))plan.append(el('p',`Как проверить: ${next.measure}`,'help'));plan.append(navigate('Перейти к практике','learning'));body.append(plan);}
       const evidence=new Map(list(report.evidence).filter(item=>text(item?.id)).map(item=>[item.id,item]));
+      const lesson=el('section');renderModeLesson(lesson,coaching,{evidence,onEvidence:id=>openMatch(match,id)});body.append(lesson);
       const points=el('div');points.id='coach-decisions';
-      if(coaching.schema_version!=='narma.replay-coaching.v2')body.append(el('p','Сохранённый разбор в прежнем формате. Подробное сравнение вариантов будет в новых комментариях ИИ.','help'));
+      if(!['narma.replay-coaching.v2','narma.replay-coaching.v3'].includes(coaching.schema_version))body.append(el('p','Сохранённый разбор в прежнем формате. Подробное сравнение вариантов будет в новых комментариях ИИ.','help'));
       renderDecisionPoints(points,coaching.points,{schemaVersion:coaching.schema_version,evidence,onEvidence:id=>openMatch(match,id),headingLevel:3});body.append(points,matchButton(match,'Весь разбор: события, предметы и графики'));
+      attachChat();
     }catch(error){if(valid(epoch)&&selection===view.selection&&body.isConnected){body.replaceChildren(el('p',`Не удалось открыть комментарий. ${error.message}`,'help'),button('Повторить загрузку',()=>loadChosen(match,body)));}}
     finally{if(valid(epoch)&&selection===view.selection&&body.isConnected)body.setAttribute('aria-busy','false');}
   }

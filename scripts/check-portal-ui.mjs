@@ -122,7 +122,7 @@ try {
     }
     const errors=[], requests=[];
     const integrationRequests=[];
-    const replayCreates=[];
+    const replayCreates=[],chatTurns=[];
     let releaseReplayCreate,observeFirstReplayCreate;
     const firstReplayCreateGate=new Promise(resolve=>{releaseReplayCreate=resolve;});
     const firstReplayCreateStarted=new Promise(resolve=>{observeFirstReplayCreate=resolve;});
@@ -171,6 +171,10 @@ try {
         const event={id:'death-1',type:'death',time:coachReference(Number(match.job_id.slice(5))).time,title:'Смерть выбранного героя',details:'Синтетический эпизод для проверки ссылки.'};
         body={replay:{id:match.job_id,state:'ready',progress:100,match_id:match.match_id,nickname:profile.nickname,created_at:new Date().toISOString()},report:{...report,match_id:match.match_id,player:{...report.player,hero:match.hero},evidence:[event]},hero_context:null,archived_report:null,parts:[]};
       }
+      else if(/^\/api\/replays\/[^/]+\/chat$/.test(endpoint)) {
+        if(method==='POST'){const value=request.postDataJSON();assert.equal(value.report_sha256,'c'.repeat(64));const turn={...value,state:'succeeded',answer:{answer:'Проверь, какую цель давало возвращение.',next_step:'Перед выходом назови цель.',evidence_ids:['death-1']}};if(!chatTurns.some(item=>item.id===value.id))chatTurns.push(turn);body={turn};}
+        else body={turns:chatTurns,report_sha256:'c'.repeat(64),context:{training_level:'advanced'},available:true};
+      }
       else if(endpoint==='/api/replays'&&method==='POST') {
         const command=request.postDataJSON(); assert.equal(command.filename,'synthetic.dem'); assert.equal(command.nickname,'SyntheticPlayer'); assert.equal('account_id' in command,false);
         replayCreates.push(command);
@@ -185,6 +189,7 @@ try {
       else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,hero_context:legacy?{...heroContext,hero:'npc_dota_hero_lion',label:'Lion'}:heroContext,parts:uploaded?[1]:[],archived_report:job.state==='ready'?{id:1,created_at:new Date().toISOString(),hero_context:{...heroContext,summary:'Контекст сохранённого разбора.',abilities:[{...heroContext.abilities[0],casts:7}]},report:{...report,metrics:{...report.metrics,kills:9},evidence:[{id:'old-death',type:'death',time:500,title:'Старый эпизод'}],coaching:{status:'ready',summary:'Сохранённый комментарий',points:[{title:'Сохранённый эпизод',observation:'Предыдущий разбор.',evidence_ids:['old-death']}]}}}:null,report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{}),...(connectionMissing?{coaching:{status:'unavailable',failure_code:'CHATGPT_NOT_CONNECTED',points:[]}}:{})}:null};
       else throw Error(`Unexpected frontend API request: ${method} ${endpoint}`);
       if(job&&endpoint===`/api/replays/${job.id}`) {
+        body.report_sha256='c'.repeat(64);
         body.coaching_status=width===390&&!legacy&&!connectionMissing?{state:'ready',provider:'openai_api',verified_openai:true,reason_code:null,usage:{input_tokens:1200,output_tokens:300,cached_input_tokens:400},billing_state:'settled',charged_microusd:2750}:{state:'unavailable',provider:'openai_api',verified_openai:false,reason_code:connectionMissing?'CHATGPT_NOT_CONNECTED':'OPENAI_BUDGET_EXCEEDED',usage:null,billing_state:'none',charged_microusd:null};
         if(body.archived_report) {
           body.archived_report.coaching_status={state:archivedCoachingState,provider:null,verified_openai:false,reason_code:archivedCoachingState==='context_changed'?'REPLAY_COACH_CONTEXT_CHANGED':null,usage:null,billing_state:'none',charged_microusd:null};
@@ -194,7 +199,7 @@ try {
       await route.fulfill({status,json:body,headers:responseHeaders});
     });
     await page.goto(origin+'/replays');
-    assert.equal(await page.evaluate(()=>getComputedStyle(document.body,'::before').animationName),'portal-mist');
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.body,'::before').animationName),'none');
     await page.emulateMedia({reducedMotion:'reduce'});
     assert.deepEqual(await page.evaluate(()=>({animation:getComputedStyle(document.body,'::before').animationName,transform:getComputedStyle(document.body,'::before').transform,events:getComputedStyle(document.body,'::before').pointerEvents})),{animation:'none',transform:'none',events:'none'},'Personal replay pages respect reduced motion without blocking controls.');
     await page.emulateMedia({reducedMotion:'no-preference'});
@@ -265,6 +270,14 @@ try {
     assert.notEqual(replayCreates[2].id,replayCreates[0].id,'Changing context after a failed upload creates a distinct request.');
     assert.deepEqual({position:replayCreates[2].position,mmr:replayCreates[2].mmr,training_level:replayCreates[2].training_level},{position:2,mmr:6500,training_level:'advanced'});
     await page.getByText('17 / 16 / 20',{exact:true}).waitFor();
+    await page.locator('#report-chat').getByRole('button',{name:'Спросить тренера',exact:true}).waitFor();
+    await page.locator('#report-chat').getByLabel('Твой вопрос',{exact:true}).fill('Как проверить выкуп?');
+    await page.locator('#report-chat').getByRole('button',{name:'Спросить тренера',exact:true}).click();
+    await page.locator('#report-chat').getByText('Проверь, какую цель давало возвращение.',{exact:true}).waitFor();
+    assert.equal(chatTurns.length,1,'One explicit question creates one chat turn.');
+    await page.locator('#report-chat').getByRole('button',{name:'Обновить разговор',exact:true}).click();
+    assert.equal(chatTurns.length,1,'Reading saved chat never creates another paid request.');
+    if(screenshotDir)await page.screenshot({path:path.join(screenshotDir,`portal-${width}-coach-chat.png`),fullPage:true});
     if(width===390) {
       assert.match(await page.locator('#report-ai-status').textContent(),/Комментарий OpenAI подтверждён/);
       assert.match(await page.locator('#report-ai-status').textContent(),/Учтено для этого разбора: 1\s?200 токенов на входе · 300 в ответе/);
@@ -882,6 +895,7 @@ try {
         else if(endpoint==='/api/hero-pool')body=fixture.pool(empty);
         else if(endpoint==='/api/learning')body=fixture.learning(empty);
         else if(endpoint.startsWith('/api/learning/reports/'))body=fixture.learning(empty,endpoint.split('/').at(-1));
+        else if(endpoint.endsWith('/chat')){const id=endpoint.split('/').at(-2);body={turns:[],report_sha256:fixture.detail(id).report_sha256,context:{},available:false};}
         else if(endpoint.startsWith('/api/replays/')){
           const id=endpoint.split('/').at(-1);body=fixture.detail(id,{unavailable});
           if(reportChanged&&id==='coach-new'){body.report_sha256='d'.repeat(64);body.report.evidence[0].time=1260;}
