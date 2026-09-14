@@ -137,6 +137,24 @@ def validate_answer(value, evidence_ids):
     return result.model_dump()
 
 
+def conversation_input(encoded, question, evidence_id, turns):
+    previous = [{'question': row['question'], 'answer': row['answer']}
+                for row in turns if row['state'] == 'succeeded'][-6:]
+    replay = json.loads(encoded)
+    while True:
+        data = _json({'replay': replay, 'question': question,
+                      'selected_evidence_id': evidence_id, 'history': previous})
+        try:
+            provider.request_payload(INSTRUCTIONS, data, Answer.model_json_schema(), max_output_tokens=2400)
+            return data
+        except provider.ProviderError as error:
+            if error.code != 'OPENAI_REQUEST_TOO_LARGE' or not previous:
+                raise
+            # Keep match facts intact; discard only the oldest conversation
+            # context when a long reply would otherwise prevent the next turn.
+            previous.pop(0)
+
+
 def ask(owner_id, job_id, body, background=None):
     from .replay_coach import prepare_evidence
     with database() as connection:
@@ -162,8 +180,10 @@ def ask(owner_id, job_id, body, background=None):
         encoded, ids = prepare_evidence(current['result_payload'], **current['chat_context'])
         if body.evidence_id is not None and body.evidence_id not in ids:
             reject(400, 'COACH_CHAT_EVIDENCE', 'Эпизод не найден в этом разборе.')
-        data = _json({'replay': json.loads(encoded), 'question': body.question, 'selected_evidence_id': body.evidence_id,
-            'history': [{'question': row['question'], 'answer': row['answer']} for row in turns if row['state'] == 'succeeded'][-6:]})
+        try:
+            data = conversation_input(encoded, body.question, body.evidence_id, turns)
+        except provider.ProviderError:
+            reject(413, 'COACH_CHAT_CONTEXT_SIZE', 'Для этого матча слишком много данных для чата. Полный разбор доступен.')
         digest = hashlib.sha256(data.encode()).hexdigest()
         lease = uuid4()
         turn = connection.execute('''INSERT INTO coach_chat_turns(id,owner_id,job_id,account_id,

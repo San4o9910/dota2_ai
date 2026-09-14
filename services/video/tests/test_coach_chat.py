@@ -55,6 +55,16 @@ def test_question_and_answer_reject_invented_references_and_markup():
     assert chat.validate_answer(ANSWER, {'buyback.1'}) == ANSWER
 
 
+def test_long_history_is_bounded_without_removing_match_facts(monkeypatch):
+    monkeypatch.setattr(provider, 'MAX_INPUT_BYTES', 13000)
+    facts = {'evidence': [{'id': 'original', 'time': 12}], 'metrics': {'kills': 3}}
+    turns = [{'state': 'succeeded', 'question': 'Вопрос', 'answer': {'answer': 'Ответ '*700}} for _ in range(6)]
+    encoded = chat.conversation_input(json.dumps(facts), 'Новый вопрос', None, turns)
+    value = json.loads(encoded)
+    assert value['replay'] == facts and len(value['history']) < 6
+    provider.request_payload(chat.INSTRUCTIONS, encoded, chat.Answer.model_json_schema(), max_output_tokens=2400)
+
+
 def test_chat_routes_require_session_and_same_origin(monkeypatch):
     app = FastAPI();chat.attach_coach_chat(app)
     client = TestClient(app)
