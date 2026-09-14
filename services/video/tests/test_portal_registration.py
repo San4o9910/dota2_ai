@@ -30,6 +30,8 @@ def test_signup_requires_configured_owner_and_never_bootstraps_admin(portal):
 
 
 def test_signup_is_private_and_preserves_old_accounts_and_money(portal):
+    from narma_video.replay_jobs import attach_replays
+    attach_replays(portal.app)
     setup(portal)
     owner = profile_seed()
     job = uuid4()
@@ -47,7 +49,10 @@ def test_signup_is_private_and_preserves_old_accounts_and_money(portal):
     state = visitor.get("/api/session").json()
     assert state["user"] == {"email": "new@example.test", "is_platform_owner": False}
     assert state["profile"] is None
-    assert visitor.get("/api/replays").json()["replays"] == []
+    listing = visitor.get("/api/replays")
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["replays"] == []
+    assert portal.get(f"/api/replays/{job}").status_code == 200
     assert visitor.get(f"/api/replays/{job}").status_code == 404
     assert visitor.get("/api/auth/invitations").status_code == 403
     assert portal.get("/api/profile").json()["profile"]["nickname"] == "SyntheticPlayer"
