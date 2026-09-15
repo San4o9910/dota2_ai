@@ -16,6 +16,7 @@ export function mountCoachChat(host,{api,jobId,reportHash,evidence=[],context={}
   const heading=el('div',undefined,'chat-heading');heading.append(el('p','Вопрос → объяснение → действие','eyebrow'),el('h3','Обсуди матч с тренером'));
   const description=el('p',`Матч и история разговора останутся контекстом ответа. ${labels[context.training_level]??'Обычный разбор'}.`,'help');
   const scopeLabel=el('label','Контекст разговора'),scopeInput=el('select');scopeInput.append(new Option('Этот матч','replay'),new Option('Мои матчи и текущая цель','series'));scopeLabel.append(scopeInput);
+  scopeInput.setAttribute('aria-label','Контекст разговора');
   const setScope=()=>{scope=scopeInput.value;revision++;pending=null;busy=false;input.value='';log.replaceChildren();description.textContent=scope==='series'?'Тренер использует этот матч, до двух других игр на том же герое и позиции и активное упражнение. История разговора сохраняется между матчами.':`Обсуждаем только этот матч. ${labels[context.training_level]??'Обычный разбор'}.`;void load();};
   scopeInput.addEventListener('change',setScope);
   const log=el('div',undefined,'chat-log');log.setAttribute('role','log');log.setAttribute('aria-label','История разговора');log.setAttribute('aria-live','polite');

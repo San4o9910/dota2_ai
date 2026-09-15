@@ -14,6 +14,7 @@ import time
 from uuid import UUID, uuid4
 
 import httpx
+from psycopg.types.json import Jsonb
 
 from . import openai_budget as budget
 from .db import database

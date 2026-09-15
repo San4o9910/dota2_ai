@@ -58,7 +58,8 @@ def add_match(job, current, match_id='8984479700'):
             VALUES (%s,%s,'synthetic.dem',100,'Player','Player',%s,123,%s,'ready',100,5,%s)''',
             (ident, job['owner_id'], match_id, job['source_sha256'], Jsonb(facts)))
         connection.execute('''INSERT INTO hero_pool_matches(owner_id,account_id,match_id,position,first_analyzed_at)
-            VALUES (%s,123,%s,5,now())''', (job['owner_id'], match_id))
+            VALUES (%s,123,%s,5,now()) ON CONFLICT(owner_id,account_id,match_id)
+            DO UPDATE SET position=5''', (job['owner_id'], match_id))
     return ident
 
 

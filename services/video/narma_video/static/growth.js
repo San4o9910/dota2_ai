@@ -5,7 +5,7 @@ const button=(text,fn,cls='quiet')=>{const n=el('button',text,cls);n.type='butto
 const number=n=>Number.isFinite(n)?n.toLocaleString('ru-RU',{maximumFractionDigits:2}):'—';
 const stamp=n=>Number.isFinite(n)?`${n<0?'−':''}${Math.floor(Math.abs(n)/60)}:${String(Math.floor(Math.abs(n)%60)).padStart(2,'0')}`:'—';
 const block=(title)=>{const n=el('section',undefined,'growth-block');n.append(el('h3',title));return n;};
-const field=(text,input)=>{const n=el('label',text);n.append(input);return n;};
+const field=(text,input)=>{const n=el('label',text);input.setAttribute('aria-label',text);n.append(input);return n;};
 const details=(text)=>{const n=el('details',undefined,'growth-details');n.append(el('summary',text));return n;};
 export function clearGrowth(host){mounts.get(host)?.dispose();mounts.delete(host);host.replaceChildren();}
 
