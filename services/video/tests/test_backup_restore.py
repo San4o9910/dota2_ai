@@ -54,6 +54,11 @@ class RestoredDatabase:
             self.insert('replay_jobs', id=identifier, owner_id=OWNER, filename='restore.dem',
                         size_bytes=100, requested_nickname='Player', nickname='Player',
                         source_sha256=SOURCE_HASH)
+        elif kind == 'chat':
+            self.insert('coach_chat_turns', id=identifier, owner_id=OWNER,
+                job_id=self.source('replay'), account_id=123, report_sha256='b'*64,
+                snapshot_sha256=SOURCE_HASH, context='{}', question='Synthetic question',
+                lease_token=uuid4())
         else:
             identity = ({'provider': provider, 'model': 'gpt-5.6-sol' if provider == 'openai_api'
                          else 'gemini-3.8-flash'} if self.version >= 15 else {})
@@ -73,7 +78,7 @@ class RestoredDatabase:
 
     def openai_call(self, kind, *, billing='unknown'):
         identifier = uuid4()
-        target = {'video': 'video_job_id', 'replay': 'job_id', 'hermes': 'task_id'}[kind]
+        target = {'video': 'video_job_id', 'replay': 'job_id', 'hermes': 'task_id', 'chat': 'task_id'}[kind]
         policy = self.connection.execute('SELECT price_policy FROM openai_api_budget').fetchone()[0]
         settled = billing == 'settled'
         values = dict(id=identifier, owner_id=OWNER, request_key=str(identifier),
@@ -187,7 +192,7 @@ def test_multiple_accounts_require_the_explicit_migration(restored):
         assert restored.verify()['portal']['accounts'] == 2
 
 
-@pytest.mark.parametrize('restored', [18, 20, 22, 23], indirect=True)
+@pytest.mark.parametrize('restored', [18, 20, 22, 23, 24, 25], indirect=True)
 @pytest.mark.parametrize('frozen_reason', [None, 'PROVIDER_ACCOUNTING_UNCERTAIN'])
 def test_openai_ledger_and_both_budget_snapshots_survive_restore(restored, frozen_reason):
     restored.gemini_call('video')
@@ -195,6 +200,8 @@ def test_openai_ledger_and_both_budget_snapshots_survive_restore(restored, froze
     restored.openai_call('replay', billing='settled')
     if restored.version >= 20:
         restored.openai_call('hermes', billing='unknown')
+    if restored.version >= 24:
+        restored.openai_call('chat', billing='settled')
     for table in ('video_ai_budget', 'openai_api_budget'):
         from psycopg import sql
         restored.connection.execute(sql.SQL('UPDATE {} SET frozen_reason=%s').format(sql.Identifier(table)),
@@ -228,6 +235,26 @@ def test_invalid_openai_source_identity_is_rejected(restored, kind, corruption):
             sql.Identifier(target)), (uuid4(), call))
     with pytest.raises(restored.backup.CheckError, match='backup_openai_restore_invariants_failed'):
         restored.verify()
+
+
+@pytest.mark.parametrize('restored', [24, 25], indirect=True)
+@pytest.mark.parametrize('corruption', ['owner', 'target', 'hash', 'deleted'])
+def test_chat_restore_checks_snapshot_and_owner_but_keeps_deleted_source_accounting(restored, corruption):
+    call = restored.openai_call('chat', billing='unknown')
+    if corruption == 'owner':
+        restored.connection.execute("UPDATE openai_api_calls SET owner_id='another-owner' WHERE id=%s", (call,))
+    elif corruption == 'target':
+        restored.connection.execute('UPDATE openai_api_calls SET task_id=%s WHERE id=%s', (uuid4(), call))
+    elif corruption == 'hash':
+        restored.connection.execute('UPDATE openai_api_calls SET source_sha256=%s WHERE id=%s', ('c'*64, call))
+    else:
+        restored.connection.execute("UPDATE coach_chat_turns SET state='deleted',question='',answer=NULL,input_data=NULL")
+        restored.connection.execute("UPDATE replay_jobs SET state='deleted',result_payload=NULL")
+    if corruption == 'deleted':
+        assert restored.verify()['openai']['invalid_call_jobs'] == 0
+    else:
+        with pytest.raises(restored.backup.CheckError, match='backup_openai_restore_invariants_failed'):
+            restored.verify()
 
 
 @pytest.mark.parametrize('field', ['spent_microusd', 'reserved_microusd'])
