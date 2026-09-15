@@ -2,6 +2,7 @@
 import hashlib
 import json
 from uuid import UUID, uuid4
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.concurrency import run_in_threadpool
@@ -19,6 +20,7 @@ class Question(BaseModel):
     report_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     question: str = Field(min_length=1, max_length=2000)
     evidence_id: str | None = Field(default=None, max_length=100)
+    scope: Literal['replay', 'series'] = 'replay'
 
     @field_validator('question')
     @classmethod
@@ -56,6 +58,16 @@ INSTRUCTIONS = """Ты личный тренер NARMA Vision по Dota. Отв�
 Markdown и ссылок; next_step — одно короткое проверяемое действие или уточняющий
 вопрос. Не обещай рейтинг или срок результата. Не выдавай готовый разбор, если вопрос
 не относится к игре: вежливо вернись к тренировке."""
+
+SERIES_INSTRUCTIONS = INSTRUCTIONS + """
+В этом режиме также доступны related_replays: до двух других собственных матчей
+на том же герое и позиции. Это дополнительные факты, а не чужие игроки. Называй,
+к какому матчу относится вывод. Их ссылки имеют префикс match.<номер>:.
+practice — действующее упражнение, а не доказательство правильности игры.
+Не называй различие показателей улучшением решения без контекста. Если дата игры
+неизвестна, не утверждай, что это более ранняя игра. Не сравнивай неизвестные
+версии и режимы как одинаковые условия. При недостатке матчей скажи об этом.
+История содержит старые ответы и мнения; факты бери из текущего пакета источников."""
 
 
 def _json(value):
@@ -98,6 +110,11 @@ def source_for_call(connection, owner_id, turn_id, lease_token):
     if (not current or not turn or turn['account_id'] != current['account_id']
             or turn['report_sha256'] != current['report_sha256'] or turn['context'] != current['chat_context']):
         return None
+    if turn['scope'] == 'series':
+        from .coach_memory import valid_sources, active_practice
+        if (not valid_sources(connection, owner_id, turn['sources'])
+                or active_practice(connection, owner_id, current) != turn['practice_context']):
+            return None
     return turn
 
 
@@ -106,13 +123,33 @@ def _public(turn):
             for key in ('id', 'question', 'evidence_id', 'answer', 'state', 'error_code', 'created_at')}
 
 
-def _history(connection, owner_id, current):
+def _history(connection, owner_id, current, scope='replay'):
+    if scope == 'series':
+        from .coach_memory import valid_sources, references
+        rows = connection.execute('''SELECT * FROM coach_chat_turns WHERE owner_id=%s AND account_id=%s
+            AND scope='series' AND context=%s AND state<>'deleted' ORDER BY created_at DESC,id DESC LIMIT 40''',
+            (owner_id, current['account_id'], Jsonb(current['chat_context']))).fetchall()
+        result = []
+        for row in reversed(rows):
+            source = _current(connection, owner_id, row['job_id'])
+            if (not source or source['report_sha256'] != row['report_sha256']
+                    or source['chat_context'] != row['context']
+                    or source['result_payload']['player']['hero'] != current['result_payload']['player']['hero']
+                    or not valid_sources(connection, owner_id, row['sources'])):
+                continue
+            row['references'] = references(connection, owner_id, row)
+            # Base-match evidence is local to the original turn, even when the
+            # player opens this conversation from a later match.
+            row['source_job_id'] = str(row['job_id'])
+            row['source_match_id'] = source['match_id']
+            result.append(row)
+        return result
     return connection.execute('''SELECT * FROM coach_chat_turns WHERE owner_id=%s AND job_id=%s
-        AND report_sha256=%s AND context=%s AND state<>'deleted' ORDER BY created_at DESC,id DESC LIMIT 40''',
+        AND report_sha256=%s AND context=%s AND scope='replay' AND state<>'deleted' ORDER BY created_at DESC,id DESC LIMIT 40''',
         (owner_id, current['id'], current['report_sha256'], Jsonb(current['chat_context']))).fetchall()[::-1]
 
 
-def history(owner_id, job_id):
+def history(owner_id, job_id, scope='replay'):
     with database() as connection:
         _locks(connection, owner_id)
         current = _current(connection, owner_id, job_id)
@@ -122,7 +159,9 @@ def history(owner_id, job_id):
         connection.execute("""UPDATE coach_chat_turns SET state='failed',error_code='COACH_CHAT_INTERRUPTED',
             input_data=NULL,finished_at=now() WHERE owner_id=%s AND state='running' AND lease_until<=clock_timestamp()""", (owner_id,))
         allowance = budget.status(connection)
-        return {'turns': [_public(row) for row in _history(connection, owner_id, current)],
+        turns = _history(connection, owner_id, current, scope)
+        return {'turns': [_public(row) | ({'references': row.get('references', []),
+                    'source_job_id': row.get('source_job_id'), 'source_match_id': row.get('source_match_id')} if scope == 'series' else {}) for row in turns],
                 'report_sha256': current['report_sha256'], 'context': current['chat_context'],
                 'available': provider.configured() and allowance['enabled'] and allowance.get('available_microusd', 0) > 0}
 
@@ -137,15 +176,16 @@ def validate_answer(value, evidence_ids):
     return result.model_dump()
 
 
-def conversation_input(encoded, question, evidence_id, turns):
+def conversation_input(encoded, question, evidence_id, turns, *, related=None, practice=None, instructions=INSTRUCTIONS):
     previous = [{'question': row['question'], 'answer': row['answer']}
                 for row in turns if row['state'] == 'succeeded'][-6:]
     replay = json.loads(encoded)
     while True:
         data = _json({'replay': replay, 'question': question,
-                      'selected_evidence_id': evidence_id, 'history': previous})
+                      'selected_evidence_id': evidence_id, 'history': previous,
+                      **({'related_replays': related, 'practice': practice} if related is not None else {})})
         try:
-            provider.request_payload(INSTRUCTIONS, data, Answer.model_json_schema(), max_output_tokens=2400)
+            provider.request_payload(instructions, data, Answer.model_json_schema(), max_output_tokens=2400)
             return data
         except provider.ProviderError as error:
             if error.code != 'OPENAI_REQUEST_TOO_LARGE' or not previous:
@@ -168,51 +208,60 @@ def ask(owner_id, job_id, body, background=None):
         if previous:
             if (previous['owner_id'] != owner_id or str(previous['job_id']) != str(job_id)
                     or previous['report_sha256'] != body.report_sha256 or previous['question'] != body.question
+                    or previous['scope'] != body.scope
                     or previous['evidence_id'] != body.evidence_id or previous['context'] != current['chat_context']):
                 reject(409, 'COACH_CHAT_CONFLICT', 'Этот вопрос уже отправлен в другом контексте.')
             return {'turn': _public(previous)}
         if connection.execute("""SELECT 1 FROM coach_chat_turns WHERE owner_id=%s AND state='running'
                 AND lease_until>clock_timestamp()""", (owner_id,)).fetchone():
             reject(409, 'COACH_CHAT_BUSY', 'Тренер ещё отвечает на предыдущий вопрос.')
-        turns = _history(connection, owner_id, current)
-        if len(turns) >= 40:
+        turns = _history(connection, owner_id, current, body.scope)
+        if body.scope == 'replay' and len(turns) >= 40:
             reject(429, 'COACH_CHAT_LIMIT', 'Для этого разбора достигнут лимит вопросов.')
         encoded, ids = prepare_evidence(current['result_payload'], **current['chat_context'])
         if body.evidence_id is not None and body.evidence_id not in ids:
             reject(400, 'COACH_CHAT_EVIDENCE', 'Эпизод не найден в этом разборе.')
+        sources, related, references, practice = [], None, [], []
+        instructions = SERIES_INSTRUCTIONS if body.scope == 'series' else INSTRUCTIONS
+        if body.scope == 'series':
+            from .coach_memory import collect
+            related, sources, references, practice = collect(connection, owner_id, current)
+            ids = set(ids) | {r['id'] for r in references}
         try:
-            data = conversation_input(encoded, body.question, body.evidence_id, turns)
+            data = conversation_input(encoded, body.question, body.evidence_id, turns,
+                related=related, practice=practice, instructions=instructions)
         except provider.ProviderError:
             reject(413, 'COACH_CHAT_CONTEXT_SIZE', 'Для этого матча слишком много данных для чата. Полный разбор доступен.')
         digest = hashlib.sha256(data.encode()).hexdigest()
         lease = uuid4()
         turn = connection.execute('''INSERT INTO coach_chat_turns(id,owner_id,job_id,account_id,
-            report_sha256,snapshot_sha256,context,question,evidence_id,input_data,lease_token)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *''',
+            report_sha256,snapshot_sha256,context,question,evidence_id,input_data,lease_token,scope,sources,practice_context)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *''',
             (body.id, owner_id, job_id, current['account_id'], body.report_sha256, digest,
-             Jsonb(current['chat_context']), body.question, body.evidence_id, data, lease)).fetchone()
+             Jsonb(current['chat_context']), body.question, body.evidence_id, data, lease,
+             body.scope, Jsonb(sources), Jsonb(practice))).fetchone()
         try:
             call = provider.reserve_call(connection, owner_id=owner_id, request_key=f'chat:{body.id}',
-                instructions=INSTRUCTIONS, input_data=data, schema=Answer.model_json_schema(),
+                instructions=instructions, input_data=data, schema=Answer.model_json_schema(),
                 kind='chat', task_id=body.id, lease_token=lease, max_output_tokens=2400)
         except ValueError as error:
             # Transaction rolls back the unsent question as well as the reservation.
             code = error.code if isinstance(error, provider.ProviderError) else str(error)
-            if code.startswith('OPENAI_BUDGET'):
+            if code.startswith('OPENAI_BUDGET') or code == 'OWNER_AI_LIMIT':
                 reject(429, 'COACH_CHAT_BUDGET', 'Лимит ИИ сейчас недоступен. Сохранённые ответы можно читать.')
             reject(503, 'COACH_CHAT_UNAVAILABLE', 'Тренер временно недоступен. Вопрос не отправлен.')
     if background is not None:
         # Respond before the reverse-proxy timeout. The durable turn remains
         # readable while the bounded call runs; a restart never resends it.
-        background.add_task(_answer, owner_id, body.id, lease, call['id'], data, ids)
+        background.add_task(_answer, owner_id, body.id, lease, call['id'], data, ids, instructions)
         return {'turn': _public(turn)}
-    return _answer(owner_id, body.id, lease, call['id'], data, ids)
+    return _answer(owner_id, body.id, lease, call['id'], data, ids, instructions)
 
 
-def _answer(owner_id, turn_id, lease, call_id, data, ids):
+def _answer(owner_id, turn_id, lease, call_id, data, ids, instructions=INSTRUCTIONS):
     answer, code = None, None
     try:
-        response = provider.perform_reserved(call_id, owner_id, INSTRUCTIONS, data,
+        response = provider.perform_reserved(call_id, owner_id, instructions, data,
                                              Answer.model_json_schema(), max_output_tokens=2400)
         answer = validate_answer(json.loads(response['text']), ids)
     except Exception:
@@ -237,8 +286,8 @@ def attach_coach_chat(app):
     router = APIRouter(prefix='/api/replays')
 
     @router.get('/{job_id}/chat')
-    def get_chat(job_id: UUID, account=Depends(account_required)):
-        return history(account['owner_id'], job_id)
+    def get_chat(job_id: UUID, scope: Literal['replay', 'series']='replay', account=Depends(account_required)):
+        return history(account['owner_id'], job_id, scope)
 
     @router.post('/{job_id}/chat', status_code=202, dependencies=[Depends(csrf)])
     async def post_chat(job_id: UUID, request: Request, background: BackgroundTasks, account=Depends(account_required)):

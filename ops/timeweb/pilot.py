@@ -34,8 +34,8 @@ MAX_VM_MONTH_EQUIVALENT = 2760
 PINNED_TARGET = {"server_id": 9037783, "project_id": 2655641, "ipv4": "72.56.98.68"}
 
 
-def event(name, **values):
-    print(json.dumps({"event": name, **values}), flush=True)
+def event(event_name, **values):
+    print(json.dumps({"event": event_name, **values}), flush=True)
 
 
 def validate_build_reviews(evidence, guides):

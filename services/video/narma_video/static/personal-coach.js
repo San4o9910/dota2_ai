@@ -1,5 +1,6 @@
 // Personal overview of owned, saved reports. Opening this page never generates a report.
 import { mountCoachChat, renderModeLesson } from './coach-chat.js';
+import { mountProgress } from './growth.js';
 const el=(tag,text,className)=>{const item=document.createElement(tag);if(text!==undefined)item.textContent=String(text);if(className)item.className=className;return item;};
 const text=value=>typeof value==='string'&&value.trim()?value.trim():'';
 const list=value=>Array.isArray(value)?value:[];
@@ -109,6 +110,7 @@ export function createPersonalCoach({api,onNavigate,onOpenReplay,heroName,heroIc
     picker.append(label,select);focus.append(picker,body);content.append(focus);
     select.addEventListener('change',()=>{const match=history.find(item=>item.job_id===select.value);if(match){view.chosen=match.job_id;void loadChosen(match,body);}});
     renderSavedAI(content);
+    const progress=el('section');content.append(progress);const epoch=view.epoch;mountProgress(progress,{api,isCurrent:()=>valid(epoch),onOpen:(id,evidence)=>{const match=list(view.pool?.history).find(row=>row.job_id===id);if(match)return openMatch(match,evidence);}});
     const lower=el('div',undefined,'coach-columns');renderObservations(lower);renderPractice(lower);content.append(lower);
     renderTrends(content);renderHistory(content,history);renderLimits(content,pool);
     void loadChosen(selected,body);
@@ -125,7 +127,7 @@ export function createPersonalCoach({api,onNavigate,onOpenReplay,heroName,heroIc
       heading.lastChild.append(el('h3',context(match)),el('p',`Матч ${match.match_id} · ${dateLabel(match)}`,'help'));body.append(heading);
       if(!current){body.append(el('p','Этот отчёт обновляется или его контекст изменился. Для актуального фокуса выбери другой готовый матч либо обнови страницу тренера.','muted'),matchButton(match,'Открыть состояние разбора'));return;}
       const chat=el('section');
-      const attachChat=()=>{body.append(chat);mountCoachChat(chat,{api,jobId:match.job_id,reportHash:detail.report_sha256,evidence:list(report.evidence),context:job.training_context??{},identity:view.identity,isCurrent:()=>valid(epoch)&&selection===view.selection,onEvidence:id=>openMatch(match,id)});};
+      const attachChat=()=>{body.append(chat);mountCoachChat(chat,{api,jobId:match.job_id,reportHash:detail.report_sha256,evidence:list(report.evidence),context:job.training_context??{},identity:view.identity,isCurrent:()=>valid(epoch)&&selection===view.selection,onEvidence:id=>openMatch(match,id),onRelatedEvidence:ref=>{const related=list(view.pool?.history).find(row=>row.job_id===ref.job_id);if(related)return openMatch(related,ref.evidence_id);}});};
       const coaching=report.coaching,status=detail.coaching_status;
       const usable=coaching?.status==='ready'&&text(coaching.summary)&&['ready','saved'].includes(status?.state)&&(status.provider!=='openai_api'||status.state==='saved'||status.verified_openai===true);
       if(!usable){

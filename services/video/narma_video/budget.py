@@ -51,6 +51,8 @@ def _reserve(connection, job, frames, model, *, kind, reservation=RESERVATION):
     daily=connection.execute("SELECT count(*) AS calls FROM video_provider_calls WHERE owner_id=%s AND created_at>now()-interval '1 day'",(job['owner_id'],)).fetchone()
     if daily['calls'] >= 250:
         raise ValueError('VIDEO_REQUEST_BUDGET_EXCEEDED')
+    from .owner_dashboard import enforce_limit
+    enforce_limit(connection, job['owner_id'], reservation)
     row = connection.execute("SELECT *,expires_at>now() AND expires_at<='2027-01-01T00:00:00Z'::timestamptz AS price_valid FROM video_ai_budget WHERE id=1 FOR UPDATE").fetchone()
     if not row or not row['enabled']:
         raise ValueError('VIDEO_GLOBAL_BUDGET_DISABLED')

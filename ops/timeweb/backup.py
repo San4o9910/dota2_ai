@@ -80,6 +80,13 @@ def openai_restore_sql(migrations):
         "OR c.source_sha256 IS DISTINCT FROM h.snapshot_sha256 "
         "OR h.provider IS DISTINCT FROM 'openai_api' OR h.model IS DISTINCT FROM c.model"
         if '020_hermes_openai.sql' in migrations else 'true')
+    has_chat = '024_coach_chat.sql' in migrations
+    chat_join = (" LEFT JOIN coach_chat_turns cc ON cc.id=c.task_id"
+        " LEFT JOIN replay_jobs cr ON cr.id=cc.job_id" if has_chat else '')
+    chat_check = ("c.job_id IS NOT NULL OR c.video_job_id IS NOT NULL OR c.task_id IS NULL "
+        "OR cc.id IS NULL OR c.owner_id IS DISTINCT FROM cc.owner_id "
+        "OR c.source_sha256 IS DISTINCT FROM cc.snapshot_sha256 "
+        "OR cr.id IS NULL OR cc.owner_id IS DISTINCT FROM cr.owner_id" if has_chat else 'true')
     return """SELECT json_build_object(
         'tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema()
             AND table_name IN ('openai_api_budget','openai_api_calls')),
@@ -87,7 +94,7 @@ def openai_restore_sql(migrations):
         'invalid_call_jobs',(SELECT count(*) FROM openai_api_calls c
             LEFT JOIN replay_jobs r ON r.id=c.job_id
             LEFT JOIN video_jobs v ON v.id=c.video_job_id
-            LEFT JOIN hermes_tasks h ON h.id=c.task_id
+            LEFT JOIN hermes_tasks h ON h.id=c.task_id """ + chat_join + """
             WHERE CASE c.kind
                 WHEN 'replay' THEN c.job_id IS NULL OR c.video_job_id IS NOT NULL OR c.task_id IS NOT NULL
                     OR r.id IS NULL OR c.owner_id IS DISTINCT FROM r.owner_id
@@ -95,7 +102,8 @@ def openai_restore_sql(migrations):
                 WHEN 'video' THEN c.video_job_id IS NULL OR c.job_id IS NOT NULL OR c.task_id IS NOT NULL
                     OR v.id IS NULL OR c.owner_id IS DISTINCT FROM v.owner_id
                     OR c.source_sha256 IS DISTINCT FROM v.source_sha256
-                WHEN 'hermes' THEN """ + hermes_check + """ ELSE true END),
+                WHEN 'hermes' THEN """ + hermes_check + """
+                WHEN 'chat' THEN """ + chat_check + """ ELSE true END),
         'invalid_call_accounting',(SELECT count(*) FROM openai_api_calls c
             LEFT JOIN openai_api_budget b ON b.id=c.budget_id
             WHERE b.id IS NULL OR c.model IS DISTINCT FROM b.model OR CASE c.billing_status

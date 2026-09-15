@@ -14,6 +14,7 @@ import time
 from uuid import UUID, uuid4
 
 import httpx
+from psycopg.types.json import Jsonb
 
 from . import openai_budget as budget
 from .db import database
@@ -228,6 +229,8 @@ def reserve_call(connection, *, owner_id, request_key, instructions, input_data,
         WHERE owner_id=%s AND created_at>now()-interval '1 day' ''', (owner_id,)).fetchone()['count']
     if count >= daily_limit():
         raise ProviderError('OPENAI_DAILY_LIMIT')
+    from .owner_dashboard import enforce_limit
+    enforce_limit(connection, owner_id, amount)
     budget.lock_allowance(connection, amount)
     # A contended shared allowance can outlive the source lease.
     _source(connection, owner_id=owner_id, kind=kind, job_id=job_id, video_job_id=video_job_id,
@@ -343,6 +346,8 @@ def perform_reserved(call_id, owner_id, instructions, input_data, schema, *, max
             video_job_id=row['video_job_id'], task_id=row['task_id'], lease_token=row['lease_token'],
             source_sha256=row['source_sha256'])
         # Disable/freeze/expiry takes effect for queued reservations too.
+        from .owner_dashboard import enforce_limit
+        enforce_limit(connection, owner_id, 0)
         budget.lock_allowance(connection, 0)
         _source(connection, owner_id=owner_id, kind=row['kind'], job_id=row['job_id'],
             video_job_id=row['video_job_id'], task_id=row['task_id'], lease_token=row['lease_token'],
@@ -409,11 +414,13 @@ def forget_output(connection, *, owner_id, video_job_id=None, job_id=None):
         connection.execute('''UPDATE openai_api_calls SET output_text=NULL,output_sha256=NULL,
             state=CASE WHEN state='succeeded' THEN 'failed' ELSE state END,error_code='OPENAI_SOURCE_DELETED'
             WHERE owner_id=%s AND kind='chat' AND task_id IN
-                (SELECT id FROM coach_chat_turns WHERE owner_id=%s AND job_id=%s)''',
-            (owner_id, owner_id, job_id))
+                (SELECT id FROM coach_chat_turns WHERE owner_id=%s AND (job_id=%s OR sources @> %s))''',
+            (owner_id, owner_id, job_id, Jsonb([{'job_id': str(job_id)}])))
         connection.execute('''UPDATE coach_chat_turns SET state='deleted',question='',input_data=NULL,
-            answer=NULL,context='{}',evidence_id=NULL,finished_at=now()
-            WHERE owner_id=%s AND job_id=%s''', (owner_id, job_id))
+            answer=NULL,context='{}',sources='[]',practice_context='[]',evidence_id=NULL,finished_at=now()
+            WHERE owner_id=%s AND (job_id=%s OR sources @> %s)''', (owner_id, job_id, Jsonb([{'job_id': str(job_id)}])))
+        connection.execute('DELETE FROM coaching_feedback WHERE owner_id=%s AND job_id=%s', (owner_id, job_id))
+        connection.execute('DELETE FROM replay_practice_attempts WHERE owner_id=%s AND job_id=%s', (owner_id, job_id))
     return connection.execute('''UPDATE openai_api_calls SET output_text=NULL,output_sha256=NULL,
         state=CASE WHEN state='succeeded' THEN 'failed' ELSE state END,
         error_code='OPENAI_SOURCE_DELETED'
