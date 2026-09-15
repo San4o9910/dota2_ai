@@ -14,6 +14,7 @@ from narma_video.db import database
 from narma_video.web import account_required
 from test_coach_chat import replay, owned, paid, fake_provider, ANSWER  # noqa: F401
 from test_replay_coach import RESULT
+from test_web import portal, setup, PASSWORD  # noqa: F401
 
 
 def test_progress_compares_only_new_same_scope_and_build_with_known_dates():
@@ -111,6 +112,27 @@ def test_owner_cap_blocks_before_a_paid_attempt_and_preserves_reading(full, monk
     assert caught.value.status_code == 429 and not calls
     assert chat.history(job['owner_id'], job['id'])['turns'] == []
     assert growth.progress(job['owner_id']) == {'plans': []}
+
+
+def test_limit_changes_require_live_owner_reauthentication_without_resetting_global_budget(portal):
+    owner.attach_owner_dashboard(portal.app)
+    setup(portal)
+    with database() as connection:
+        ident = connection.execute('SELECT owner_id FROM portal_accounts').fetchone()['owner_id']
+        before = connection.execute('SELECT * FROM openai_api_budget WHERE id=1').fetchone()
+    url = f'/api/owner/users/{ident}/ai-limit'
+    body = {'current_password': PASSWORD, 'limit_microusd': 50000}
+    assert portal.put(url, json={**body, 'current_password': 'wrong'}).status_code == 403
+    assert portal.put(url, json=body, headers={'Origin': 'https://foreign.test'}).status_code == 403
+    assert portal.put(url, json=body).status_code == 200
+    assert portal.get('/api/owner/dashboard').json()['users'][0]['limit_microusd'] == 50000
+    assert portal.put(url, json={**body, 'limit_microusd': None}).status_code == 200
+    with database() as connection:
+        assert connection.execute('SELECT * FROM openai_api_budget WHERE id=1').fetchone() == before
+        assert connection.execute('SELECT limit_microusd FROM owner_ai_limits').fetchone()['limit_microusd'] is None
+        connection.execute('UPDATE portal_accounts SET is_platform_owner=false WHERE owner_id=%s', (ident,))
+    assert portal.put(url, json=body).status_code == 403
+    assert portal.get('/api/owner/dashboard').status_code == 403
 
 
 def test_series_chat_namespaces_evidence_and_reads_across_matches(full, monkeypatch):

@@ -787,12 +787,26 @@ try {
       else if(endpoint.startsWith('/api/auth/invitations/')&&method==='DELETE'){invites=[];body={revoked:true};}
       else if(endpoint==='/api/auth/accept-invitation'){authenticated=true;owner=false;body={authenticated:true};}
       else if(endpoint==='/api/auth/recover'){remaining--;authenticated=false;body={authenticated:false,password_changed:true};}
+      else if(endpoint==='/api/owner/dashboard')body={jobs:[{kind:'replay',ready:2,failed:0,queued:1,processing:0,mean_completion_seconds:120}],costs:[{kind:'chat',calls:2,spent_microusd:12000,held_microusd:3000}],users:[{owner_id:'synthetic-guest',email:'guest@example.test',spent_microusd:12000,held_microusd:3000,unknown_calls:0,limit_microusd:null}],feedback:[],openai_budget:null,window_note:'Задания за 7 дней',cost_note:'Учёт приложения'};
+      else if(endpoint==='/api/owner/users/synthetic-guest/ai-limit'&&method==='PUT')body={saved:true};
       else throw Error(`Unexpected account request ${method} ${endpoint}`);
       await route.fulfill({json:body});
     });
     await page.goto(origin+'/account');
     await page.locator('#email').fill('owner@example.test');await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#auth-submit').click();
     await page.locator('#pilot-invitations').waitFor();
+    await page.locator('#owner-nav').click();
+    const dashboard=page.locator('#owner-content');
+    await dashboard.getByRole('heading',{name:'Расходы на ИИ',exact:true}).waitFor();
+    await dashboard.getByLabel('Общий лимит игрока, $',{exact:true}).fill('2,50');
+    await dashboard.getByLabel('Твой пароль для изменения лимита',{exact:true}).fill('Synthetic passphrase 2026');
+    await dashboard.getByRole('button',{name:'Сохранить лимит',exact:true}).click();
+    await dashboard.getByText('Лимит сохранён. Общий бюджет платформы не изменился.',{exact:true}).waitFor();
+    assert.deepEqual(commands.find(command=>command.endpoint==='/api/owner/users/synthetic-guest/ai-limit').body,{limit_microusd:2500000,current_password:'Synthetic passphrase 2026'});
+    assert.equal(await dashboard.getByLabel('Твой пароль для изменения лимита',{exact:true}).inputValue(),'');
+    await dashboard.getByLabel('Твой пароль для изменения лимита',{exact:true}).fill('Unsaved synthetic credential');
+    await page.locator('nav [data-tab=account]').click();
+    assert.equal(await dashboard.getByLabel('Твой пароль для изменения лимита',{exact:true}).inputValue(),'');
     await page.locator('#recovery-current-password').fill('Synthetic passphrase 2026');await page.locator('#recovery-generate-form button').click();await page.locator('#recovery-output').waitFor();
     assert.equal(await page.locator('#recovery-code-list').inputValue(),Array(5).fill(code).join('\n'));
     assert.equal(await page.locator('#recovery-current-password').inputValue(),'');
@@ -824,6 +838,8 @@ try {
     assert.equal(new URL(page.url()).hash,'');assert.equal(await page.locator('#email').inputValue(),'guest@example.test');
     await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#auth-submit').click();await page.locator('#workspace').waitFor();
     assert.equal(await page.locator('#pilot-invitations').isHidden(),true);
+    assert.equal(await page.locator('#owner-nav').isHidden(),true);
+    assert.equal(await page.locator('#owner-content').innerText(),'');
     assert.deepEqual(commands.find(command=>command.endpoint==='/api/auth/accept-invitation').body,{email:'guest@example.test',password:'Synthetic passphrase 2026',token:inviteToken});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);await page.close();
   }
