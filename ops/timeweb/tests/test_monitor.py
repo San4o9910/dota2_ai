@@ -1,6 +1,8 @@
 """No cloud, SSH, notification or provider request is made by these tests."""
 from datetime import datetime, timezone
 import json
+import io
+from contextlib import redirect_stdout
 from pathlib import Path
 import sys
 import unittest
@@ -23,6 +25,21 @@ def snapshot():
 
 
 class MonitorTest(unittest.TestCase):
+    def test_real_event_writer_preserves_check_name_and_completion(self):
+        for severity, expected in (("ok", 0), ("warning", 1), ("critical", 1)):
+            output = io.StringIO()
+            with patch.object(monitor, "public_health", return_value=monitor.receipt("public_https")), \
+                    patch.object(monitor, "inspect_backup", return_value=monitor.receipt("backup_restore_drill")), \
+                    patch.object(monitor, "Cloud"), \
+                    patch.object(monitor, "private_health", return_value=[monitor.receipt("openai_budget", severity)]), \
+                    redirect_stdout(output):
+                self.assertEqual(monitor.main(), expected)
+            events = [json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{')]
+            self.assertEqual(events[2]["name"], "openai_budget")
+            self.assertEqual(events[2]["severity"], severity)
+            self.assertEqual(events[-1]["event"], "operations_monitor_complete")
+            self.assertEqual(events[-1]["status"], severity)
+
     def test_backup_uses_only_default_branch_restore_evidence(self):
         foreign = {**run(), "head_branch": "codex/other"}
         self.assertEqual(monitor.backup_health([foreign], now=NOW)["severity"], "critical")
