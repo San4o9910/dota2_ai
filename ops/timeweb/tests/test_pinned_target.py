@@ -97,6 +97,10 @@ class PinnedTargetTest(unittest.TestCase):
                 return b""
             self.assertIn("root@72.56.98.68", argv)
             if argv[-1] == "true": return b""
+            if argv[-1].startswith("python3 -c ") and 'openai_key_present' in argv[-1]:
+                # The new release selection reads only provider enums/key presence,
+                # while retaining the fixed-host/no-catalog contract of this test.
+                return b'{"providers":{"replay":"gemini","hermes":"gemini"},"openai_key_present":false}'
             self.assertTrue(argv[-1].startswith("mkdir -p /opt/narma/releases/"))
             raise pilot.CheckError("synthetic_stop_before_host_mutation")
         def bundle(sha, directory):

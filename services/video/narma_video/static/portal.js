@@ -1,7 +1,19 @@
 import { roleGuidance } from './role-guidance.js';
+import { createVideoWorkspace } from './video-workspace.js';
+import { createPersonalCoach, renderDecisionPoints } from './personal-coach.js';
+import { mountCoachChat, renderModeLesson } from './coach-chat.js';
+import { mountReportTools, mountProgress, clearGrowth } from './growth.js';
+import { createOwnerDashboard } from './owner-dashboard.js';
+import { createCompletionMotion, playEpisodeCut } from './brand-motion.js';
+const completionMotion = createCompletionMotion();
 const $ = id => document.getElementById(id);
 const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set(),chatgpt:null,chatgptRequest:0,chatgptController:null,chatgptTimer:null,chatgptClock:null};
-if (state.token) history.replaceState(null, '', location.pathname);
+const entry = new URLSearchParams(location.hash.slice(1));
+state.authMode=location.pathname==='/register'?'register':'login';
+state.authBusy=false;
+state.invite = /^[A-Za-z0-9_-]{43}$/.test(entry.get('invite')??'') ? entry.get('invite') : null;
+if (state.invite && entry.get('email')) $('email').value=entry.get('email').slice(0,254);
+if (state.token || entry.has('invite')) history.replaceState(null, '', location.pathname);
 const labels = {uploading:'Загружается', queued:'В очереди', processing:'Разбираем матч', ready:'Разбор готов', failed:'Разбор остановлен'};
 const failures = {
   REPLAY_NATIVE_UNAVAILABLE:'Не запустился серверный обработчик реплеев. Файл сохранён; повторно загружать его не нужно.',
@@ -25,24 +37,50 @@ function heroName(value) { const names={npc_dota_hero_necrolyte:'Necrophos',npc_
 async function api(path, method='GET', body) {
   const response=await fetch(path,{method,credentials:'same-origin',cache:'no-store',headers:body!==undefined?{'Content-Type':'application/json'}:{},body:body!==undefined?JSON.stringify(body):undefined});
   let data; try { data=await response.json(); } catch { throw Error('Сервер вернул неполный ответ. Попробуй ещё раз.'); }
-  if(!response.ok) { if(response.status===401 && state.user) { state.user=null; await session(); } throw Error(typeof data.detail==='string'?data.detail:'Не удалось выполнить запрос.'); }
+  if(!response.ok) { if(response.status===401 && response.headers.get('X-Narma-Error')==='PORTAL_SIGN_IN' && state.user) { state.user=null; await session(); } throw Error(typeof data.detail==='string'?data.detail:'Не удалось выполнить запрос.'); }
   return data;
 }
-const tabPaths={review:'/replays','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account'};
+const videoWorkspace=createVideoWorkspace({api,onPlayer:()=>switchTab('review')});
+const ownerDashboard=createOwnerDashboard({api,host:$('owner-content')});
+$('owner-refresh').addEventListener('click',()=>void ownerDashboard.load());
+async function openGrowthReplay(id,evidenceId,expected){
+  const user=state.user;switchTab('review');state.showArchived=false;
+  try{await openReplay(id,true);if(state.user!==user||state.selected!==id)return;
+    if(expected?.report_sha256&&state.detail?.report_sha256!==expected.report_sha256){notice('Разбор изменился. Выбери эпизод в актуальном отчёте.');return;}
+    if(evidenceId)focusEvidence(evidenceId);
+  }catch(error){if(state.user===user)notice(error.message);}
+}
+const personalCoach=createPersonalCoach({api,heroName,heroIcon,onNavigate:tab=>switchTab(tab),onOpenReplay:async(id,evidenceId,expected)=>{
+  const user=state.user;switchTab('review');state.showArchived=false;$('result').hidden=true;
+  try{await openReplay(id,true);}catch(error){if(state.user===user)notice(`Не удалось открыть выбранный матч. ${error.message}`);throw error;}
+  if(state.user!==user||state.selected!==id||!evidenceId)return;
+  const report=state.detail?.report;
+  const position=state.detail?.hero_context?.position??report?.coaching?.context?.position??null;
+  if(!expected?.report_sha256||state.detail.report_sha256!==expected.report_sha256||String(report?.match_id)!==String(expected.match_id)||report?.coverage?.source_sha256!==expected.source_sha256||report?.player?.hero!==expected.hero||position!==(expected.position??null)){notice('Этот разбор обновился. Открыта текущая версия; выбери эпизод заново, чтобы проверить актуальный таймкод.');return;}
+  focusEvidence(evidenceId);
+}});
+const tabPaths={coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
 function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'review';}
 function switchTab(tab,{historyMode='push'}={}) {
   if(!Object.hasOwn(tabPaths,tab)||!$(tab)) return;
   if(historyMode==='push'&&location.pathname!==tabPaths[tab])history.pushState({tab},'',tabPaths[tab]);
+  if(historyMode==='replace')history.replaceState({tab},'',tabPaths[tab]);
   for(const section of document.querySelectorAll('.tab-section')) section.hidden=section.id!==tab;
   for(const button of document.querySelectorAll('nav [data-tab]')) { if(button.dataset.tab===tab) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); }
   // Keep the current report and unsaved forms in the DOM when changing sections.
   if(tab==='hero-pool'&&state.user&&(!state.pool||state.poolDirty)) void loadPool();
   if(tab==='learning'&&state.user) void loadLearning({preserveView:true});
+  videoWorkspace.setVisible(tab==='videos');
+  personalCoach.setVisible(tab==='coach');
   stopChatgptPolling();
+  if(tab!=='account') clearSecuritySecrets();
   if(tab==='account'&&state.user) void loadChatgpt();
+  if(tab==='account'&&state.user) void loadSecurity();
+  if(tab!=='owner')ownerDashboard.clearPassword();
+  if(tab==='owner'&&state.user)void ownerDashboard.load();
 }
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',event=>{if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();switchTab(button.dataset.tab);}));
-window.addEventListener('popstate',()=>switchTab(pathTab(),{historyMode:'none'}));
+window.addEventListener('popstate',()=>{state.authMode=location.pathname==='/register'?'register':'login';if(!state.user)renderAuth();switchTab(pathTab(),{historyMode:'none'});});
 switchTab(pathTab(),{historyMode:'none'});
 function buttons() {
   $('replay-submit').disabled=state.busy || !$('replay-file').files[0] || (!state.profile && !$('nickname').value.trim());
@@ -57,40 +95,124 @@ function profileView() {
   if(profile) { const box=node('div',undefined,'player-card'); box.append(node('strong',profile.nickname),node('p',`Steam ID: ${profile.account_id} · Матч: ${profile.match_id}`,'help')); summary.append(box); }
   else summary.append(node('p','Загрузи первый матч и укажи свой ник. Игрок закрепится автоматически после чтения реплея.','muted'));
   buttons();
+  videoWorkspace.setSession(state.user,profile);
+  personalCoach.setSession(state.user,profile);
+}
+function renderAuth() {
+  const registering=!state.invite&&!state.setup&&state.authMode==='register';
+  const creating=!!state.invite||state.setup||registering;
+  const blocked=(state.setup&&!state.token&&!state.invite)||(registering&&!state.registrationAvailable);
+  $('auth-title').textContent=state.invite?'Прими приглашение':state.setup?'Создай свой аккаунт':registering?'Создай аккаунт NARMA VISION':'Вход в NARMA VISION';
+  $('auth-copy').textContent=state.invite?'Укажи почту из приглашения и придумай пароль для NARMA VISION.':state.setup?'Первый вход владельца платформы. Придумай отдельный пароль для NARMA VISION.':registering?'Сохраняй свои матчи, разбирай решения с ИИ-тренером и следи за практикой.':'Войди, чтобы загрузить реплей и посмотреть разбор своего матча.';
+  $('auth-submit').textContent=creating?'Создать аккаунт':'Войти';
+  $('auth-submit').disabled=state.authBusy||blocked;
+  $('setup-help').hidden=!state.setup||!!state.token||!!state.invite;
+  $('password-help').hidden=!creating;
+  $('password').autocomplete=creating?'new-password':'current-password';
+  $('password-confirmation-field').hidden=!registering;
+  $('password-confirmation').required=registering;
+  $('password-confirmation').disabled=!registering||state.authBusy;
+  $('registration-help').hidden=!registering;
+  $('registration-unavailable').hidden=!registering||state.registrationAvailable;
+  const recovering=!$('recovery-form').hidden;
+  $('forgot-password').hidden=creating||recovering;
+  $('auth-switch').hidden=!!state.invite||state.setup||recovering;
+  $('auth-switch').disabled=state.authBusy;
+  $('auth-switch').textContent=registering?'Уже есть аккаунт? Войти':'Нет аккаунта? Создать аккаунт';
 }
 async function session() {
   const data=await api('/api/session'); state.setup=data.setup_required===true; state.user=data.authenticated?data.user:null;
+  state.coaching=data.coaching??{};
+  state.registrationAvailable=data.registration_available===true;
+  ownerDashboard.setSession(state.user);$('owner-nav').hidden=!state.user?.is_platform_owner;
+  $('chatgpt-integration').hidden=state.coaching.personal_connect!==true;
+  $('platform-coach').hidden=!state.user||state.coaching.mode!=='platform';
+  $('platform-coach-status').textContent=state.coaching.available===true?'Тренер подключён к платформе. Личная подписка ChatGPT для разбора не нужна.':'Подключение тренера временно недоступно. Сохранённые разборы и практика остаются доступны.';
   $('loading').hidden=true; $('workspace').hidden=!state.user; $('auth').hidden=!!state.user; $('logout').hidden=!state.user;
   if(!state.user) {
+    completionMotion.reset();
+    clearGrowth($('report-growth'));clearGrowth($('learning-progress'));$('report-chat').replaceChildren();
+    clearSecuritySecrets(); $('pilot-invitations').hidden=true;
     stopChatgptPolling();state.chatgpt=null;$('chatgpt-content').replaceChildren();$('chatgpt-status').textContent='';
     state.pool=null; state.poolRequest++; state.poolDrafts.clear(); state.poolJournalOpen.clear(); state.poolSignature=''; state.poolVisible=20;
     state.profile=null; state.selected=null; state.detail=null; state.showArchived=false; $('result').hidden=true; $('pool-content').hidden=true;
+    videoWorkspace.setSession(null,null);
+    personalCoach.setSession(null,null);
     state.learning=null;state.reportLearning=null;state.learningRequest++;state.reportLearningRequest++;state.learningDrafts.clear();state.learningMatches.clear();state.learningStage=null;state.learningExercise=null;state.reportExercise=null;$('report-learning').replaceChildren();$('pool-learning').replaceChildren();
     $('pool-hero').replaceChildren(new Option('Все герои','')); $('pool-position').value=''; $('pool-period').value='all'; $('pool-favorites-only').checked=false; $('pool-refresh').disabled=false;
     if($('learning-hero'))$('learning-hero').replaceChildren(new Option('Все герои',''));if($('learning-position'))$('learning-position').value='';
     state.learningScope=null;state.learningSignature=null;state.poolDirty=false;
     $('pool-status').textContent=''; $('pool-content').setAttribute('aria-busy','false');
-    $('auth-title').textContent=state.setup?'Создай свой аккаунт':'Вход в NARMA VISION';
-    $('auth-copy').textContent=state.setup?'Первый вход владельца платформы. Придумай отдельный пароль для NARMA VISION.':'Войди, чтобы загрузить реплей и посмотреть разбор своего матча.';
-    $('auth-submit').textContent=state.setup?'Создать аккаунт':'Войти'; $('auth-submit').disabled=state.setup&&!state.token;
-    $('setup-help').hidden=!state.setup||!!state.token; $('password-help').hidden=!state.setup; $('password').autocomplete=state.setup?'new-password':'current-password'; return;
+    renderAuth();return;
   }
   $('account-email').textContent=state.user.email;
+  if(pathTab()==='owner')void ownerDashboard.load();
+  $('pilot-invitations').hidden=state.user.is_platform_owner!==true;
+  if(state.invite) notice('Чтобы принять приглашение на другой аккаунт, сначала нажми «Выйти».');
+  if(['/register','/login'].includes(location.pathname))switchTab('coach',{historyMode:'replace'});
+  if(!$('account').hidden)void loadSecurity();
   if($('learning')&&!$('learning').hidden)void loadLearning();
   if(!$('account').hidden)void loadChatgpt();
   state.profile=(await api('/api/profile')).profile; profileView(); await refresh(); if(!$('hero-pool').hidden&&!state.pool) await loadPool();
 }
 $('auth-form').addEventListener('submit',async event=>{
-  event.preventDefault(); notice(); const button=$('auth-submit'); button.disabled=true;
-  try { await api(state.setup?'/api/auth/setup':'/api/auth/login','POST',{email:$('email').value.trim(),password:$('password').value,...(state.setup?{token:state.token}:{})}); state.token=null; $('password').value=''; await session(); }
-  catch(error) { notice(error.message); } finally { button.disabled=state.setup&&!state.token; }
+  event.preventDefault();if(state.authBusy||$('auth-submit').disabled)return;notice();
+  const registering=!state.invite&&!state.setup&&state.authMode==='register';
+  if(registering&&$('password').value!==$('password-confirmation').value){notice('Пароли не совпадают. Проверь повторный ввод.');$('password-confirmation').focus();return;}
+  const body={email:$('email').value.trim(),password:$('password').value,...(state.invite?{token:state.invite}:state.setup?{token:state.token}:registering?{password_confirmation:$('password-confirmation').value}:{})};
+  const endpoint=state.invite?'/api/auth/accept-invitation':state.setup?'/api/auth/setup':registering?'/api/auth/register':'/api/auth/login';
+  state.authBusy=true;renderAuth();
+  try { await api(endpoint,'POST',body);state.token=null;state.invite=null;state.authMode='login';$('password').value='';$('password-confirmation').value='';await session();if(registering)notice('Аккаунт создан. В разделе «Аккаунт» сохрани резервные коды — они помогут восстановить доступ без почтовых писем.'); }
+  catch(error) { notice(error.message); } finally { state.authBusy=false;renderAuth(); }
 });
-$('logout').addEventListener('click',async()=>{stopChatgptPolling();try { await api('/api/auth/logout','POST',{}); location.reload(); } catch(error) { notice(error.message);if(!$('account').hidden)void loadChatgpt(); } });
+$('auth-switch').addEventListener('click',()=>{if(state.authBusy)return;notice();state.authMode=state.authMode==='register'?'login':'register';$('password').value='';$('password-confirmation').value='';history.pushState(null,'',state.authMode==='register'?'/register':'/login');renderAuth();$('email').focus();});
+$('logout').addEventListener('click',async()=>{stopChatgptPolling();clearSecuritySecrets();try { await api('/api/auth/logout','POST',{}); clearSecuritySecrets(); await session(); } catch(error) { notice(error.message);if(!$('account').hidden)void loadChatgpt(); } });
 $('password-form').addEventListener('submit',async event=>{
   event.preventDefault(); const button=event.target.querySelector('button'); button.disabled=true;
-  try { await api('/api/auth/password','POST',{current_password:$('current-password').value,new_password:$('new-password').value}); $('current-password').value=''; $('new-password').value=''; state.user=null; await session(); notice('Пароль изменён. Войди с новым паролем.'); }
+  try { await api('/api/auth/password','POST',{current_password:$('current-password').value,new_password:$('new-password').value}); $('current-password').value=''; $('new-password').value=''; state.user=null; await session(); notice('Пароль изменён. Войди с новым паролем и создай новые резервные коды.'); }
   catch(error) { notice(error.message); } finally { button.disabled=false; }
 });
+
+function clearSecuritySecrets() {
+  state.securityEpoch=(state.securityEpoch??0)+1;
+  for(const id of ['recovery-code-list','invitation-link','recovery-current-password','invitation-password','current-password','new-password']) $(id).value='';
+  $('recovery-output').hidden=true; $('invitation-output').hidden=true;
+}
+async function loadSecurity() {
+  const email=state.user?.email; if(!email)return;
+  try {
+    const data=await api('/api/auth/security'); if(state.user?.email!==email)return;
+    $('recovery-count').textContent=data.recovery_codes_remaining?`Неиспользованных кодов: ${data.recovery_codes_remaining}.`:'Резервных кодов пока нет. Создай их, чтобы не потерять доступ.';
+    if(state.user.is_platform_owner!==true)return;
+    const invitations=await api('/api/auth/invitations'); if(state.user?.email!==email)return;
+    $('invitation-list').replaceChildren();
+    for(const invitation of invitations.invitations) {
+      const row=node('div',undefined,'invitation-row'),copy=node('p',`${invitation.email} · до ${new Date(invitation.expires_at).toLocaleString('ru-RU')}`,'help'),button=node('button','Отозвать','quiet');button.type='button';
+      button.addEventListener('click',async()=>{if(!$('invitation-password').value){$('invitation-password').focus();$('invitation-status').textContent='Введи текущий пароль для отзыва.';return;}button.disabled=true;try{await api(`/api/auth/invitations/${invitation.id}`,'DELETE',{current_password:$('invitation-password').value});$('invitation-status').textContent='Приглашение отозвано.';$('invitation-link').value='';$('invitation-output').hidden=true;await loadSecurity();}catch(error){$('invitation-status').textContent=error.message;}finally{$('invitation-password').value='';button.disabled=false;}});
+      row.append(copy,button);$('invitation-list').append(row);
+    }
+  }catch(error){$('recovery-count').textContent=error.message;}
+}
+$('forgot-password').addEventListener('click',()=>{$('auth-form').hidden=true;$('recovery-form').hidden=false;$('password').value='';$('password-confirmation').value='';renderAuth();$('recovery-email').value=$('email').value;$('recovery-email').focus();});
+$('return-login').addEventListener('click',()=>{$('recovery-form').reset();$('recovery-form').hidden=true;$('auth-form').hidden=false;renderAuth();});
+$('recovery-form').addEventListener('submit',async event=>{
+  event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;
+  try{await api('/api/auth/recover','POST',{email:$('recovery-email').value.trim(),code:$('recovery-code').value,new_password:$('recovery-password').value});$('email').value=$('recovery-email').value;$('recovery-form').reset();$('recovery-form').hidden=true;$('auth-form').hidden=false;$('forgot-password').hidden=false;await session();notice('Пароль восстановлен. Все устройства вышли из аккаунта. Войди с новым паролем; использованный код больше не действует.');}
+  catch(error){notice(error.message);}finally{button.disabled=false;}
+});
+$('recovery-generate-form').addEventListener('submit',async event=>{
+  event.preventDefault();const button=event.target.querySelector('button'),epoch=state.securityEpoch,email=state.user?.email;button.disabled=true;
+  try{const data=await api('/api/auth/recovery-codes','POST',{current_password:$('recovery-current-password').value});if(epoch!==state.securityEpoch||email!==state.user?.email||$('account').hidden)return;$('recovery-code-list').value=data.codes.join('\n');$('recovery-output').hidden=false;$('recovery-code-list').focus();$('recovery-code-list').select();await loadSecurity();}
+  catch(error){notice(error.message);}finally{$('recovery-current-password').value='';button.disabled=false;}
+});
+$('recovery-saved').addEventListener('click',()=>{$('recovery-code-list').value='';$('recovery-output').hidden=true;});
+$('invitation-saved').addEventListener('click',()=>{$('invitation-link').value='';$('invitation-output').hidden=true;});
+$('invitation-form').addEventListener('submit',async event=>{
+  event.preventDefault();const button=event.target.querySelector('button'),epoch=state.securityEpoch,email=state.user?.email;button.disabled=true;
+  try{const data=await api('/api/auth/invitations','POST',{email:$('invitation-email').value.trim(),current_password:$('invitation-password').value});if(epoch!==state.securityEpoch||email!==state.user?.email||$('account').hidden)return;const fragment=new URLSearchParams({invite:data.token,email:data.invitation.email});$('invitation-link').value=`${location.origin}/replays#${fragment}`;$('invitation-output').hidden=false;$('invitation-link').focus();$('invitation-link').select();$('invitation-status').textContent='Приглашение создано. Письмо не отправлялось — передай ссылку участнику.';await loadSecurity();}
+  catch(error){$('invitation-status').textContent=error.message;}finally{$('invitation-password').value='';button.disabled=false;}
+});
+window.addEventListener('pagehide',clearSecuritySecrets);
 
 // OAuth credentials remain on the server. The browser receives only the short-lived login code.
 function stopChatgptPolling() {
@@ -98,7 +220,7 @@ function stopChatgptPolling() {
   state.chatgptTimer=null;state.chatgptClock=null;state.chatgptController?.abort();state.chatgptController=null;
   $('chatgpt-integration').setAttribute('aria-busy','false');
 }
-function chatgptVisible() {return !!state.user&&!$('account').hidden&&!document.hidden;}
+function chatgptVisible() {return !!state.user&&state.coaching?.personal_connect===true&&!$('account').hidden&&!document.hidden;}
 function chatgptDevice(data) {
   const pending=data?.pending;
   if(data?.status!=='pending'||!pending||pending.verification_url!=='https://auth.openai.com/codex/device'||typeof pending.user_code!=='string'||!/^[A-Za-z0-9 -]{4,32}$/.test(pending.user_code)||typeof data.auth_generation!=='string')return null;
@@ -199,7 +321,7 @@ async function refresh() {
   if(!state.user) return;
   const data=await api('/api/replays'); $('worker-status').textContent=data.worker_ready?'Обработчик реплеев работает':'Ожидаем обработчик реплеев';
   const signature=data.replays.map(item=>`${item.id}:${item.state}:${item.updated_at??''}`).sort().join('|');
-  if(signature!==state.poolSignature) { state.poolSignature=signature; state.poolDirty=true; if(!$('hero-pool').hidden) void loadPool(); }
+  if(signature!==state.poolSignature) { state.poolSignature=signature; state.poolDirty=true; personalCoach.invalidate(); if(!$('hero-pool').hidden) void loadPool(); }
   const history=$('history'); history.replaceChildren();
   if(!data.replays.length) history.append(node('p','Загрузи реплей — здесь появится твой первый матч.','empty'));
   for(const item of data.replays) {
@@ -248,17 +370,52 @@ function drawBars(id,bins,key,duration) {
   if(!valid.length) { const empty=svgNode('text',{x:260,y:80,'text-anchor':'middle',class:'chart-empty'}); empty.textContent='Нет поминутных данных'; svg.append(empty); }
 }
 function drawCombat(duration) {
-  const target=$('combat-strip'); target.replaceChildren(); const svg=svgNode('svg',{viewBox:'0 0 520 44',role:'img','aria-label':'Моменты убийств, смертей и получения предметов. Точные времена доступны в хронологии.'}), x=t=>20+Math.max(0,Math.min(duration,t))/duration*480;
-  svg.append(svgNode('line',{x1:20,x2:500,y1:22,y2:22,class:'chart-axis'}));
-  for(const interval of insight().death_intervals??[]) if(finite(interval.start)&&finite(interval.end)) svg.append(svgNode('rect',{x:x(interval.start),y:9,width:Math.max(1,x(interval.end)-x(interval.start)),height:26,class:'death-period'}));
-  for(const event of displayedReport().evidence??[]) {
-    if(!['kill','death'].includes(event.type)||!finite(event.time)) continue;
-    const marker=event.type==='kill'?svgNode('circle',{cx:x(event.time),cy:22,r:3,class:'combat-kill'}):svgNode('path',{d:`M ${x(event.time)} 14 l 5 8 l -5 8 l -5 -8 Z`,class:'combat-death'});
-    const title=svgNode('title',{}); title.textContent=`${stamp(event.time)} · ${eventLabels[event.type]}`; marker.append(title); svg.append(marker);
+  const report=displayedReport(), target=$('combat-strip'); target.replaceChildren();
+  const events=(report.evidence??[]).filter(event=>['kill','death'].includes(event.type)&&finite(event.time)&&event.time>=0&&event.time<=duration).map((event,index)=>({...event,key:`evidence-${index}`,evidenceId:event.id}));
+  const items=Array.isArray(insight().items)?insight().items:(report.inventory??[]);
+  for(const [index,item] of items.entries()) {
+    if(!finite(item.time)||item.time<0||item.time>duration) continue;
+    const evidence=state.evidence.get(item.event_id);
+    // Observed inventory is not proof of a purchase. Keep the report's acquisition
+    // meaning, and never manufacture a purchase time or combat event from counters.
+    const purchase=item.acquisition==='purchase'||evidence?.type==='purchase';
+    events.push({key:`item-${index}`,type:'item',time:item.time,title:item.label??itemName(item.item),label:purchase?'Покупка':'Предмет',details:purchase?'Покупка записана в реплее. Доставка и применение показаны в разделе «Ключевые предметы».':'Предмет записан в отчёте. Время его появления не обязательно совпадает с покупкой.',evidenceId:evidence?.id});
   }
-  for(const item of insight().items??[]) if(finite(item.time)) svg.append(svgNode('rect',{x:x(item.time)-2,y:35,width:4,height:7,class:'combat-purchase'}));
-  const cursor=svgNode('line',{x1:20,x2:20,y1:0,y2:44,class:'chart-cursor'}); svg.append(cursor); state.graphs.push({cursor,x}); target.append(svg);
-  svg.addEventListener('click',event=>{const box=svg.getBoundingClientRect(); seekTime(((event.clientX-box.left)/box.width*520-20)/480*duration);});
+  events.sort((a,b)=>a.time-b.time);
+  const categories=[['death','Смерти'],['kill','Убийства'],['item','Ключевые предметы']], reportKey=`${state.selected}|${state.showArchived}|${state.detail?.report_is_previous===true}|${report.match_id}`;
+  if(state.combatReportKey!==reportKey) {state.combatReportKey=reportKey;state.combatFilter=events.some(event=>event.type==='death')?'death':events[0]?.type??'death';state.combatSelected=null;}
+  const filters=node('div',undefined,'episode-filters'); filters.setAttribute('role','group'); filters.setAttribute('aria-label','Тип эпизода');
+  const layout=node('div',undefined,'episode-layout'), list=node('div',undefined,'episode-list'), detail=node('div',undefined,'episode-detail');
+  list.setAttribute('role','group'); list.setAttribute('aria-label','Выбрать эпизод по времени'); detail.setAttribute('aria-live','polite'); detail.setAttribute('aria-atomic','true');
+  const count=node('p',undefined,'help episode-count');
+  const choose=event=>{state.combatSelected=event.key;renderSelection(event);seekTime(event.time,event.evidenceId);playEpisodeCut(detail);};
+  function renderSelection(event) {
+    for(const button of list.children) button.setAttribute('aria-pressed',String(button.dataset.episodeKey===event?.key));
+    detail.replaceChildren();
+    if(!event) {detail.append(node('p',list.childElementCount?'Нажми на время эпизода. Здесь появятся факты из реплея и кнопки для сравнения показателей до события и в его момент.':'В этом отчёте нет таймкодов для выбранного типа событий.','help'));return;}
+    detail.append(node('p','Выбранный эпизод','eyebrow'),node('h5',`${stamp(event.time)} · ${event.label??eventLabels[event.type]}`),node('p',event.title??eventLabels[event.type],'episode-title'));
+    if(event.details) detail.append(node('p',event.details,'help'));
+    const interval=event.type==='death'?(insight().death_intervals??[]).find(value=>finite(value.start)&&finite(value.end)&&value.end>value.start&&Math.abs(value.start-event.time)<.1):null;
+    if(interval) detail.append(node('p',`Время вне игры по реплею: ${stamp(interval.end-interval.start)}. Возвращение: ${stamp(interval.end)}.`,'episode-fact'));
+    detail.append(node('p',event.type==='death'?'Сравни золото и опыт перед смертью и в момент события. Затем пересмотри этот отрезок в Dota 2: по одному факту смерти причину не определить.':event.type==='kill'?'Посмотри, как менялись золото и опыт рядом с убийством. Само событие не показывает, стоило ли вступать в этот бой.':'Сравни состояние героя перед событием и в этот момент. Получение и первое применение проверяй в карточке предмета.','episode-guide'));
+    const actions=node('div',undefined,'episode-actions'), before=node('button','За 30 с до события'), at=node('button','В момент события'); before.type=at.type='button';
+    before.disabled=event.time<=0;before.addEventListener('click',()=>seekTime(Math.max(0,event.time-30)));at.addEventListener('click',()=>seekTime(event.time,event.evidenceId));actions.append(before,at);
+    if(event.evidenceId) {const journal=node('button','Открыть в хронологии','quiet');journal.type='button';journal.addEventListener('click',()=>focusEvidence(event.evidenceId));actions.append(journal);}
+    detail.append(actions);
+  }
+  function renderList() {
+    const visible=events.filter(event=>event.type===state.combatFilter); list.replaceChildren();
+    for(const filter of filters.children)filter.setAttribute('aria-pressed',String(filter.dataset.episodeFilter===state.combatFilter));
+    count.textContent=`Таймкодов в отчёте: ${visible.length}. События идут от начала матча; счётчик в итоговой статистике может отличаться, если журнал неполный.`;
+    for(const event of visible) {
+      const button=node('button',undefined,'episode-choice');button.type='button';button.dataset.episodeKey=event.key;button.setAttribute('aria-label',`${stamp(event.time)} · ${event.label??eventLabels[event.type]}${event.type==='item'?` · ${event.title}`:''}`);
+      button.append(node('span',stamp(event.time),'episode-time'),node('span',event.type==='item'?event.title:event.title??eventLabels[event.type],'episode-name'));
+      button.addEventListener('click',()=>choose(event));list.append(button);
+    }
+    const selected=visible.find(event=>event.key===state.combatSelected);state.combatSelected=selected?.key??null;renderSelection(selected);
+  }
+  for(const [type,label] of categories) {const button=node('button',`${label} · ${events.filter(event=>event.type===type).length}`);button.type='button';button.dataset.episodeFilter=type;button.addEventListener('click',()=>{state.combatFilter=type;state.combatSelected=null;renderList();});filters.append(button);}
+  layout.append(list,detail);target.append(filters,count,layout);renderList();
 }
 function renderSources() {
   const gold=insight().gold??{}, target=$('gold-sources'); target.replaceChildren();
@@ -408,7 +565,8 @@ function seekTime(seconds, evidenceId=null) {
   const samples=(report.economy??[]).filter(sample=>Number.isFinite(sample.time)&&sample.time<=state.time);
   const snapshot=samples.at(-1);
   $('gold-value').textContent=num(snapshot?.net_worth); $('xp-value').textContent=num(snapshot?.xp);
-  $('timeline-snapshot').textContent=snapshot?`${stamp(snapshot.time)} · Уровень ${num(snapshot.level)} · ${num(snapshot.kills)} / ${num(snapshot.deaths)} / ${num(snapshot.assists)} · Добивания ${num(snapshot.last_hits)} / ${num(snapshot.denies)}`:'До первого снимка статистики. Выбери более поздний момент.';
+  $('timeline').setAttribute('aria-valuetext',stamp(state.time));
+  $('timeline-snapshot').textContent=snapshot?`На графиках: ${stamp(state.time)}. Последняя запись: ${stamp(snapshot.time)} · Уровень ${num(snapshot.level)} · Убийства: ${num(snapshot.kills)} · Смерти: ${num(snapshot.deaths)} · Помощи: ${num(snapshot.assists)} · Добивания: ${num(snapshot.last_hits)} · Денаи: ${num(snapshot.denies)}`:'До первого снимка статистики. Выбери более поздний момент.';
   for(const graph of state.graphs) { graph.cursor.setAttribute('x1',String(graph.x(state.time))); graph.cursor.setAttribute('x2',String(graph.x(state.time))); }
   for(const row of $('events').children) row.classList.toggle('selected-event',row.dataset.evidenceId===evidenceId);
   updateMoment();
@@ -418,8 +576,10 @@ function focusEvidence(id) {
   $('event-filter').value='all'; renderEvents(); seekTime(evidence.time,id);
   const row=Array.from($('events').children).find(element=>element.dataset.evidenceId===id);
   row?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+  if(row)playEpisodeCut(row);
 }
-function renderPoints(target, points) {
+function renderPoints(target, points, schemaVersion) {
+  if(['narma.replay-coaching.v2','narma.replay-coaching.v3'].includes(schemaVersion))return renderDecisionPoints(target,points,{schemaVersion,evidence:state.evidence,onEvidence:focusEvidence});
   target.replaceChildren();
   for(const point of points??[]) {
     const article=node('article',undefined,'report-point'); article.append(node('h4',point.title??'Эпизод'));
@@ -457,18 +617,52 @@ function heroIcon(hero,{label=heroName(hero),className='report-portrait',lazy=fa
 }
 function renderHeroHeader(report) {
   const target=$('report-hero'); target.replaceChildren(); target.hidden=!report;
-  if(!report) return;
+  if(!report) {clearGrowth($('report-growth'));return;}
   const hero=report.player?.hero,label=typeof hero==='string'&&/^npc_dota_hero_([a-z0-9_]{1,80})$/.test(hero)?heroName(hero):'Герой не определён';
   target.append(heroIcon(hero,{label}),node('h3',label,'report-hero-name'));
+}
+function renderCoachingStatus(detail, report) {
+  const target=$('report-ai-status'); target.replaceChildren();
+  const status=state.showArchived?detail.archived_report?.coaching_status:detail.coaching_status;
+  const saved=state.showArchived||detail.report_is_previous||report?.coaching?.origin==='previous_report';
+  const coaching=report?.coaching, usable=coaching?.status==='ready'&&Boolean(typeof coaching.summary==='string'&&coaching.summary.trim()||(Array.isArray(coaching.points)?coaching.points:[]).some(point=>typeof point?.observation==='string'&&point.observation.trim()));
+  const known=['ready','saved','unavailable','context_changed','pending','unknown'].includes(status?.state), provider=status?.provider;
+  let kind=known?status.state:status?'unknown':!report?(['uploading','queued','processing'].includes(detail.replay?.state)?'pending':'unavailable'):coaching?.status==='context_changed'?'context_changed':!usable?'unavailable':saved?'saved':'unknown';
+  // Archive selection describes which version is open, not whether its AI text
+  // succeeded. The server's unavailable/context_changed/unknown verdict wins.
+  if(['ready','saved'].includes(kind)&&!usable||kind==='ready'&&provider==='openai_api'&&status?.verified_openai!==true)kind='unknown';
+  const titles={ready:provider==='openai_api'&&status?.verified_openai===true?'Комментарий OpenAI подтверждён':provider==='chatgpt_subscription'?'Комментарий ChatGPT готов':provider==='gemini'?'Комментарий Gemini готов':'Тренерский комментарий готов',saved:'Показан сохранённый комментарий',unavailable:report?'Статистика готова · без нового комментария ИИ':'Комментарий ИИ не получен',context_changed:'Контекст изменился · комментарий требует обновления',pending:'Комментарий ИИ ещё не получен',unknown:'Источник комментария не подтверждён'};
+  target.dataset.status=kind;target.append(node('strong',titles[kind]??titles.unknown,'report-ai-title'));
+  const explanations={
+    OPENAI_BUDGET_EXCEEDED:'Вызов OpenAI остановлен лимитом расходов.',OPENAI_BUDGET_DISABLED:'Расходы на OpenAI сейчас отключены.',OPENAI_BUDGET_INVALID:'Лимит расходов OpenAI требует проверки.',OPENAI_BUDGET_PRICE_POLICY_EXPIRED:'Срок действующих настроек стоимости OpenAI истёк.',OPENAI_DAILY_LIMIT:'Достигнут дневной лимит вызовов OpenAI.',OPENAI_RATE_LIMITED:'OpenAI временно ограничил частоту запросов.',
+    OPENAI_BUDGET_RECONCILIATION_REQUIRED:'Предыдущий расход OpenAI требует сверки. Новый вызов остановлен.',OPENAI_BUDGET_ACCOUNTING_FAILED:'Не удалось подтвердить учёт расходов OpenAI.',OPENAI_BUDGET_BOUND_INVALID:'Оценка максимальной стоимости запроса требует проверки.',OPENAI_BUDGET_USAGE_INVALID:'Данные о расходе OpenAI не прошли проверку.',
+    REPLAY_COACH_REQUEST_BUDGET_EXCEEDED:'Этот запрос превысил разрешённую стоимость одного разбора.',OPENAI_REQUEST_TOO_LARGE:'Данные разбора превышают размер одного запроса OpenAI.',REPLAY_COACH_INPUT_TOO_LARGE:'Данные разбора превышают допустимый размер запроса.',
+    OPENAI_AUTHENTICATION_FAILED:'OpenAI отклонил ключ подключения.',OPENAI_NOT_CONFIGURED:'Подключение OpenAI не настроено.',REPLAY_COACH_NOT_CONFIGURED:'Подключение тренера не настроено.',
+    OPENAI_TIMEOUT:'Ответ OpenAI не получен за отведённое время.',OPENAI_TRANSPORT_ERROR:'Связь с OpenAI прервалась.',OPENAI_PROVIDER_UNAVAILABLE:'OpenAI временно недоступен.',OPENAI_CALL_ALREADY_ATTEMPTED:'Запрос для этого разбора уже запускался. Автоматически повторно он не отправляется.',
+    REPLAY_COACH_RESPONSE_INVALID:'Ответ ИИ получен, но не прошёл проверку качества.',REPLAY_COACH_EVIDENCE_MISMATCH:'Ответ ИИ не совпал с подтверждёнными событиями реплея.',REPLAY_COACH_NUMERIC_CLAIM:'Числа в ответе ИИ не прошли сверку с реплеем.',OPENAI_RESPONSE_INVALID:'Ответ OpenAI не прошёл проверку.',OPENAI_RESPONSE_INCOMPLETE:'OpenAI вернул неполный ответ.',OPENAI_USAGE_MISSING:'OpenAI не вернул проверяемые данные о токенах.',OPENAI_PROVENANCE_UNVERIFIED:'Нет подтверждённой записи OpenAI для этого комментария.',
+    CHATGPT_NOT_CONNECTED:'ChatGPT не подключён.',CHATGPT_AUTH_EXPIRED:'Авторизация ChatGPT истекла.',CHATGPT_QUOTA:'Достигнут лимит ChatGPT.',REPLAY_COACH_CONTEXT_CHANGED:'Позиция или контекст изменились. Предыдущий комментарий к ним не применяется.'
+  };
+  const defaultCopy=kind==='saved'?'Это ранее сохранённый текст. Его наличие не подтверждает новый ответ OpenAI.':kind==='ready'?'Открытие сохранённого отчёта не отправляет новый запрос в ИИ.':kind==='pending'?'Обработка ещё не завершена.':kind==='unknown'?'Готовая статистика сама по себе не означает, что OpenAI был вызван.':'Факты, графики и события из реплея доступны независимо от комментария ИИ.';
+  target.append(node('p',explanations[status?.reason_code]??defaultCopy,'help'));
+  if(kind==='saved'&&explanations[status?.reason_code]) target.append(node('p',defaultCopy,'help'));
+  const usage=status?.usage, validTokens=usage&&['input_tokens','output_tokens','cached_input_tokens'].every(key=>Number.isSafeInteger(usage[key])&&usage[key]>=0)&&usage.cached_input_tokens<=usage.input_tokens;
+  if(validTokens) target.append(node('p',`Учтено для этого разбора: ${num(usage.input_tokens)} токенов на входе · ${num(usage.output_tokens)} в ответе${usage.cached_input_tokens?` · из входных ${num(usage.cached_input_tokens)} из кэша`:''}.`,'report-ai-usage'));
+  if(Number.isSafeInteger(status?.charged_microusd)&&status.charged_microusd>=0) target.append(node('p',`Учтённая стоимость OpenAI: $${new Intl.NumberFormat('ru-RU',{maximumFractionDigits:6}).format(status.charged_microusd/1_000_000)}. Это расход сохранённого запроса, а не открытия страницы.`,'help'));
+  const accounting={held:'Сумма зарезервирована; итоговый расход ещё не подтверждён.',unknown:'Итоговый расход не подтверждён. Отсутствие счётчика токенов не означает, что запрос был бесплатным.',breach:'Стоимость учтена, но расход требует проверки.'};
+  if(accounting[status?.billing_state]) target.append(node('p',accounting[status.billing_state],'help'));
 }
 function renderDetail() {
   const detail=state.detail; if(!detail) return; const job=detail.replay, report=state.showArchived&&detail.archived_report?.report?detail.archived_report.report:detail.report;
   $('result').hidden=false; $('result-title').textContent=job.match_id?`Матч ${job.match_id}`:job.filename; $('result-state').textContent=labels[job.state]??job.state;
+  const ready=job.state==='ready'&&!!report&&!state.showArchived&&!detail.report_is_previous;
+  $('result-signature').hidden=!ready;
+  completionMotion.observe(job,$('result-signature'),ready);
   $('result-player').textContent=report?`${report.player.nickname} · ${report.player.team==='radiant'?'Radiant':'Dire'}${report.outcome==='win'?' · Победа':report.outcome==='loss'?' · Поражение':''}`:job.nickname;
   $('analysis-progress').hidden=job.state!=='processing'; $('analysis-progress').value=job.progress??0;
   $('result-status').textContent=job.state==='failed'?(failures[job.failure_code]??'Не удалось завершить разбор этого реплея. Повтори загрузку полного файла .dem.'):job.state==='queued'?'Реплей загружен. Ожидаем начало разбора.':job.state==='processing'?`Читаем события матча и готовим разбор · ${num(job.progress)}%`:job.state==='uploading'?'Реплей ещё загружается.':report?`Полный матч · ${stamp(report.metrics?.duration_seconds)} · Разбор закреплённого игрока`:'Результат ещё не получен.';
   $('report-body').hidden=!report;
   renderHeroHeader(report);
+  renderCoachingStatus(detail,report);
   const trainingContext=report?.coaching?.context??(!state.showArchived&&!detail.report_is_previous?job.training_context:null);
   const contextParts=[];
   if(trainingContext?.position>=1&&trainingContext.position<=5) contextParts.push(`Позиция ${trainingContext.position}`);
@@ -476,9 +670,9 @@ function renderDetail() {
   const depthLabels={foundations:'Основы',application:'Применение',advanced:'Сложные решения'};
   if(depthLabels[trainingContext?.training_level]) contextParts.push(depthLabels[trainingContext.training_level]);
   $('report-training-context').hidden=!report||!contextParts.length; $('report-training-context').textContent=contextParts.join(' · ');
-  const archive=$('previous-report-toggle'); archive.hidden=!detail.archived_report?.report||detail.report_is_previous===true; archive.textContent=state.showArchived?'Вернуться к текущему разбору':'Предыдущий тренерский разбор'; archive.setAttribute('aria-pressed',String(state.showArchived));
+  const archive=$('previous-report-toggle'); archive.hidden=!detail.archived_report?.report||detail.report_is_previous===true; archive.textContent=state.showArchived?'Вернуться к текущему разбору':detail.archived_report?.report?.coaching?.status==='ready'?'Предыдущий тренерский разбор':'Предыдущая версия разбора'; archive.setAttribute('aria-pressed',String(state.showArchived));
   $('previous-report-note').hidden=!(state.showArchived||detail.report_is_previous||report?.coaching?.origin==='previous_report');
-  $('previous-report-note').textContent=state.showArchived||detail.report_is_previous?'Показан сохранённый предыдущий разбор целиком, с его исходными событиями и таймкодами.':report?.coaching?.origin==='previous_report'?'Сохранён предыдущий тренерский комментарий: обновить его в этом запуске не удалось.':'';
+  $('previous-report-note').textContent=state.showArchived||detail.report_is_previous?'Показан сохранённый предыдущий разбор целиком, с его исходными событиями и таймкодами.':report?.coaching?.origin==='previous_report'?(report.coaching.status==='ready'?'Сохранён предыдущий тренерский комментарий: обновить его в этом запуске не удалось.':'Обновить тренерский комментарий в этом запуске не удалось.'):'';
   if(!report) return;
   state.evidence=new Map((report.evidence??[]).map(event=>[event.id,event]));
   const metrics=$('metrics'); metrics.replaceChildren(); const m=report.metrics??{};
@@ -488,9 +682,16 @@ function renderDetail() {
   drawBars('income-chart',insight().gold?.bins??[],'income',duration); drawBars('farm-chart',insight().pace??[],'last_hits',duration); drawCombat(duration); renderSources(); renderItems(); renderHeroContext(); renderTraining(); renderReportLearning();
   renderPoints($('findings'),report.findings); renderEvents();
   const coach=report.coaching; $('coaching-section').hidden=false;
-  if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points); }
+  renderModeLesson($('report-mode-lesson'),coach?.status==='ready'?coach:null,{evidence:state.evidence,onEvidence:focusEvidence});
+  const chat=$('report-chat'),identity=state.user;
+  chat.hidden=job.state!=='ready'||state.showArchived||detail.report_is_previous===true;
+  if(!chat.hidden)mountCoachChat(chat,{api,jobId:job.id,reportHash:detail.report_sha256,evidence:report.evidence??[],context:{...job.training_context,position:detail.hero_context?.position},identity:identity?.email??identity?.id,isCurrent:()=>state.user===identity&&state.selected===job.id&&!state.showArchived,onEvidence:focusEvidence,onRelatedEvidence:ref=>openGrowthReplay(ref.job_id,ref.evidence_id,ref)});
+  const growth=$('report-growth');growth.hidden=chat.hidden;
+  if(growth.hidden)clearGrowth(growth);
+  else mountReportTools(growth,{api,jobId:job.id,reportHash:detail.report_sha256,report,identity:identity?.email,isCurrent:()=>state.user===identity&&state.selected===job.id&&!state.showArchived,onEvidence:focusEvidence,heroName,onQuestion:question=>{chat.dispatchEvent(new CustomEvent('narma-question',{detail:question}));chat.scrollIntoView({block:'start'});}});
+  if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points,coach.schema_version); }
   else {
-    const needsConnection=coach?.failure_code==='CHATGPT_NOT_CONNECTED';
+    const needsConnection=coach?.failure_code==='CHATGPT_NOT_CONNECTED'&&state.coaching?.personal_connect===true;
     $('coaching-summary').textContent=coach?.status==='context_changed'?'Контекст разбора обновлён. Упражнение выше учитывает текущую позицию; прежний тренерский комментарий больше не применяется.':needsConnection?'Статистика матча готова. Подключи ChatGPT в аккаунте, чтобы использовать тренера Narma.':'Тренерский комментарий временно недоступен. Статистика и эпизоды из реплея доступны.';
     $('coaching').replaceChildren();
     if(needsConnection){
@@ -503,8 +704,9 @@ function renderDetail() {
   seekTime(state.time);
 }
 async function openReplay(id, scroll=false, canonicalRedirect=false) {
+  const owner=state.user;if(!owner)return;
   if(!canonicalRedirect)state.learningCanonicalTrail.clear();
-  const changed=state.selected!==id; if(changed) state.showArchived=false; state.selected=id; const detail=await api('/api/replays/'+id); if(state.selected!==id) return;
+  const changed=state.selected!==id; if(changed) state.showArchived=false; state.selected=id; const detail=await api('/api/replays/'+id); if(state.selected!==id||state.user!==owner) return;
   if(changed||(!state.detail?.report&&detail.report)) { state.time=detail.report?.metrics?.duration_seconds??0; $('event-filter').value='all'; }
   state.detail=detail; if(changed) {state.reportLearning=null;state.reportExercise=null;} renderDetail(); if(detail.report&&!state.showArchived&&!detail.report_is_previous) void loadReportLearning(); if(scroll) $('result').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
 }
@@ -558,7 +760,7 @@ async function loadPool() {
 }
 async function poolMutation(button,path,method,body,success) {
   const focusId=button.id, focusLabel=button.getAttribute('aria-label'); button.disabled=true;
-  try { await api(path,method,body); await loadPool();
+  try { await api(path,method,body); personalCoach.invalidate(); await loadPool();
     if(body&&Object.hasOwn(body,'position')) {
       state.reportLearning=null;state.reportExercise=null;
       await loadLearning({preserveView:true});
@@ -839,6 +1041,7 @@ async function learningMutation(button,path,method,body,scope) {
   button.disabled=true;const status=scope.querySelector('.learning-status')??scope.appendChild(learningStatus(''));status.textContent='Сохраняем…';
   try {
     await api(path,method,body);
+    personalCoach.invalidate();
     if(scope.isConnected)status.textContent='Сохранено в аккаунте.';
     await Promise.all([loadReportLearning(),loadLearning()]);
   }catch(error){if(scope.isConnected)status.textContent=error.message;}
@@ -885,6 +1088,7 @@ function renderReportLearning() {
 }
 function renderLearning() {
   const target=$('pool-learning'),data=state.learning;target.replaceChildren();if(!data)return;
+  const identity=state.user;mountProgress($('learning-progress'),{api,isCurrent:()=>state.user===identity,onOpen:openGrowthReplay});
   const stages=data.catalog?.stages??[],exercises=data.catalog?.exercises??[],plans=data.plans??[];
   const hero=$('learning-hero')?.value??'',position=Number($('learning-position')?.value)||null,scopeReady=!!hero&&!!position;
   const guidance=roleGuidance(data.role_context??data.catalog?.role_context);if(guidance)target.append(guidance);

@@ -43,6 +43,10 @@ services:
       NARMA_STRATZ_REFRESH_ENABLED: ${NARMA_STRATZ_REFRESH_ENABLED:-1}
       VIDEO_STORAGE_PATH: /var/lib/narma/video
       VIDEO_FRAME_BUDGET: ${VIDEO_FRAME_BUDGET:-3600}
+      VIDEO_ANALYSIS_MODE: ${VIDEO_ANALYSIS_MODE:-full_frames_v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-sol}
+      OPENAI_MAX_DAILY_CALLS: ${OPENAI_MAX_DAILY_CALLS:-20}
       APP_ORIGIN: ${APP_ORIGIN:-https://narma-72-56-98-68.sslip.io}
       PORTAL_SETUP_TOKEN_SHA256: ${PORTAL_SETUP_TOKEN_SHA256:-}
       PORTAL_SETUP_EXPIRES_AT: ${PORTAL_SETUP_EXPIRES_AT:-}
@@ -81,6 +85,11 @@ services:
       VIDEO_FRAME_BUDGET: ${VIDEO_FRAME_BUDGET:-3600}
       VIDEO_REQUEST_BUDGET: ${VIDEO_REQUEST_BUDGET:-250}
       VIDEO_OWNER_DAILY_REQUEST_BUDGET: ${VIDEO_OWNER_DAILY_REQUEST_BUDGET:-1000}
+      VIDEO_ANALYSIS_MODE: ${VIDEO_ANALYSIS_MODE:-full_frames_v1}
+      REPLAY_COACH_PROVIDER: ${REPLAY_COACH_PROVIDER:-gemini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-sol}
+      OPENAI_MAX_DAILY_CALLS: ${OPENAI_MAX_DAILY_CALLS:-20}
     volumes: [media:/var/lib/narma/video]
     tmpfs: ["/tmp:size=192m,mode=1777"]
     read_only: true
@@ -101,13 +110,16 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       VIDEO_STORAGE_PATH: /var/lib/narma/video
-      GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:?Select a supported model}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       REPLAY_PARSER_HOME: /opt/narma/replay
       NARMA_CHATGPT_ENCRYPTION_KEY: ${NARMA_CHATGPT_ENCRYPTION_KEY:-}
       NARMA_CHATGPT_OWNER_ID: ${NARMA_CHATGPT_OWNER_ID:-}
       NARMA_CHATGPT_MAX_DAILY_CALLS: ${NARMA_CHATGPT_MAX_DAILY_CALLS:-6}
       REPLAY_COACH_PROVIDER: ${REPLAY_COACH_PROVIDER:-gemini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-sol}
+      OPENAI_MAX_DAILY_CALLS: ${OPENAI_MAX_DAILY_CALLS:-20}
     volumes: [media:/var/lib/narma/video]
     tmpfs: ["/tmp:size=128m,mode=1777"]
     read_only: true
@@ -126,8 +138,8 @@ services:
     command: [uvicorn, narma_video.hermes_broker:app, --host, 0.0.0.0, --port, "8091", --no-access-log]
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:?Select a supported model}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       VIDEO_OWNER_DAILY_REQUEST_BUDGET: ${VIDEO_OWNER_DAILY_REQUEST_BUDGET:-250}
       HERMES_RUNTIME_ENABLED: ${HERMES_RUNTIME_ENABLED:-1}
       HERMES_RUNNER_URL: http://hermes-runner:8092
@@ -135,6 +147,9 @@ services:
       NARMA_CHATGPT_OWNER_ID: ${NARMA_CHATGPT_OWNER_ID:-}
       NARMA_CHATGPT_MAX_DAILY_CALLS: ${NARMA_CHATGPT_MAX_DAILY_CALLS:-6}
       HERMES_PROVIDER: ${HERMES_PROVIDER:-gemini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-sol}
+      OPENAI_MAX_DAILY_CALLS: ${OPENAI_MAX_DAILY_CALLS:-20}
     networks: [default, hermes-private]
     tmpfs: ["/tmp:size=32m,mode=1777"]
     read_only: true

@@ -11,7 +11,6 @@ import json
 import os
 import re
 import secrets
-import shutil
 import threading
 import time
 from datetime import datetime, timezone
@@ -26,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from .config import MAX_VIDEO_BYTES, media_root
+from . import media_storage
 from .db import database
 from .replay_metadata import parse_demo_metadata, resolve_player
 
@@ -125,7 +125,11 @@ class BrowserVideo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: UUID
     filename: str = Field(min_length=5, max_length=180)
-    size_bytes: int = Field(ge=16, le=MAX_VIDEO_BYTES)
+    size_bytes: int = Field(ge=16, le=MAX_VIDEO_BYTES, strict=True)
+    hero: str | None = Field(default=None, min_length=1, max_length=80)
+    position: int | None = Field(default=None, ge=1, le=5)
+    mmr: int | None = Field(default=None, ge=0, le=20000)
+    training_level: Literal['foundations','application','advanced'] | None = None
 
 
 async def json_body(request: Request, model):
@@ -148,7 +152,16 @@ def rate_limit(request: Request, purpose: str, email: str = ""):
     # also bounds attacks if the source address is unavailable or rotated.
     address = request.client.host if request.client else "unknown"
     identity = hashlib.sha256((purpose + "\0" + address + "\0" + email).encode()).hexdigest()
-    buckets = [("global-" + purpose, 60, 900), (identity, 10, 900)]
+    source = hashlib.sha256((purpose + "\0address\0" + address).encode()).hexdigest()
+    # Separate address and account buckets stop email/address rotation. The
+    # short global window bounds KDF load without limiting all users together
+    # to only sixty logins per fifteen minutes.
+    buckets = [("global-v2-" + purpose, 120, 60), (source, 60, 900), (identity, 10, 900)]
+    if purpose == "register":
+        buckets = [("global-v2-register", 10, 60), (source, 5, 900), (identity, 3, 900)]
+    if email:
+        target = hashlib.sha256((purpose + "\0email\0" + email).encode()).hexdigest()
+        buckets.append((target, 10, 900))
     blocked = False
     with database() as connection:
         for bucket, maximum, seconds in buckets:
@@ -174,7 +187,7 @@ def session_account(request: Request):
     if not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
         return None
     with database() as connection:
-        return connection.execute("""SELECT a.owner_id,a.email FROM portal_sessions s
+        return connection.execute("""SELECT a.owner_id,a.email,a.is_platform_owner FROM portal_sessions s
             JOIN portal_accounts a ON a.owner_id=s.owner_id
             WHERE s.token_hash=%s AND s.expires_at>now()""",
             (hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
@@ -227,8 +240,8 @@ def setup_account(request, body):
         connection.execute("SELECT pg_advisory_xact_lock(%s)", (PORTAL_LOCK,))
         if connection.execute("SELECT 1 FROM portal_accounts LIMIT 1").fetchone():
             reject(409, "PORTAL_SETUP_COMPLETE", "Аккаунт уже создан. Войдите с вашим паролем.")
-        account = connection.execute("""INSERT INTO portal_accounts(owner_id,email,password_hash)
-            VALUES (%s,%s,%s) RETURNING owner_id,email""", ("portal_" + uuid4().hex, email, hashed)).fetchone()
+        account = connection.execute("""INSERT INTO portal_accounts(owner_id,email,password_hash,is_platform_owner)
+            VALUES (%s,%s,%s,true) RETURNING owner_id,email""", ("portal_" + uuid4().hex, email, hashed)).fetchone()
         return with_session(connection, account, 201)
 
 
@@ -257,6 +270,8 @@ def change_password(request, account, body):
             reject(401, "PORTAL_PASSWORD", "Текущий пароль неверен.")
         connection.execute("UPDATE portal_accounts SET password_hash=%s WHERE owner_id=%s", (password_hash(body.new_password),account["owner_id"]))
         connection.execute("DELETE FROM portal_sessions WHERE owner_id=%s", (account["owner_id"],))
+        connection.execute("DELETE FROM portal_recovery_codes WHERE owner_id=%s", (account["owner_id"],))
+        connection.execute("DELETE FROM portal_invitations WHERE invited_by=%s AND used_at IS NULL", (account["owner_id"],))
         response = JSONResponse({"authenticated": False})
         response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="strict")
         return response
@@ -266,6 +281,7 @@ def reserve_upload(owner_id, upload_id):
     root = media_root() / "profile-uploads"
     root.mkdir(mode=0o700, exist_ok=True)
     with database() as connection:
+        media_storage.lock(connection)
         connection.execute("SELECT pg_advisory_xact_lock(%s)", (PORTAL_LOCK + 1,))
         # Expired uploads cannot be valid clients; remove only our UUID temp
         # names and reservations, never arbitrary media or worker files.
@@ -275,8 +291,7 @@ def reserve_upload(owner_id, upload_id):
         reserved = connection.execute("SELECT coalesce(sum(reserved_bytes),0) AS bytes,count(*) FILTER (WHERE owner_id=%s) AS own FROM portal_replay_uploads", (owner_id,)).fetchone()
         if reserved["own"] or reserved["bytes"] + MAX_REPLAY_BYTES > UPLOAD_GLOBAL_BYTES:
             reject(429, "PORTAL_REPLAY_BUSY", "Дождитесь завершения текущей загрузки.")
-        if shutil.disk_usage(root).free < MAX_REPLAY_BYTES + 1024**3:
-            reject(507, "PORTAL_STORAGE", "Недостаточно места для реплея. Повторите позже.")
+        media_storage.check_admission(connection, owner_id, MAX_REPLAY_BYTES, assembly=False)
         connection.execute("INSERT INTO portal_replay_uploads(id,owner_id,reserved_bytes,expires_at) VALUES (%s,%s,%s,now()+interval '30 minutes')", (upload_id,owner_id,MAX_REPLAY_BYTES))
     return root / (str(upload_id) + ".dem")
 
@@ -307,17 +322,32 @@ def bind_replay(owner_id, metadata, nickname, digest):
 
 
 def attach_web(app):
-    from . import api
+    from . import api, portal_access
     router = APIRouter(prefix="/api")
+    portal_access.attach(router)
 
     @router.get("/session")
     def session(request: Request):
         account = session_account(request)
+        coaching = {'mode': 'unavailable', 'available': False, 'personal_connect': False}
         with database() as connection:
             configured = bool(connection.execute("SELECT 1 FROM portal_accounts LIMIT 1").fetchone())
+            registration_available = bool(connection.execute("SELECT 1 FROM portal_accounts WHERE is_platform_owner LIMIT 1").fetchone())
+            if account:
+                selected = os.environ.get('REPLAY_COACH_PROVIDER', 'gemini')
+                if selected == 'openai_api':
+                    from .video_analysis import coach_available
+                    coaching = {'mode': 'platform', 'available': coach_available(connection, account['owner_id']), 'personal_connect': False}
+                elif selected == 'chatgpt_subscription':
+                    from . import chatgpt_auth
+                    if chatgpt_auth._owner_allowed(connection, account['owner_id']):
+                        current = chatgpt_auth.current_connection(connection, account['owner_id'])
+                        coaching = {'mode': 'personal', 'available': bool(current and current['available']),
+                                    'personal_connect': chatgpt_auth.configured()}
         return {"authenticated": bool(account), "setup_required": not configured,
-                "user": {"email": account["email"]} if account else None,
-                "profile": profile_for(account["owner_id"]) if account else None}
+                "registration_available": registration_available,
+                "user": {"email": account["email"], "is_platform_owner": account["is_platform_owner"]} if account else None,
+                "profile": profile_for(account["owner_id"]) if account else None, 'coaching': coaching}
 
     @router.post("/auth/setup", dependencies=[Depends(csrf)])
     async def setup(request: Request):
@@ -379,7 +409,7 @@ def attach_web(app):
         path = await run_in_threadpool(reserve_upload, account["owner_id"], upload_id)
         total, digest, started = 0, hashlib.sha256(), time.monotonic()
         try:
-            with path.open("xb") as destination:
+            with media_storage.storage_errors(), path.open("xb") as destination:
                 os.chmod(path, 0o600)
                 async for chunk in request.stream():
                     if time.monotonic() - started > 25 * 60:
@@ -387,7 +417,7 @@ def attach_web(app):
                     total += len(chunk)
                     if total > MAX_REPLAY_BYTES:
                         reject(413, "PORTAL_REPLAY_SIZE", "Размер реплея должен быть не больше 512 МБ.")
-                    await run_in_threadpool(destination.write, chunk)
+                    await run_in_threadpool(media_storage.write_profile_chunk, destination, chunk)
                     digest.update(chunk)
             if length and total != int(length):
                 reject(400, "PORTAL_REPLAY_INCOMPLETE", "Реплей передан не полностью.")

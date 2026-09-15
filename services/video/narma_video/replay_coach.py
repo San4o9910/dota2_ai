@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+from typing import Literal
 
 import httpx
 from google import genai
@@ -17,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import budget as ai_budget
 from . import chatgpt_auth, chatgpt_provider
+from . import openai_provider, openai_budget
 from .db import database
 from .gemini import generate_usage
 from .replay_hero_context import build_hero_context
@@ -45,6 +47,76 @@ class ReplayCoaching(BaseModel):
     summary: str = Field(min_length=1, max_length=900)
     points: list[CoachingPoint] = Field(min_length=1, max_length=6)
     next_game: list[NextGameTask] = Field(min_length=1, max_length=3)
+
+
+class CoachingDecision(BaseModel):
+    """An evidence-bound observation and a conditional decision to practise.
+
+    These fields separate recorded facts from a coach's explanation. Their
+    structure does not establish that an alternative was actually available.
+    """
+    model_config = ConfigDict(extra='forbid', strict=True)
+    kind: Literal['review', 'strength']
+    title: str = Field(min_length=1, max_length=120)
+    observation: str = Field(min_length=1, max_length=600)
+    decision_question: str = Field(min_length=1, max_length=400)
+    reasoning: str = Field(min_length=1, max_length=600)
+    alternative: str = Field(min_length=1, max_length=600)
+    when_to_apply: str = Field(min_length=1, max_length=400)
+    when_not_to_apply: str = Field(min_length=1, max_length=400)
+    evidence_ids: list[str] = Field(min_length=1, max_length=8)
+
+
+COACHING_SCHEMA_V2 = 'narma.replay-coaching.v2'
+
+
+class ReplayCoachingV2(BaseModel):
+    """New paid responses; the original schema remains a supported reader."""
+    model_config = ConfigDict(extra='forbid', strict=True)
+    schema_version: Literal['narma.replay-coaching.v2']
+    summary: str = Field(min_length=1, max_length=900)
+    points: list[CoachingDecision] = Field(min_length=1, max_length=4)
+    next_game: list[NextGameTask] = Field(min_length=1, max_length=1)
+
+
+class ModeLesson(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    first: str = Field(min_length=1, max_length=700)
+    second: str = Field(min_length=1, max_length=700)
+    third: str = Field(min_length=1, max_length=700)
+    evidence_ids: list[str] = Field(min_length=1, max_length=8)
+
+
+class ReplayCoachingV3(ReplayCoachingV2):
+    schema_version: Literal['narma.replay-coaching.v3']
+    training_level: Literal['foundations', 'application', 'advanced']
+    lesson: ModeLesson
+
+
+MODE_LESSONS = {
+    'foundations': ('Понятие простыми словами', 'Действие по шагам', 'Сигнал для проверки'),
+    'application': ('Сравнение вариантов', 'Условие выбора', 'Исключение'),
+    'advanced': ('Цена альтернативы', 'Неизвестное и окно решения', 'Условие отмены плана'),
+}
+
+
+def mode_contract(level):
+    if level not in MODE_LESSONS:
+        return API_SYSTEM_V2, ReplayCoachingV2.model_json_schema(), COACHING_SCHEMA_V2
+    labels = MODE_LESSONS[level]
+    instructions = API_SYSTEM_V2 + (
+        '\nДля этого запроса версия ответа narma.replay-coaching.v3. '
+        f'training_level обязан быть {level}. lesson — главный учебный разбор одного '
+        'подтверждённого эпизода, а не повтор summary. '
+        f'lesson.first: {labels[0]}. lesson.second: {labels[1]}. lesson.third: {labels[2]}. '
+        'Свяжи объяснение с текущим героем, выбранной позицией и evidence_ids. '
+        'Не выдумывай недостающие факты. Глубина меняет способ объяснения и выбор '
+        'учебного вопроса, но не статистику матча. Сохрани ровно один практический фокус.'
+    )
+    schema = ReplayCoachingV3.model_json_schema()
+    # Constrain the actual response, not just a free-form prompt hint.
+    schema['properties']['training_level'] = {'type': 'string', 'const': level}
+    return instructions, schema, 'narma.replay-coaching.v3'
 
 
 SYSTEM = """Ты тренер по Dota. Разбери одного закреплённого игрока по фактам из реплея.
@@ -116,6 +188,42 @@ evidence_ids исходных эпизодов, из которых вытека
 числительные словами: точные показатели и таймкоды интерфейс берёт из фактов отдельно.
 Не включай URL, HTML или Markdown. Ник не нужно повторять. Верни только заданную JSON-схему."""
 
+# Keep SYSTEM and ReplayCoaching unchanged: their exact request digest binds
+# already paid legacy responses to their original facts and training context.
+API_SYSTEM_V2 = SYSTEM + """
+
+Формат текущего ответа — narma.replay-coaching.v2. Вместо прежнего объединённого
+advice используй обязательные поля карточки решения из новой JSON-схемы.
+Выбери от одного до четырёх содержательных эпизодов, начиная с главного доступного
+для тренировки выбора. Не заполняй список ради количества и не повторяй совет
+разными словами. Запиши schema_version точно как в схеме.
+Для каждой карточки:
+kind=review — решение, которое стоит проверить; это не ярлык ошибки.
+kind=strength — конкретное подтверждённое действие, которое имеет смысл сохранить
+при подходящих условиях. Не объявляй высокий счёт, убийство или удачный исход
+сильной стороной без фактов о действии; сильная сторона не обязательна.
+observation — только записанные факты указанного эпизода.
+decision_question — конкретный вопрос о выборе игрока перед действием.
+reasoning — объяснение цены выбора или учебного принципа: что стоит сравнить и
+почему. Оно не устанавливает причину случившегося, намерение или ошибку игрока.
+alternative — конкретное другое действие для проверки в похожем эпизоде; не
+утверждай, что оно было доступно в прошедшем матче, если такой информации нет.
+when_to_apply — наблюдаемые условия, при которых предложенное действие уместно.
+when_not_to_apply — условие отмены или исключение, когда нужен другой выбор.
+Во всех условных полях ясно отделяй предположение и будущую практику от фактов
+матча. Если неизвестны обзор, ресурсы или союзники рядом, назови, что нужно
+проверить, а не приписывай реплею эти условия. Избегай одинакового «пересмотри
+реплей» во всех полях: объясни игроку, на какой выбор смотреть и что сравнить.
+У каждой карточки и упражнения должны быть существующие evidence_ids.
+Вход содержит текущий матч: не утверждай повторяемость по истории, стиль игрока,
+прогресс или освоение навыка. Не выдумывай оценку игры, рейтинг или норму тайминга.
+next_game содержит ровно одно главное упражнение: действие во время игры и
+наблюдаемый способ проверки, связанный с выбранным эпизодом.
+Сохраняй запрет на цифры и числовые утверждения во всех текстовых полях; точные
+таймкоды и показатели интерфейс показывает из исходных событий отдельно.
+Пиши по-русски короткими, законченными фразами, без URL, HTML и Markdown.
+"""
+
 _ID = re.compile(r'^[A-Za-z0-9_.:-]{1,128}$')
 _SAFE_FAILURES = frozenset({
     'REPLAY_COACH_INPUT_INVALID', 'REPLAY_COACH_INPUT_TOO_LARGE',
@@ -127,6 +235,10 @@ _SAFE_FAILURES = frozenset({
     'VIDEO_GLOBAL_BUDGET_INVALID', 'VIDEO_BUDGET_PRICE_POLICY_EXPIRED',
     'VIDEO_REQUEST_BUDGET_EXCEEDED', 'VIDEO_BUDGET_CALL_KIND_INVALID',
     'VIDEO_BUDGET_RECONCILIATION_REQUIRED', 'VIDEO_BUDGET_ACCOUNTING_FAILED',
+    'OPENAI_BUDGET_DISABLED', 'OPENAI_BUDGET_EXCEEDED', 'OPENAI_BUDGET_INVALID',
+    'OPENAI_BUDGET_PRICE_POLICY_EXPIRED', 'OPENAI_BUDGET_BOUND_INVALID',
+    'OPENAI_BUDGET_USAGE_INVALID', 'OPENAI_BUDGET_ACCOUNTING_FAILED',
+    'OPENAI_BUDGET_RECONCILIATION_REQUIRED',
 })
 
 
@@ -217,19 +329,41 @@ def usage_facts(rows):
     return result
 
 
-def validate_coaching(value, evidence_ids):
+def validate_coaching(value, evidence_ids, *, expected_schema=None, expected_level=None):
+    """Read old saved outputs and validate every field of new decision cards.
+
+    Newly requested v2 responses cannot silently downgrade to the legacy shape.
+    Reference/number checks reject structural invention, not all semantic errors.
+    """
     try:
-        result = ReplayCoaching.model_validate(value)
+        version = value.get('schema_version') if isinstance(value, dict) else None
+        if expected_schema is not None and version != expected_schema:
+            raise ValueError('schema mismatch')
+        if expected_level is not None and value.get('training_level') != expected_level:
+            raise ValueError('training level mismatch')
+        model = ReplayCoachingV3 if version == 'narma.replay-coaching.v3' else ReplayCoachingV2 if version is not None else ReplayCoaching
+        result = model.model_validate(value)
     except (ValidationError, TypeError, ValueError):
         raise ValueError('REPLAY_COACH_RESPONSE_INVALID') from None
     texts = [result.summary]
+    if isinstance(result, ReplayCoachingV3):
+        lesson = result.lesson
+        if len(set(lesson.evidence_ids)) != len(lesson.evidence_ids) or not set(lesson.evidence_ids) <= evidence_ids:
+            raise ValueError('REPLAY_COACH_EVIDENCE_MISMATCH')
+        texts.extend([lesson.first, lesson.second, lesson.third])
     for point in [*result.points, *result.next_game]:
         if len(set(point.evidence_ids)) != len(point.evidence_ids) or any(
             evidence_id not in evidence_ids for evidence_id in point.evidence_ids
         ):
             raise ValueError('REPLAY_COACH_EVIDENCE_MISMATCH')
-        texts.extend([point.title, point.observation, point.advice] if isinstance(point, CoachingPoint)
-                     else [point.title, point.action, point.measure])
+        if isinstance(point, CoachingDecision):
+            texts.extend([point.title, point.observation, point.decision_question,
+                          point.reasoning, point.alternative, point.when_to_apply,
+                          point.when_not_to_apply])
+        elif isinstance(point, CoachingPoint):
+            texts.extend([point.title, point.observation, point.advice])
+        else:
+            texts.extend([point.title, point.action, point.measure])
     for text in texts:
         if any(character.isnumeric() for character in text):
             raise ValueError('REPLAY_COACH_NUMERIC_CLAIM')
@@ -268,6 +402,18 @@ def failure_category(error, code):
         return 'lease'
     if code.startswith('CHATGPT_'):
         return 'provider_unavailable'
+    if code in ('OPENAI_AUTHENTICATION_FAILED',):
+        return 'authentication'
+    if code in ('OPENAI_RATE_LIMITED', 'OPENAI_DAILY_LIMIT'):
+        return 'rate_limited'
+    if code == 'OPENAI_NOT_CONFIGURED':
+        return 'configuration'
+    if code == 'OPENAI_TIMEOUT':
+        return 'timeout'
+    if code == 'OPENAI_TRANSPORT_ERROR':
+        return 'transport'
+    if code == 'OPENAI_LEASE_LOST':
+        return 'lease'
     if 'BUDGET' in code or code == 'GEMINI_USAGE_UNSUPPORTED':
         return 'budget'
     if code == 'REPLAY_COACH_NOT_CONFIGURED':
@@ -276,6 +422,8 @@ def failure_category(error, code):
         return 'lease'
     if code in _SAFE_FAILURES and code != 'REPLAY_COACH_UNAVAILABLE':
         return 'validation'
+    if code.startswith('OPENAI_'):
+        return 'provider_unavailable'
     return 'unknown'
 
 
@@ -315,6 +463,8 @@ def carry_forward_coaching(previous, current, source_report_id=None):
         _, old_ids = prepare_evidence(previous)
         _, new_ids = prepare_evidence(current)
         value = {key: old_coaching[key] for key in ('summary', 'points', 'next_game')}
+        if 'schema_version' in old_coaching:
+            value['schema_version'] = old_coaching['schema_version']
         validated = validate_coaching(value, old_ids).model_dump()
         def indexed(evidence):
             by_id, by_fact = {}, {}
@@ -350,6 +500,12 @@ def carry_forward_coaching(previous, current, source_report_id=None):
     }
     if old_context:
         current['coaching']['context'] = deepcopy(old_context)
+    # Reusing exactly matched evidence does not create another provider call.
+    # Preserve the original identity; the API separately verifies it against
+    # this owner's job/source ledger before displaying any recorded usage.
+    for key in ('provider', 'usage_kind', 'call_id', 'connection_generation'):
+        if key in old_coaching:
+            current['coaching'][key] = deepcopy(old_coaching[key])
     return True
 
 
@@ -538,6 +694,84 @@ def analyze_subscription_replay(job, factual_report, context, encoded, evidence_
     return result, str(row['id']), generation
 
 
+def reserve_api_replay(job, factual_report, context, encoded):
+    """Paid calls retain the same source, player, manual role and exercise fences."""
+    player, coverage = factual_report.get('player') or {}, factual_report.get('coverage') or {}
+    if (not all(job.get(key) is not None for key in
+                ('id', 'owner_id', 'account_id', 'match_id', 'source_sha256', 'lease_token'))
+            or coverage.get('complete') is not True
+            or player.get('account_id') != job['account_id']
+            or str(factual_report.get('match_id')) != job['match_id']
+            or coverage.get('source_sha256') != job['source_sha256']):
+        raise ValueError('REPLAY_COACH_INPUT_INVALID')
+    instructions, schema, contract = mode_contract(context.get('training_level'))
+    with database() as connection:
+        connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (job['owner_id'],))
+        connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))', (job['owner_id'],))
+        active = connection.execute('''SELECT r.id,CASE WHEN m.match_id IS NOT NULL THEN m.position
+                ELSE r.requested_position END AS position,r.requested_mmr,r.training_level
+            FROM replay_jobs r
+            JOIN portal_dota_profiles p ON p.owner_id=r.owner_id AND p.account_id=r.account_id
+            LEFT JOIN hero_pool_matches m ON m.owner_id=r.owner_id
+                AND m.account_id=r.account_id AND m.match_id=r.match_id
+            WHERE r.id=%s AND r.owner_id=%s AND r.account_id=%s AND r.match_id=%s
+                AND r.source_sha256=%s AND r.state='processing' AND r.lease_token=%s
+                AND r.lease_expires_at>clock_timestamp() FOR UPDATE OF r''',
+            (job['id'], job['owner_id'], job['account_id'], job['match_id'],
+             job['source_sha256'], job['lease_token'])).fetchone()
+        if not active:
+            raise ValueError('REPLAY_COACH_LEASE_LOST')
+        position = active['position'] if type(active['position']) is int and 1 <= active['position'] <= 5 else None
+        exercise_id = (resolve_active_exercise(connection, job['owner_id'], job['account_id'],
+                        player.get('hero'), position) if position is not None else None)
+        preferences = training_context(active.get('requested_mmr'), active.get('training_level'))
+        if (position != context['position'] or exercise_id != context['exercise_id']
+                or any(preferences[key] != context.get(key) for key in ('mmr', 'training_level'))):
+            raise ValueError('REPLAY_COACH_INPUT_INVALID')
+        # An existing legacy attempt may only be reused with the exact original
+        # request rebuilt from CURRENT facts/preferences. The normal provider
+        # reservation path still enforces source/lease/state/job uniqueness.
+        previous = connection.execute('''SELECT request_sha256 FROM openai_api_calls
+            WHERE owner_id=%s AND job_id=%s AND source_sha256=%s''',
+            (job['owner_id'], job['id'], job['source_sha256'])).fetchone()
+        if previous:
+            for old_contract, old_instructions, old_model in (
+                    ('legacy', SYSTEM, ReplayCoaching), (COACHING_SCHEMA_V2, API_SYSTEM_V2, ReplayCoachingV2)):
+                old_schema = old_model.model_json_schema()
+                old_digest = openai_provider.request_digest(old_instructions, encoded, old_schema)
+                if previous['request_sha256'] == old_digest:
+                    schema, instructions, contract = old_schema, old_instructions, old_contract
+                    break
+        digest = openai_provider.request_digest(instructions, encoded, schema)
+        row = openai_provider.reserve_call(connection, owner_id=job['owner_id'],
+            request_key=f"replay:{job['id']}:{digest}", instructions=instructions, input_data=encoded,
+            schema=schema, kind='replay', job_id=job['id'], lease_token=job['lease_token'])
+        return {**row, '_coaching_contract': contract, '_instructions': instructions, '_schema': schema}
+
+
+def analyze_api_replay(job, factual_report, context, encoded, evidence_ids):
+    row = reserve_api_replay(job, factual_report, context, encoded)
+    if row['state'] == 'succeeded':
+        output = row['output_text']
+    elif row['state'] == 'reserved':
+        legacy = row.get('_coaching_contract') == 'legacy'
+        response = openai_provider.perform_reserved(row['id'], job['owner_id'],
+            row.get('_instructions', SYSTEM if legacy else API_SYSTEM_V2), encoded,
+            row.get('_schema', (ReplayCoaching if legacy else ReplayCoachingV2).model_json_schema()))
+        output = response['text']
+    else:
+        raise openai_provider.ProviderError('OPENAI_CALL_ALREADY_ATTEMPTED')
+    try:
+        value = json.loads(output)
+    except (TypeError, ValueError):
+        raise ValueError('REPLAY_COACH_RESPONSE_INVALID') from None
+    # Accounting has already committed; bad advice cannot release a paid attempt.
+    contract = row.get('_coaching_contract')
+    expected = contract if contract in (COACHING_SCHEMA_V2, 'narma.replay-coaching.v3') else None
+    return validate_coaching(value, evidence_ids, expected_schema=expected,
+        expected_level=context.get('training_level') if expected == 'narma.replay-coaching.v3' else None), str(row['id'])
+
+
 def enrich_report(job, factual_report, coach=None):
     """Keep the parser report intact; failed optional coaching never hides the facts.
 
@@ -560,6 +794,10 @@ def enrich_report(job, factual_report, coach=None):
             model = chatgpt_provider.MODEL
             provenance = {'provider': 'openai-codex', 'usage_kind': 'chatgpt_subscription',
                           'connection_generation': generation}
+        elif owned_coach and selected == 'openai_api':
+            result, call_id = analyze_api_replay(job, factual_report, context, encoded, ids)
+            model = openai_provider.MODEL
+            provenance = {'provider': 'openai', 'usage_kind': 'openai_api', 'call_id': call_id}
         else:
             if owned_coach and selected != 'gemini':
                 raise ValueError('REPLAY_COACH_NOT_CONFIGURED')
@@ -576,7 +814,7 @@ def enrich_report(job, factual_report, coach=None):
                               **provenance, **result.model_dump()}
         print(json.dumps({'event': 'replay_coaching_ready', 'job_id': str(job['id']), 'call_id': call_id}), flush=True)
     except Exception as error:
-        if isinstance(error, (chatgpt_provider.ProviderError, chatgpt_auth.AuthError)):
+        if isinstance(error, (chatgpt_provider.ProviderError, chatgpt_auth.AuthError, openai_provider.ProviderError)):
             code = error.code
         else:
             code = str(error) if isinstance(error, ValueError) and str(error) in _SAFE_FAILURES else 'REPLAY_COACH_UNAVAILABLE'

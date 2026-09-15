@@ -28,6 +28,9 @@ RUNTIME_CONTRACT = "narma.hermes.json-object.v1"
 CHATGPT_MODEL = "gpt-5.4"
 CHATGPT_PROVIDER = "chatgpt_subscription"
 CHATGPT_CONTRACT = "narma.hermes.chatgpt-auth.v1"
+OPENAI_PROVIDER = "openai_api"
+OPENAI_MODEL = "gpt-5.6-sol"
+OPENAI_CONTRACT = "narma.hermes.openai-api.v1"
 LEASE_SECONDS = 240
 RUNNER_TIMEOUT_SECONDS = 200
 TOKEN = re.compile(r"^[A-Za-z0-9_-]{43}$")
@@ -41,9 +44,23 @@ ERROR_CODES = frozenset({"HERMES_RUNTIME_UNAVAILABLE", "HERMES_RUNTIME_REVISION"
 
 
 def configured_provider():
-    """A subscription deployment never falls through to paid Gemini calls."""
+    """Every provider is explicit; no failure falls through to another biller."""
     value = os.environ.get("HERMES_PROVIDER", "gemini")
-    return value if value in ("gemini", CHATGPT_PROVIDER) else "disabled"
+    return value if value in ("gemini", CHATGPT_PROVIDER, OPENAI_PROVIDER) else "disabled"
+
+
+def _openai_context():
+    return {"provider": OPENAI_PROVIDER, "model": OPENAI_MODEL,
+        "runtime_revision": RUNTIME_REVISION}
+
+
+def _openai_available(connection):
+    from . import openai_budget, openai_provider
+    allowance = openai_budget.status(connection)
+    return bool(openai_provider.configured() and allowance["enabled"]
+        and allowance.get("price_valid", False)
+        and allowance.get("available_microusd", 0) >= openai_budget.estimate_reservation(
+            openai_budget.MAX_INPUT_TOKENS, 4096))
 
 
 def _connection_current(connection, owner_id, generation=None, *, require_available=True):
@@ -58,7 +75,11 @@ def task_model(task):
     model = task.get("model", MODEL)
     if ((provider == "gemini" and model == MODEL and task.get("connection_generation") is None)
             or (provider == CHATGPT_PROVIDER and model == CHATGPT_MODEL
-                and task.get("connection_generation") is not None)):
+                and task.get("connection_generation") is not None)
+            or (provider == OPENAI_PROVIDER and model == OPENAI_MODEL
+                and task.get("connection_generation") is None
+                and task.get("snapshot", {}).get("runtime_contract") == OPENAI_CONTRACT
+                and task.get("snapshot", {}).get("provider_context") == _openai_context())):
         return model
     raise ValueError("HERMES_MODEL_UNSUPPORTED")
 
@@ -77,6 +98,10 @@ def enqueue_eligible():
         provider = configured_provider()
         if provider == "disabled":
             continue
+        if provider == OPENAI_PROVIDER:
+            from .openai_provider import configured
+            if not configured():
+                continue
         generation = None
         if provider == CHATGPT_PROVIDER:
             from .chatgpt_auth import current_connection
@@ -89,11 +114,14 @@ def enqueue_eligible():
         # Without evidence from two games there can be no supported repetition.
         if sum(bool(row["evidence"]) for row in snapshot["observations"]) < 2:
             continue
-        snapshot = {**snapshot, "runtime_contract": RUNTIME_CONTRACT if provider == "gemini" else CHATGPT_CONTRACT}
-        model = MODEL if provider == "gemini" else CHATGPT_MODEL
+        snapshot = {**snapshot, "runtime_contract": {"gemini": RUNTIME_CONTRACT,
+            CHATGPT_PROVIDER: CHATGPT_CONTRACT, OPENAI_PROVIDER: OPENAI_CONTRACT}[provider]}
+        model = {"gemini": MODEL, CHATGPT_PROVIDER: CHATGPT_MODEL, OPENAI_PROVIDER: OPENAI_MODEL}[provider]
         if provider == CHATGPT_PROVIDER:
             snapshot["provider_context"] = {"provider": provider, "model": model,
                 "connection_generation": generation}
+        elif provider == OPENAI_PROVIDER:
+            snapshot["provider_context"] = _openai_context()
         digest = hashlib.sha256(canonical_bytes(snapshot)).hexdigest()
         with database() as connection:
             connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner_id,))
@@ -105,6 +133,11 @@ def enqueue_eligible():
                     snapshot["player"]["account_id"], snapshot):
                 # Reconnecting never grants permission to resend an uncertain
                 # request for these same facts under a new credential generation.
+                continue
+            if provider == OPENAI_PROVIDER and _openai_attempted_facts(connection, owner_id,
+                    snapshot["player"]["account_id"], snapshot):
+                # A model/contract change is not permission to repeat an unknown
+                # paid attempt. New evidence may create a genuinely new task.
                 continue
             if _completed_facts(connection, owner_id, snapshot["player"]["account_id"], snapshot):
                 # A corrected transport does not justify buying another review
@@ -139,6 +172,15 @@ def _subscription_attempted_facts(connection, owner_id, account_id, snapshot):
             AND c.started_at IS NOT NULL) LIMIT 1""", (owner_id, account_id, Jsonb(facts))).fetchone())
 
 
+def _openai_attempted_facts(connection, owner_id, account_id, snapshot):
+    facts = {key: value for key, value in snapshot.items() if key not in ("runtime_contract", "provider_context")}
+    return bool(connection.execute("""SELECT 1 FROM hermes_tasks t
+        WHERE t.owner_id=%s AND t.account_id=%s AND t.provider='openai_api'
+        AND t.snapshot-'runtime_contract'-'provider_context'=%s
+        AND EXISTS(SELECT 1 FROM openai_api_calls c WHERE c.task_id=t.id AND c.owner_id=t.owner_id
+            AND c.started_at IS NOT NULL) LIMIT 1""", (owner_id, account_id, Jsonb(facts))).fetchone())
+
+
 def _subscription_allowance(connection, owner_id, generation):
     from .chatgpt_provider import daily_limit
     blocked = connection.execute("""SELECT 1 FROM chatgpt_calls WHERE owner_id=%s AND connection_generation=%s
@@ -167,6 +209,8 @@ def claim_task():
             allowance = budget_status(connection)
             if not allowance["enabled"] or allowance.get("available_microusd", 0) < RESERVATION:
                 return None
+        if provider == OPENAI_PROVIDER and not _openai_available(connection):
+            return None
         connection.execute("""UPDATE hermes_tasks SET state='failed',error_code='HERMES_LEASE_EXPIRED',
             finished_at=now(),credential_sha256=NULL WHERE state='running' AND lease_until<=clock_timestamp()""")
         # Skip stale queued snapshots and let another scheduler claim independent
@@ -177,6 +221,13 @@ def claim_task():
                 WHERE c.owner_id=t.owner_id AND c.created_at>now()-interval '1 day')<250)
             ORDER BY t.created_at,t.id FOR UPDATE OF t SKIP LOCKED LIMIT 250""", (provider,)).fetchall()
         for row in rows:
+            if provider == OPENAI_PROVIDER:
+                try:
+                    task_model(row)
+                except ValueError:
+                    connection.execute("""UPDATE hermes_tasks SET state='stale',
+                        error_code='HERMES_MODEL_UNSUPPORTED',finished_at=now() WHERE id=%s""", (row["id"],))
+                    continue
             if provider == CHATGPT_PROVIDER and not _connection_current(connection, row["owner_id"],
                     row["connection_generation"]):
                 continue
@@ -218,6 +269,10 @@ def authorize_call(connection, token):
     task_model(row)
     if row.get("provider", "gemini") != configured_provider():
         raise ValueError("HERMES_CONNECTION_CHANGED")
+    if row.get("provider") == OPENAI_PROVIDER:
+        from .openai_provider import configured
+        if not configured():
+            raise ValueError("HERMES_CONNECTION_CHANGED")
     if row.get("provider") == CHATGPT_PROVIDER and not _connection_current(connection,
             row["owner_id"], row["connection_generation"]):
         raise ValueError("HERMES_CONNECTION_CHANGED")
@@ -276,6 +331,13 @@ def complete_task(task_id, lease_token, final_response, revision):
                 raise ValueError("HERMES_CALL_NOT_SETTLED")
             if validated["producer"] != {"name": "NousResearch/hermes-agent", "version": RUNTIME_REVISION, "model": model}:
                 raise ValueError("HERMES_REVIEW_INVALID")
+        elif row.get("provider") == OPENAI_PROVIDER:
+            from .openai_provider import verified_call
+            if not verified_call(connection, owner_id=row["owner_id"], task_id=row["id"],
+                    model=model, output_text=final_response):
+                raise ValueError("HERMES_CALL_NOT_SETTLED")
+            if validated["producer"] != {"name": "NousResearch/hermes-agent", "version": RUNTIME_REVISION, "model": model}:
+                raise ValueError("HERMES_REVIEW_INVALID")
         else:
             calls = connection.execute("""SELECT model,billing_status FROM video_provider_calls
                 WHERE hermes_task_id=%s AND call_kind='hermes'""", (row["id"],)).fetchall()
@@ -308,7 +370,8 @@ def latest_valid_review(owner_id):
                     "runtime_verified": True, "interpretation_verified": False,
                     "runtime_revision": row["runtime_revision"], "snapshot_sha256": row["snapshot_sha256"],
                     "snapshot": row["snapshot"], "source_jobs": row["source_jobs"], "review": row["review"],
-                    "provider": row.get("provider", "gemini"), "connection_generation": str(row["connection_generation"]) if row.get("connection_generation") else None}
+                    "provider": row.get("provider", "gemini"), "model": row.get("model", MODEL),
+                    "connection_generation": str(row["connection_generation"]) if row.get("connection_generation") else None}
     return None
 
 
@@ -316,6 +379,7 @@ def get_runtime_status(owner_id):
     provider = configured_provider()
     auth = None
     subscription_available = False
+    openai_configured = openai_available = False
     with database() as connection:
         worker = connection.execute("""SELECT *,last_seen>now()-interval '150 seconds' AS fresh
             FROM hermes_workers WHERE id='scheduler'""").fetchone()
@@ -328,22 +392,29 @@ def get_runtime_status(owner_id):
             auth = current_connection(connection, owner_id)
             subscription_available = bool(auth and auth["available"] and
                 _subscription_allowance(connection, owner_id, auth["generation"]))
+        elif provider == OPENAI_PROVIDER:
+            from .openai_provider import configured
+            openai_configured = configured()
+            openai_available = _openai_available(connection)
     latest = latest_valid_review(owner_id)
     services_ready = bool(worker and worker["fresh"] and worker["runtime_revision"] == RUNTIME_REVISION)
-    connection_ready = provider == "gemini" or bool(auth and auth["connected"])
-    available = provider == "gemini" or subscription_available
+    connection_ready = provider == "gemini" or bool(auth and auth["connected"]) or openai_configured
+    available = provider == "gemini" or subscription_available or openai_available
     verified = bool(latest and latest["provider"] == provider and (provider != CHATGPT_PROVIDER
-        or (auth and latest["connection_generation"] == str(auth["generation"]))))
+        or (auth and latest["connection_generation"] == str(auth["generation"])))
+        and (provider != OPENAI_PROVIDER or latest["model"] == OPENAI_MODEL))
     connected = bool(services_ready and connection_ready and verified)
     current_task = bool(last and last["provider"] == provider and (provider != CHATGPT_PROVIDER
         or (auth and str(last["connection_generation"]) == str(auth["generation"]))))
-    readiness = ("services_unavailable" if not services_ready else "waiting_auth" if not connection_ready
+    readiness = ("services_unavailable" if not services_ready else
+        ("waiting_api_key" if provider == OPENAI_PROVIDER else "waiting_auth") if not connection_ready
         else "paused" if not available else "running" if current_task and last["state"] == "running"
         else "verified" if verified else "requires_review" if last and last["provider"] == provider and last["state"] == "failed"
         and last["attempts"] else "ready")
     return {"runtime_connected": connected,
         "automatic_tracking": bool(connected and available and worker["automatic_tracking"]),
         "runtime_verified": verified, "services_ready": services_ready,
+        "provider_configured": connection_ready,
         "connection_ready": connection_ready, "provider": provider, "readiness": readiness,
         "last_seen": worker["last_seen"] if worker else None,
         "runtime_revision": worker["runtime_revision"] if connected else None,

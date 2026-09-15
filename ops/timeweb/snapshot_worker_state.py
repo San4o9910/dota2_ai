@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import sys
 
@@ -12,6 +13,28 @@ SERVICES = ANALYSIS_SERVICES + HERMES_SERVICES
 SHA = re.compile(r'^[0-9a-f]{40}$')
 CONFIG = re.compile(r'^/opt/narma/releases/[0-9a-f]{40}/services/video/compose.yaml$')
 ENV_FILE = '/opt/narma/secrets/video.env'
+
+# Inspect the existing containers, whose environment may differ from the next
+# release's env file. Importing these modules does not claim work or call a model.
+# The salted connection identity is compared only in memory, never logged/saved.
+DUAL_WORKER_PROBE = '''import hashlib,json,os,sys
+from narma_video import db,resource_lock
+assert os.environ.get('REPLAY_COACH_PROVIDER')=='openai_api'
+assert resource_lock.MEDIA_LOCK==643847215
+assert resource_lock.database is db.database
+if sys.argv[1]=='worker':
+ from narma_video import worker,video_analysis
+ assert video_analysis.configured_mode()=='selective_v1'
+ assert worker.media_slot is resource_lock.media_slot
+ assert video_analysis.media_slot is resource_lock.media_slot
+elif sys.argv[1]=='replay-worker':
+ from narma_video import replay_worker
+ assert replay_worker.media_slot is resource_lock.media_slot
+else:
+ raise AssertionError('unexpected_worker')
+print(json.dumps({'contract':'openai-selective-media-lock-v1','lock':resource_lock.MEDIA_LOCK,
+ 'database':hashlib.sha256((sys.argv[2]+'\\0'+db.database_url()).encode()).hexdigest()}))
+'''
 
 
 def run(args, timeout=30, input=None):
@@ -71,6 +94,37 @@ def inspect_service(service):
     return {'service': service, **item}
 
 
+def verify_analysis_workers(current):
+    active = [item for item in current if item['running'] and item['service'] in ANALYSIS_SERVICES]
+    if len(active) <= 1:
+        return
+    # Legacy video/Gemini/personal runtimes retain their one-worker restriction.
+    # Both OpenAI containers must use one installed release and the same shared
+    # PostgreSQL media lock before a rolling release may preserve their state.
+    if ({item['service'] for item in active} != set(ANALYSIS_SERVICES)
+            or len(active) != 2 or len({item['config'] for item in active}) != 1):
+        raise RuntimeError('replay_activation_multiple_workers_running')
+    challenge = secrets.token_hex(32)
+    identities = []
+    try:
+        for item in active:
+            proof = json.loads(run(['docker', 'exec', item['id'], 'python', '-c',
+                DUAL_WORKER_PROBE, item['service'], challenge]))
+            if (not isinstance(proof, dict) or set(proof) != {'contract', 'lock', 'database'}
+                    or proof['contract'] != 'openai-selective-media-lock-v1'
+                    or type(proof['lock']) is not int or proof['lock'] != 643847215
+                    or not isinstance(proof['database'], str)
+                    or not re.fullmatch('[0-9a-f]{64}', proof['database'])):
+                raise ValueError('invalid_worker_proof')
+            identities.append(proof['database'])
+        if identities[0] != identities[1]:
+            raise ValueError('different_worker_databases')
+        if any(inspect_service(item['service']) != item for item in active):
+            raise ValueError('worker_changed_during_snapshot')
+    except (RuntimeError, ValueError, TypeError, KeyError):
+        raise RuntimeError('replay_activation_multiple_workers_running') from None
+
+
 DATABASE_STATE = '''import hashlib,json
 from narma_video.db import database
 with database() as c:
@@ -88,8 +142,7 @@ def snapshot(sha):
     os.umask(0o077)
     path = state_path(sha)
     current = [item for service in SERVICES if (item := inspect_service(service))]
-    if sum(item['running'] for item in current if item['service'] in ANALYSIS_SERVICES) > 1:
-        raise RuntimeError('replay_activation_multiple_workers_running')
+    verify_analysis_workers(current)
     config = '/opt/narma/releases/' + sha + '/services/video/compose.yaml'
     before = None
     # An established portal must have its account and allowance recorded before
