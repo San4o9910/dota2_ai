@@ -322,6 +322,10 @@ from .hero_pool import attach_hero_pool
 attach_hero_pool(app)
 from .learning import attach_learning
 attach_learning(app)
+from .growth import attach_growth
+attach_growth(app)
+from .owner_dashboard import attach_owner_dashboard
+attach_owner_dashboard(app)
 from .hermes_bridge import attach_hermes
 attach_hermes(app)
 from .chatgpt_auth import attach_chatgpt
@@ -354,6 +358,7 @@ def explore_page():
 @app.get('/player')
 @app.get('/my-learning')
 @app.get('/account')
+@app.get('/owner')
 def portal_page():
     return FileResponse(STATIC_ROOT/'index.html',media_type='text/html',headers={'Cache-Control':'no-store'})
 

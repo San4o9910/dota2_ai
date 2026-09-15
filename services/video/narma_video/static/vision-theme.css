@@ -1,4 +1,23 @@
 /* NARMA / Ronin · COMBO 09. Shared by every public and personal workspace. */
+.growth-tools,.growth-progress { margin-block: 24px; min-width: 0; }
+.growth-block { padding: 24px; border: 1px solid var(--line); background: var(--surface); margin-block: 16px; overflow-wrap: anywhere; }
+.growth-brief { border-top: 3px solid var(--accent); }
+.growth-brief > div { margin-block: 20px; }
+.growth-details { border-block-end: 1px solid var(--line); padding: 16px 0; }
+.growth-details > summary { cursor: pointer; min-height: 44px; display: list-item; padding: 10px 0; font-weight: 600; }
+.growth-details form,.share-options { display: grid; gap: 16px; margin-block: 16px; }
+.growth-tools label,.owner-user label,#owner-content label { display: grid; gap: 8px; min-width: 0; }
+.growth-tools label > textarea,.growth-tools label > select,.owner-user input { width: 100%; }
+.growth-tools .share-options label:has(input[type=checkbox]) { display: flex; align-items: center; gap: 12px; }
+.growth-tools input[type=checkbox] { width: 24px; flex-shrink: 0; }
+.share-preview { display: block; width: min(100%,460px); height: auto; margin-block: 20px; }
+.share-preview[hidden] { display: none; }
+.growth-comparison { color: var(--accent-text); font-size: 1.2rem; }
+.owner-metrics { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,270px),1fr)); gap: 16px; }
+.owner-user,.owner-feedback { padding-block: 20px; border-bottom: 1px solid var(--line); display: grid; gap: 12px; }
+.owner-user input { max-width: 320px; }
+.owner-user button { justify-self: start; }
+@media(max-width: 600px) { .growth-block { padding: 16px; } .growth-tools .chat-actions { align-items: stretch; } .growth-tools .chat-actions button { flex: 1 1 150px; } }
 :root {
   color-scheme: dark;
   --bg: #001621;

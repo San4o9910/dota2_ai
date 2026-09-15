@@ -222,6 +222,7 @@ def _plans(connection, owner_id, profile, history):
                 "date_source": fact["date_source"]})
         result.append({key: plan[key] for key in ("id", "exercise_id", "curriculum_version", "hero", "position", "status", "created_at", "updated_at", "source_job_id", "source_match_id")} | {
             "hero_label": next((f["label"] for f in history if f["hero"] == plan["hero"]), plan["hero"].removeprefix("npc_dota_hero_").replace("_", " ").title()),
+            "baseline_match_ids": plan['baseline_match_ids'],
             "exercise": curriculum.get_exercise(plan["exercise_id"], plan["position"]),
             "validity": validity, "can_check": validity == "current" and plan["status"] == "active",
             "checks": checks, "stale_checks": stale, "self_report_counts": counts,

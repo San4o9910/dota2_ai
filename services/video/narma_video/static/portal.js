@@ -2,6 +2,8 @@ import { roleGuidance } from './role-guidance.js';
 import { createVideoWorkspace } from './video-workspace.js';
 import { createPersonalCoach, renderDecisionPoints } from './personal-coach.js';
 import { mountCoachChat, renderModeLesson } from './coach-chat.js';
+import { mountReportTools, mountProgress, clearGrowth } from './growth.js';
+import { createOwnerDashboard } from './owner-dashboard.js';
 const $ = id => document.getElementById(id);
 const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set(),chatgpt:null,chatgptRequest:0,chatgptController:null,chatgptTimer:null,chatgptClock:null};
 const entry = new URLSearchParams(location.hash.slice(1));
@@ -37,6 +39,15 @@ async function api(path, method='GET', body) {
   return data;
 }
 const videoWorkspace=createVideoWorkspace({api,onPlayer:()=>switchTab('review')});
+const ownerDashboard=createOwnerDashboard({api,host:$('owner-content')});
+$('owner-refresh').addEventListener('click',()=>void ownerDashboard.load());
+async function openGrowthReplay(id,evidenceId,expected){
+  const user=state.user;switchTab('review');state.showArchived=false;
+  try{await openReplay(id,true);if(state.user!==user||state.selected!==id)return;
+    if(expected?.report_sha256&&state.detail?.report_sha256!==expected.report_sha256){notice('Разбор изменился. Выбери эпизод в актуальном отчёте.');return;}
+    if(evidenceId)focusEvidence(evidenceId);
+  }catch(error){if(state.user===user)notice(error.message);}
+}
 const personalCoach=createPersonalCoach({api,heroName,heroIcon,onNavigate:tab=>switchTab(tab),onOpenReplay:async(id,evidenceId,expected)=>{
   const user=state.user;switchTab('review');state.showArchived=false;$('result').hidden=true;
   try{await openReplay(id,true);}catch(error){if(state.user===user)notice(`Не удалось открыть выбранный матч. ${error.message}`);throw error;}
@@ -46,7 +57,7 @@ const personalCoach=createPersonalCoach({api,heroName,heroIcon,onNavigate:tab=>s
   if(!expected?.report_sha256||state.detail.report_sha256!==expected.report_sha256||String(report?.match_id)!==String(expected.match_id)||report?.coverage?.source_sha256!==expected.source_sha256||report?.player?.hero!==expected.hero||position!==(expected.position??null)){notice('Этот разбор обновился. Открыта текущая версия; выбери эпизод заново, чтобы проверить актуальный таймкод.');return;}
   focusEvidence(evidenceId);
 }});
-const tabPaths={coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account'};
+const tabPaths={coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
 function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'review';}
 function switchTab(tab,{historyMode='push'}={}) {
   if(!Object.hasOwn(tabPaths,tab)||!$(tab)) return;
@@ -63,6 +74,8 @@ function switchTab(tab,{historyMode='push'}={}) {
   if(tab!=='account') clearSecuritySecrets();
   if(tab==='account'&&state.user) void loadChatgpt();
   if(tab==='account'&&state.user) void loadSecurity();
+  if(tab!=='owner')ownerDashboard.clearPassword();
+  if(tab==='owner'&&state.user)void ownerDashboard.load();
 }
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',event=>{if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();switchTab(button.dataset.tab);}));
 window.addEventListener('popstate',()=>{state.authMode=location.pathname==='/register'?'register':'login';if(!state.user)renderAuth();switchTab(pathTab(),{historyMode:'none'});});
@@ -109,11 +122,13 @@ async function session() {
   const data=await api('/api/session'); state.setup=data.setup_required===true; state.user=data.authenticated?data.user:null;
   state.coaching=data.coaching??{};
   state.registrationAvailable=data.registration_available===true;
+  ownerDashboard.setSession(state.user);$('owner-nav').hidden=!state.user?.is_platform_owner;
   $('chatgpt-integration').hidden=state.coaching.personal_connect!==true;
   $('platform-coach').hidden=!state.user||state.coaching.mode!=='platform';
   $('platform-coach-status').textContent=state.coaching.available===true?'Тренер подключён к платформе. Личная подписка ChatGPT для разбора не нужна.':'Подключение тренера временно недоступно. Сохранённые разборы и практика остаются доступны.';
   $('loading').hidden=true; $('workspace').hidden=!state.user; $('auth').hidden=!!state.user; $('logout').hidden=!state.user;
   if(!state.user) {
+    clearGrowth($('report-growth'));clearGrowth($('learning-progress'));$('report-chat').replaceChildren();
     clearSecuritySecrets(); $('pilot-invitations').hidden=true;
     stopChatgptPolling();state.chatgpt=null;$('chatgpt-content').replaceChildren();$('chatgpt-status').textContent='';
     state.pool=null; state.poolRequest++; state.poolDrafts.clear(); state.poolJournalOpen.clear(); state.poolSignature=''; state.poolVisible=20;
@@ -128,6 +143,7 @@ async function session() {
     renderAuth();return;
   }
   $('account-email').textContent=state.user.email;
+  if(pathTab()==='owner')void ownerDashboard.load();
   $('pilot-invitations').hidden=state.user.is_platform_owner!==true;
   if(state.invite) notice('Чтобы принять приглашение на другой аккаунт, сначала нажми «Выйти».');
   if(['/register','/login'].includes(location.pathname))switchTab('coach',{historyMode:'replace'});
@@ -597,7 +613,7 @@ function heroIcon(hero,{label=heroName(hero),className='report-portrait',lazy=fa
 }
 function renderHeroHeader(report) {
   const target=$('report-hero'); target.replaceChildren(); target.hidden=!report;
-  if(!report) return;
+  if(!report) {clearGrowth($('report-growth'));return;}
   const hero=report.player?.hero,label=typeof hero==='string'&&/^npc_dota_hero_([a-z0-9_]{1,80})$/.test(hero)?heroName(hero):'Герой не определён';
   target.append(heroIcon(hero,{label}),node('h3',label,'report-hero-name'));
 }
@@ -662,7 +678,10 @@ function renderDetail() {
   renderModeLesson($('report-mode-lesson'),coach?.status==='ready'?coach:null,{evidence:state.evidence,onEvidence:focusEvidence});
   const chat=$('report-chat'),identity=state.user;
   chat.hidden=job.state!=='ready'||state.showArchived||detail.report_is_previous===true;
-  if(!chat.hidden)mountCoachChat(chat,{api,jobId:job.id,reportHash:detail.report_sha256,evidence:report.evidence??[],context:{...job.training_context,position:detail.hero_context?.position},identity:identity?.email??identity?.id,isCurrent:()=>state.user===identity&&state.selected===job.id&&!state.showArchived,onEvidence:focusEvidence});
+  if(!chat.hidden)mountCoachChat(chat,{api,jobId:job.id,reportHash:detail.report_sha256,evidence:report.evidence??[],context:{...job.training_context,position:detail.hero_context?.position},identity:identity?.email??identity?.id,isCurrent:()=>state.user===identity&&state.selected===job.id&&!state.showArchived,onEvidence:focusEvidence,onRelatedEvidence:ref=>openGrowthReplay(ref.job_id,ref.evidence_id,ref)});
+  const growth=$('report-growth');growth.hidden=chat.hidden;
+  if(growth.hidden)clearGrowth(growth);
+  else mountReportTools(growth,{api,jobId:job.id,reportHash:detail.report_sha256,report,identity:identity?.email,isCurrent:()=>state.user===identity&&state.selected===job.id&&!state.showArchived,onEvidence:focusEvidence,heroName,onQuestion:question=>{chat.dispatchEvent(new CustomEvent('narma-question',{detail:question}));chat.scrollIntoView({block:'start'});}});
   if(coach?.status==='ready') { $('coaching-summary').textContent=coach.summary??''; renderPoints($('coaching'),coach.points,coach.schema_version); }
   else {
     const needsConnection=coach?.failure_code==='CHATGPT_NOT_CONNECTED'&&state.coaching?.personal_connect===true;
@@ -1062,6 +1081,7 @@ function renderReportLearning() {
 }
 function renderLearning() {
   const target=$('pool-learning'),data=state.learning;target.replaceChildren();if(!data)return;
+  const identity=state.user;mountProgress($('learning-progress'),{api,isCurrent:()=>state.user===identity,onOpen:openGrowthReplay});
   const stages=data.catalog?.stages??[],exercises=data.catalog?.exercises??[],plans=data.plans??[];
   const hero=$('learning-hero')?.value??'',position=Number($('learning-position')?.value)||null,scopeReady=!!hero&&!!position;
   const guidance=roleGuidance(data.role_context??data.catalog?.role_context);if(guidance)target.append(guidance);

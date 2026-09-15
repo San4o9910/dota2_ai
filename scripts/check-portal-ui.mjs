@@ -13,8 +13,8 @@ function dependency(name) {
 }
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
-const files=Object.fromEntries(['/register','/login','/coach','/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
-Object.assign(files,{'/assets/vision-theme.css':['vision-theme.css','text/css'],'/assets/coach-chat.js':['coach-chat.js','text/javascript'],'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
+const files=Object.fromEntries(['/register','/login','/coach','/replays','/hero-pool','/my-learning','/player','/account','/owner','/setup'].map(route=>[route,['index.html','text/html']]));
+Object.assign(files,{'/assets/growth.js':['growth.js','text/javascript'],'/assets/owner-dashboard.js':['owner-dashboard.js','text/javascript'],'/assets/vision-theme.css':['vision-theme.css','text/css'],'/assets/coach-chat.js':['coach-chat.js','text/javascript'],'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type',file[1]); response.end(await readFile(path.join(root,file[0])));
@@ -122,7 +122,7 @@ try {
     }
     const errors=[], requests=[];
     const integrationRequests=[];
-    const replayCreates=[],chatTurns=[];
+    const replayCreates=[],chatTurns=[],growthAttempts=[],feedbackWrites=[];
     let releaseReplayCreate,observeFirstReplayCreate;
     const firstReplayCreateGate=new Promise(resolve=>{releaseReplayCreate=resolve;});
     const firstReplayCreateStarted=new Promise(resolve=>{observeFirstReplayCreate=resolve;});
@@ -153,6 +153,7 @@ try {
         body=chatgpt;}
       }
       else if(endpoint==='/api/learning'&&learningFailed) {status=503;body={detail:'Synthetic learning refresh failure.'};}
+      else if(endpoint==='/api/learning/progress') body={plans:[]};
       else if(endpoint==='/api/learning') {const hero=url.searchParams.get('hero'),position=Number(url.searchParams.get('position'))||null;body={schema_version:'narma.learning.v1',catalog:learningCatalog(position),profile:bound?profile:null,scope:{hero,position},plans:learningPlans.filter(plan=>(!hero||plan.hero===hero)&&(!position||plan.position===position)).map(projectPlan),history:(learningEmpty?[]:[...poolMatches,...(job?[learningMatch(job.id)]:[])]).filter(match=>(!hero||match.hero===hero)&&(!position||match.position===position))};}
       else if(endpoint.startsWith('/api/learning/reports/')) body=learningReport(endpoint.split('/').at(-1));
       else if(endpoint==='/api/learning/plans'&&method==='POST') {const command=request.postDataJSON(),match=learningMatch(command.job_id);assert.ok(match.position);for(const plan of learningPlans)if(plan.hero===match.hero&&plan.position===match.position)plan.status='paused';const plan={id:`practice-${learningPlans.length+1}`,exercise_id:command.exercise_id,exercise:learningExercises.find(item=>item.id===command.exercise_id),hero:match.hero,hero_label:'Necrophos',position:match.position,status:'active',created_at:new Date().toISOString(),source_job_id:match.job_id,source_match_id:match.match_id,checks:[]};learningPlans.push(plan);body={saved:true,plan:projectPlan(plan)};}
@@ -171,6 +172,11 @@ try {
         const event={id:'death-1',type:'death',time:coachReference(Number(match.job_id.slice(5))).time,title:'Смерть выбранного героя',details:'Синтетический эпизод для проверки ссылки.'};
         body={replay:{id:match.job_id,state:'ready',progress:100,match_id:match.match_id,nickname:profile.nickname,created_at:new Date().toISOString()},report:{...report,match_id:match.match_id,player:{...report.player,hero:match.hero},evidence:[event]},hero_context:null,archived_report:null,parts:[]};
       }
+      else if(endpoint.endsWith('/practice')&&endpoint.startsWith('/api/replays/')){
+        if(method==='POST'){growthAttempts.push(request.postDataJSON());body={saved:true,reflection:{action:'Сначала назови достижимую цель.',why:'Это позволяет сравнить варианты.',exception:'Срочная защита меняет приоритет.',measurement:'Проверь информацию до решения.'},note:'Ориентир для самостоятельной проверки.'};}
+        else body={report_sha256:'c'.repeat(64),position_required:false,attempts:[],scenarios:[{exercise_id:'r1',title:'Решение до смерти',question:'Какую пользу ты ожидал и какие варианты были доступны?',episode:{evidence_id:'death-1',time:600}}]};
+      }
+      else if(endpoint.endsWith('/feedback')){feedbackWrites.push(request.postDataJSON());body={saved:true};}
       else if(/^\/api\/replays\/[^/]+\/chat$/.test(endpoint)) {
         if(method==='POST'){const value=request.postDataJSON();assert.equal(value.report_sha256,'c'.repeat(64));const turn={...value,state:'succeeded',answer:{answer:'Проверь, какую цель давало возвращение.',next_step:'Перед выходом назови цель.',evidence_ids:['death-1']}};if(!chatTurns.some(item=>item.id===value.id))chatTurns.push(turn);body={turn};}
         else body={turns:chatTurns,report_sha256:'c'.repeat(64),context:{training_level:'advanced'},available:true};
@@ -277,6 +283,35 @@ try {
     assert.equal(chatTurns.length,1,'One explicit question creates one chat turn.');
     await page.locator('#report-chat').getByRole('button',{name:'Обновить разговор',exact:true}).click();
     assert.equal(chatTurns.length,1,'Reading saved chat never creates another paid request.');
+    await page.locator('#report-chat').getByLabel('Контекст разговора',{exact:true}).selectOption('series');
+    await page.locator('#report-chat').getByLabel('Твой вопрос',{exact:true}).fill('Как менялись мои решения в последних матчах?');
+    await page.locator('#report-chat').getByRole('button',{name:'Спросить тренера',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('#report-chat .chat-question').length===2);
+    assert.equal(chatTurns.at(-1).scope,'series');
+    const growth=page.locator('#report-growth');
+    await growth.getByText('Потренироваться на эпизоде из этого матча',{exact:true}).click();
+    await growth.getByLabel('Как бы ты поступил и почему?',{exact:true}).fill('Сначала проверю доступную цель и союзников.');
+    assert.equal(await growth.getByText('Сначала назови достижимую цель.',{exact:true}).count(),0);
+    await growth.getByRole('button',{name:'Сохранить ответ и разобрать варианты',exact:true}).click();
+    await growth.getByText('Сначала назови достижимую цель.',{exact:true}).waitFor();
+    assert.equal(growthAttempts.length,1);
+    if(width===390){
+      await growth.getByText('Оценить совет тренера',{exact:true}).click();
+      await growth.getByLabel('Пояснение',{exact:true}).fill('Не учтена защита базы.');
+      await growth.getByRole('button',{name:'Сохранить отзыв',exact:true}).click();
+      await growth.getByText('Отзыв сохранён. Спасибо!',{exact:false}).waitFor();
+      assert.equal(feedbackWrites.length,1);
+    }
+    await growth.getByText('Карточка для Telegram',{exact:true}).click();
+    assert.equal(await growth.getByLabel('Показать мой ник',{exact:true}).isChecked(),false);
+    assert.equal(await growth.getByLabel('Показать номер матча',{exact:true}).isChecked(),false);
+    await growth.getByRole('button',{name:'Посмотреть карточку',exact:true}).click();
+    await growth.locator('.share-preview').waitFor();
+    const png=page.waitForEvent('download');await growth.getByRole('button',{name:'Скачать PNG',exact:true}).click();
+    assert.equal((await png).suggestedFilename(),'narma-vision-result.png');
+    assert.equal(chatTurns.length,2,'Practice, feedback and preview do not silently call the model.');
+    await growth.getByText('Потренироваться на эпизоде из этого матча',{exact:true}).click();
+    await growth.getByText('Карточка для Telegram',{exact:true}).click();
     if(screenshotDir)await page.screenshot({path:path.join(screenshotDir,`portal-${width}-coach-chat.png`),fullPage:true});
     if(width===390) {
       assert.match(await page.locator('#report-ai-status').textContent(),/Комментарий OpenAI подтверждён/);
@@ -816,6 +851,7 @@ try {
       else if(endpoint==='/api/profile')body={profile:null};
       else if(endpoint==='/api/replays')body={replays:[],worker_ready:true};
       else if(endpoint==='/api/hero-pool')body=fixtures.pool(true);
+      else if(endpoint==='/api/learning/progress') body={plans:[]};
       else if(endpoint==='/api/learning')body=fixtures.learning(true);
       else throw Error(`Unexpected registration request ${endpoint}`);
       await route.fulfill({status,json:body});
@@ -893,7 +929,8 @@ try {
         if(endpoint==='/api/profile')body={profile:empty?null:profile};
         else if(endpoint==='/api/replays')body={replays:empty?[]:fixture.history.map(match=>fixture.detail(match.job_id).replay),worker_ready:true,max_bytes:512*1024**2};
         else if(endpoint==='/api/hero-pool')body=fixture.pool(empty);
-        else if(endpoint==='/api/learning')body=fixture.learning(empty);
+        else if(endpoint==='/api/learning/progress') body={plans:[]};
+      else if(endpoint==='/api/learning')body=fixture.learning(empty);
         else if(endpoint.startsWith('/api/learning/reports/'))body=fixture.learning(empty,endpoint.split('/').at(-1));
         else if(endpoint.endsWith('/chat')){const id=endpoint.split('/').at(-2);body={turns:[],report_sha256:fixture.detail(id).report_sha256,context:{},available:false};}
         else if(endpoint.startsWith('/api/replays/')){
