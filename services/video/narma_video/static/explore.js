@@ -1,5 +1,6 @@
 import { learningChapter } from '/assets/learning-chapter.js';
 import { roleGuidance } from './role-guidance.js';
+import './brand-motion.js';
 const page = document.querySelector('#page-content');
 const paths = { '/': 'home', '/heroes': 'heroes', '/builds': 'builds', '/learn': 'learn', '/practice': 'practice', '/updates': 'updates' };
 const route = paths[location.pathname.replace(/\/$/, '') || '/'] || 'home';

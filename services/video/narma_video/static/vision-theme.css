@@ -55,6 +55,29 @@ button:hover:not(:disabled), .button:hover, .quiet:hover:not(:disabled) { backgr
 .top, .site-header { background: var(--bg); }
 .top { padding-top: 21px; padding-bottom: 21px; }
 .brand-symbol, .brand-mark { background: var(--accent); border: 0; border-radius: 0; color: var(--accent-ink); clip-path: polygon(0 0,78% 0,100% 22%,100% 100%,22% 100%,0 78%); }
+/* The approved N cut: a stable mark with one directional orange stroke. */
+.brand .narma-mark, .narma-mark { position: relative; display: inline-block; width: 40px; height: 44px; flex: 0 0 auto; padding: 0; background: transparent; border: 0; clip-path: none; overflow: visible; color: var(--text); font: 400 42px/1 var(--display); letter-spacing: 0; }
+.narma-mark > .narma-cut-upper, .narma-mark > .narma-cut-lower { position: absolute; inset: 0; display: grid; place-items: center; font: inherit; color: inherit; }
+.narma-cut-upper { clip-path: polygon(0 0,100% 0,100% 34%,0 76%); }
+.narma-cut-lower { clip-path: polygon(0 76%,100% 34%,100% 100%,0 100%); }
+.narma-cut-line { position: absolute; left: -3%; top: 54%; width: 106%; height: 2px; background: var(--accent); opacity: 0; transform: rotate(-23deg) scaleX(.4); pointer-events: none; }
+.narma-cut-playing > .narma-cut-upper { animation: narma-cut-upper var(--narma-cut-duration,800ms) cubic-bezier(.2,.8,.2,1) both; }
+.narma-cut-playing > .narma-cut-lower { animation: narma-cut-lower var(--narma-cut-duration,800ms) cubic-bezier(.2,.8,.2,1) both; }
+.narma-cut-playing > .narma-cut-line { animation: narma-cut-line var(--narma-cut-duration,800ms) ease both; }
+.result-state-group { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+#result-signature { width: 26px; height: 30px; font-size: 29px; }
+.narma-mark[hidden] { display: none; }
+.narma-episode-target { position: relative; }
+.narma-episode-line { position: absolute; top: 8px; left: 8px; width: 42px; height: 2px; background: var(--accent); opacity: 0; transform: rotate(-23deg); transform-origin: left; pointer-events: none; }
+.narma-episode-playing > .narma-episode-line { animation: narma-episode-cut var(--narma-cut-duration,360ms) ease both; }
+@keyframes narma-cut-upper { 0% { transform: translate(-8%,-3%); opacity: .25; } 55% { transform: translate(-3%,-1%); opacity: 1; } 100% { transform: translate(0,0); opacity: 1; } }
+@keyframes narma-cut-lower { 0% { transform: translate(8%,3%); opacity: .25; } 55% { transform: translate(3%,1%); opacity: 1; } 100% { transform: translate(0,0); opacity: 1; } }
+@keyframes narma-cut-line { 0% { opacity: 0; transform: rotate(-23deg) scaleX(0); } 25% { opacity: 1; transform: rotate(-23deg) scaleX(1.15); } 70% { opacity: 1; transform: rotate(-23deg) scaleX(.65); } 100% { opacity: 0; transform: rotate(-23deg) scaleX(.4); } }
+@keyframes narma-episode-cut { 0% { opacity: 0; transform: rotate(-23deg) scaleX(0); } 35% { opacity: 1; transform: rotate(-23deg) scaleX(1); } 100% { opacity: 0; transform: rotate(-23deg) scaleX(.55); } }
+@media(prefers-reduced-motion: reduce) {
+  .narma-mark > span, .narma-episode-line { animation: none !important; }
+  .narma-cut-line, .narma-episode-line { display: none; }
+}
 .brand b { color: var(--text); }
 .brand small, .pilot { color: var(--muted); }
 .pilot { border-radius: 2px; }

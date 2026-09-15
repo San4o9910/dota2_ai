@@ -2,8 +2,8 @@
 
 The owner approved practice follow-up, cross-match conversation, personal replay
 exercises, a short report, feedback, owner operations and share cards. The visual
-choice for the signature motion remains open; no candidate is activated in the
-production interface until the owner selects it.
+choice for the signature motion is **N cut**, selected by the owner on
+2026-09-15. It uses the existing navy, ivory and orange palette.
 
 ## Player experience
 
@@ -52,15 +52,18 @@ field. Its regression test invokes the actual JSON writer for all severity level
 The scheduled default-branch monitor must pin a tested revision with this fix;
 its schedule and permissions do not need changing.
 
-## Motion candidates for owner selection
+## Approved signature motion
 
-1. **N cut**: a short orange diagonal separates and recombines the N mark; 800 ms.
-2. **Focus**: four brackets converge on the mark or selected episode; 950 ms.
-3. **Trajectory**: a short path links a match, observation and next step; 1100 ms.
+**N cut**: a short orange diagonal separates and recombines the N mark; 800 ms.
+The introduction appears once per tab session across the public pages and private
+workspace. A 560 ms variation marks an observed pending-to-ready report transition;
+opening a saved report or polling a ready report does not replay completion.
+A 360 ms directional stroke highlights an explicitly selected replay episode.
 
-The chosen motif should have a shorter UI variation, appear only on meaningful
-transitions, never block interaction, never loop, and honor reduced motion. No
-audio or persistent background motion is proposed.
+The motion never hides content, blocks interaction or loops. Reduced motion,
+backgrounding the page and leaving the page stop active effects. The static N
+and selected episode remain visible. No audio, dependencies or provider calls
+are added.
 
 ## Verification and limits
 
