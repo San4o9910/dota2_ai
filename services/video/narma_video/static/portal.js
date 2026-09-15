@@ -4,6 +4,8 @@ import { createPersonalCoach, renderDecisionPoints } from './personal-coach.js';
 import { mountCoachChat, renderModeLesson } from './coach-chat.js';
 import { mountReportTools, mountProgress, clearGrowth } from './growth.js';
 import { createOwnerDashboard } from './owner-dashboard.js';
+import { createCompletionMotion, playEpisodeCut } from './brand-motion.js';
+const completionMotion = createCompletionMotion();
 const $ = id => document.getElementById(id);
 const state = {user:null, profile:null, setup:false, token:new URLSearchParams(location.hash.slice(1)).get('token'), selected:null, detail:null, busy:false, uploadId:null, time:0, evidence:new Map(), graphs:[], pool:null, poolRequest:0, showArchived:false, poolDrafts:new Map(), poolJournalOpen:new Set(), poolSignature:'', poolVisible:20, learning:null,reportLearning:null,learningRequest:0,reportLearningRequest:0,learningStage:null,learningExercise:null,reportExercise:null,learningDrafts:new Map(),learningMatches:new Map(),learningCanonicalTrail:new Set(),chatgpt:null,chatgptRequest:0,chatgptController:null,chatgptTimer:null,chatgptClock:null};
 const entry = new URLSearchParams(location.hash.slice(1));
@@ -128,6 +130,7 @@ async function session() {
   $('platform-coach-status').textContent=state.coaching.available===true?'Тренер подключён к платформе. Личная подписка ChatGPT для разбора не нужна.':'Подключение тренера временно недоступно. Сохранённые разборы и практика остаются доступны.';
   $('loading').hidden=true; $('workspace').hidden=!state.user; $('auth').hidden=!!state.user; $('logout').hidden=!state.user;
   if(!state.user) {
+    completionMotion.reset();
     clearGrowth($('report-growth'));clearGrowth($('learning-progress'));$('report-chat').replaceChildren();
     clearSecuritySecrets(); $('pilot-invitations').hidden=true;
     stopChatgptPolling();state.chatgpt=null;$('chatgpt-content').replaceChildren();$('chatgpt-status').textContent='';
@@ -385,7 +388,7 @@ function drawCombat(duration) {
   const layout=node('div',undefined,'episode-layout'), list=node('div',undefined,'episode-list'), detail=node('div',undefined,'episode-detail');
   list.setAttribute('role','group'); list.setAttribute('aria-label','Выбрать эпизод по времени'); detail.setAttribute('aria-live','polite'); detail.setAttribute('aria-atomic','true');
   const count=node('p',undefined,'help episode-count');
-  const choose=event=>{state.combatSelected=event.key;renderSelection(event);seekTime(event.time,event.evidenceId);};
+  const choose=event=>{state.combatSelected=event.key;renderSelection(event);seekTime(event.time,event.evidenceId);playEpisodeCut(detail);};
   function renderSelection(event) {
     for(const button of list.children) button.setAttribute('aria-pressed',String(button.dataset.episodeKey===event?.key));
     detail.replaceChildren();
@@ -573,6 +576,7 @@ function focusEvidence(id) {
   $('event-filter').value='all'; renderEvents(); seekTime(evidence.time,id);
   const row=Array.from($('events').children).find(element=>element.dataset.evidenceId===id);
   row?.scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+  if(row)playEpisodeCut(row);
 }
 function renderPoints(target, points, schemaVersion) {
   if(['narma.replay-coaching.v2','narma.replay-coaching.v3'].includes(schemaVersion))return renderDecisionPoints(target,points,{schemaVersion,evidence:state.evidence,onEvidence:focusEvidence});
@@ -650,6 +654,9 @@ function renderCoachingStatus(detail, report) {
 function renderDetail() {
   const detail=state.detail; if(!detail) return; const job=detail.replay, report=state.showArchived&&detail.archived_report?.report?detail.archived_report.report:detail.report;
   $('result').hidden=false; $('result-title').textContent=job.match_id?`Матч ${job.match_id}`:job.filename; $('result-state').textContent=labels[job.state]??job.state;
+  const ready=job.state==='ready'&&!!report&&!state.showArchived&&!detail.report_is_previous;
+  $('result-signature').hidden=!ready;
+  completionMotion.observe(job,$('result-signature'),ready);
   $('result-player').textContent=report?`${report.player.nickname} · ${report.player.team==='radiant'?'Radiant':'Dire'}${report.outcome==='win'?' · Победа':report.outcome==='loss'?' · Поражение':''}`:job.nickname;
   $('analysis-progress').hidden=job.state!=='processing'; $('analysis-progress').value=job.progress??0;
   $('result-status').textContent=job.state==='failed'?(failures[job.failure_code]??'Не удалось завершить разбор этого реплея. Повтори загрузку полного файла .dem.'):job.state==='queued'?'Реплей загружен. Ожидаем начало разбора.':job.state==='processing'?`Читаем события матча и готовим разбор · ${num(job.progress)}%`:job.state==='uploading'?'Реплей ещё загружается.':report?`Полный матч · ${stamp(report.metrics?.duration_seconds)} · Разбор закреплённого игрока`:'Результат ещё не получен.';

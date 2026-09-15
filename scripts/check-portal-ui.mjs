@@ -14,7 +14,7 @@ function dependency(name) {
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const files=Object.fromEntries(['/register','/login','/coach','/replays','/hero-pool','/my-learning','/player','/account','/owner','/setup'].map(route=>[route,['index.html','text/html']]));
-Object.assign(files,{'/assets/growth.js':['growth.js','text/javascript'],'/assets/owner-dashboard.js':['owner-dashboard.js','text/javascript'],'/assets/vision-theme.css':['vision-theme.css','text/css'],'/assets/coach-chat.js':['coach-chat.js','text/javascript'],'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
+Object.assign(files,{'/assets/brand-motion.js':['brand-motion.js','text/javascript'],'/assets/growth.js':['growth.js','text/javascript'],'/assets/owner-dashboard.js':['owner-dashboard.js','text/javascript'],'/assets/vision-theme.css':['vision-theme.css','text/css'],'/assets/coach-chat.js':['coach-chat.js','text/javascript'],'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type',file[1]); response.end(await readFile(path.join(root,file[0])));
@@ -204,11 +204,21 @@ try {
       }
       await route.fulfill({status,json:body,headers:responseHeaders});
     });
+    await page.addInitScript(()=>{
+      window.__narmaMotion=[];
+      document.addEventListener('animationstart',event=>{
+        if(event.animationName.startsWith('narma-'))window.__narmaMotion.push({name:event.animationName,parent:event.target.parentElement?.id});
+      });
+    });
     await page.goto(origin+'/replays');
     assert.equal(await page.evaluate(()=>getComputedStyle(document.body,'::before').animationName),'none');
     await page.emulateMedia({reducedMotion:'reduce'});
+    await page.waitForFunction(()=>!document.querySelector('.narma-cut-playing'));
     assert.deepEqual(await page.evaluate(()=>({animation:getComputedStyle(document.body,'::before').animationName,transform:getComputedStyle(document.body,'::before').transform,events:getComputedStyle(document.body,'::before').pointerEvents})),{animation:'none',transform:'none',events:'none'},'Personal replay pages respect reduced motion without blocking controls.');
     await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.reload();
+    await page.getByLabel('Email',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.__narmaMotion.length),0,'The brand introduction does not repeat on navigation in the same tab.');
     await page.getByLabel('Email',{exact:true}).fill('fixture@example.test');
     await page.getByLabel('Пароль',{exact:true}).fill('Synthetic passphrase 2026');
     await page.getByRole('button',{name:'Войти',exact:true}).click();
@@ -313,6 +323,19 @@ try {
     await growth.getByText('Потренироваться на эпизоде из этого матча',{exact:true}).click();
     await growth.getByText('Карточка для Telegram',{exact:true}).click();
     if(screenshotDir)await page.screenshot({path:path.join(screenshotDir,`portal-${width}-coach-chat.png`),fullPage:true});
+    assert.equal(await page.evaluate(()=>window.__narmaMotion.filter(event=>event.parent==='result-signature').length),0,'Opening a saved report is not a new analysis completion.');
+    job.state='processing';job.progress=60;
+    await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
+    await page.locator('#result-state').getByText('Разбираем матч',{exact:true}).waitFor();
+    assert.equal(await page.locator('#result-signature').isHidden(),true);
+    job.state='ready';job.progress=100;
+    await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
+    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='narma-cut-line'&&event.parent==='result-signature'));
+    await page.waitForFunction(()=>!document.querySelector('#result-signature.narma-cut-playing'));
+    const completedCuts=await page.evaluate(()=>window.__narmaMotion.filter(event=>event.name==='narma-cut-line'&&event.parent==='result-signature').length);
+    await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
+    await page.locator('#result-state').getByText('Разбор готов',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.__narmaMotion.filter(event=>event.name==='narma-cut-line'&&event.parent==='result-signature').length),completedCuts,'Reading a ready result does not repeat the completion animation.');
     if(width===390) {
       assert.match(await page.locator('#report-ai-status').textContent(),/Комментарий OpenAI подтверждён/);
       assert.match(await page.locator('#report-ai-status').textContent(),/Учтено для этого разбора: 1\s?200 токенов на входе · 300 в ответе/);
@@ -335,6 +358,13 @@ try {
     assert.equal(await page.locator('#combat-strip svg').count(),0,'Episode navigation does not depend on tiny overlapping SVG targets.');
     assert.equal(await page.getByRole('button',{name:'Смерти · 1',exact:true,pressed:true}).count(),1);
     await page.locator('.episode-choice').first().focus();await page.locator('.episode-choice').first().press('Enter');
+    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='narma-episode-cut'));
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await page.waitForFunction(()=>!document.querySelector('.narma-episode-playing'));
+    assert.equal(await page.locator('.narma-episode-line').count(),0,'Reduced motion removes the active decoration, retaining the selected episode.');
+    await page.locator('.episode-choice').first().click();
+    assert.equal(await page.locator('.narma-episode-line').count(),0);
+    await page.emulateMedia({reducedMotion:'no-preference'});
     assert.equal(await page.locator('#timeline-value').textContent(),'10:00');
     assert.equal(await page.locator('.episode-choice[aria-pressed=true]').count(),1);
     assert.match(await page.locator('.episode-detail').textContent(),/Время вне игры по реплею: 0:30/);

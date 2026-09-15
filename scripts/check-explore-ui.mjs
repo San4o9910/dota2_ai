@@ -17,7 +17,7 @@ const {chromium}=dependency('playwright'),axe=dependency('axe-core');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
 const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
-for(const filename of ['explore.js','learning-chapter.js','workshop-builds.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
+for(const filename of ['brand-motion.js','vision-theme.css','explore.js','learning-chapter.js','workshop-builds.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
 files.set('/assets/dota/items/hurricane_pike.png',['dota/items/hurricane_pike.png','image/png']);
 const server=createServer(async(request,response)=>{
   const file=files.get(new URL(request.url,'http://localhost').pathname);
@@ -147,8 +147,8 @@ try {
     assert.equal(await page.locator('a[href="/replays"]').count()>0,true,'The public home leads to existing replay analysis.');
     for(const route of publicRoutes)assert.equal(await page.locator(`.main-nav a[href="${route}"]`).count(),1);
     const normalMotion=await page.evaluate(()=>({animation:getComputedStyle(document.body,'::before').animationName,events:getComputedStyle(document.body,'::before').pointerEvents}));
-    assert.equal(normalMotion.animation,'battlefield-mist','The Dota-themed background has gentle motion.');
-    assert.equal(normalMotion.events,'none','Decorative mist cannot intercept user actions.');
+    assert.equal(normalMotion.animation,'none','The approved theme uses short N-cut accents instead of a perpetual background.');
+    assert.equal(normalMotion.events,'none','Background decoration cannot intercept user actions.');
     await page.emulateMedia({reducedMotion:'reduce'});
     assert.deepEqual(await page.evaluate(()=>['::before','::after'].map(pseudo=>({animation:getComputedStyle(document.body,pseudo).animationName,transform:getComputedStyle(document.body,pseudo).transform}))),[{animation:'none',transform:'none'},{animation:'none',transform:'none'}],'Reduced-motion users receive a static background.');
     await page.emulateMedia({reducedMotion:'no-preference'});
