@@ -51,6 +51,7 @@ textarea { width: 100%; padding: 12px 14px; resize: vertical; line-height: 1.65;
 button:hover:not(:disabled), .button:hover, .quiet:hover:not(:disabled) { background: var(--surface-raised); }
 .primary, .button.primary, .practice .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 750; }
 .primary:hover:not(:disabled), .button.primary:hover { background: #ff7846; border-color: #ff7846; color: var(--accent-ink); }
+.inspector-body > .button.primary { color: var(--accent-ink); background: var(--accent); min-height: 44px; }
 .secondary { background: var(--surface-raised); color: var(--text); border-color: var(--line); }
 .top, .site-header { background: var(--bg); }
 .top { padding-top: 21px; padding-bottom: 21px; }

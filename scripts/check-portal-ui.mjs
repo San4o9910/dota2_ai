@@ -336,14 +336,6 @@ try {
     await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
     await page.locator('#result-state').getByText('Разбор готов',{exact:true}).waitFor();
     assert.equal(await page.evaluate(()=>window.__narmaMotion.filter(event=>event.name==='narma-cut-line'&&event.parent==='result-signature').length),completedCuts,'Reading a ready result does not repeat the completion animation.');
-    await page.locator('.episode-choice').first().click();
-    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='narma-episode-cut'));
-    await page.emulateMedia({reducedMotion:'reduce'});
-    await page.waitForFunction(()=>!document.querySelector('.narma-episode-playing'));
-    assert.equal(await page.locator('.narma-episode-line').count(),0,'Reduced motion removes the active decoration, retaining the selected episode.');
-    await page.locator('.episode-choice').first().click();
-    assert.equal(await page.locator('.narma-episode-line').count(),0);
-    await page.emulateMedia({reducedMotion:'no-preference'});
     if(width===390) {
       assert.match(await page.locator('#report-ai-status').textContent(),/Комментарий OpenAI подтверждён/);
       assert.match(await page.locator('#report-ai-status').textContent(),/Учтено для этого разбора: 1\s?200 токенов на входе · 300 в ответе/);
@@ -366,6 +358,13 @@ try {
     assert.equal(await page.locator('#combat-strip svg').count(),0,'Episode navigation does not depend on tiny overlapping SVG targets.');
     assert.equal(await page.getByRole('button',{name:'Смерти · 1',exact:true,pressed:true}).count(),1);
     await page.locator('.episode-choice').first().focus();await page.locator('.episode-choice').first().press('Enter');
+    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='narma-episode-cut'));
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await page.waitForFunction(()=>!document.querySelector('.narma-episode-playing'));
+    assert.equal(await page.locator('.narma-episode-line').count(),0,'Reduced motion removes the active decoration, retaining the selected episode.');
+    await page.locator('.episode-choice').first().click();
+    assert.equal(await page.locator('.narma-episode-line').count(),0);
+    await page.emulateMedia({reducedMotion:'no-preference'});
     assert.equal(await page.locator('#timeline-value').textContent(),'10:00');
     assert.equal(await page.locator('.episode-choice[aria-pressed=true]').count(),1);
     assert.match(await page.locator('.episode-detail').textContent(),/Время вне игры по реплею: 0:30/);
