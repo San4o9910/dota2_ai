@@ -1014,6 +1014,18 @@ try {
     assert.equal(new URL(page.url()).pathname,'/replays');
     await page.locator('nav [data-tab=coach]').click();
     empty=false;
+    await page.route('**/api/program',route=>route.fulfill({json:{focus:fixture.plan,choices:[fixture.plan],review:{status:'waiting',note:'Синтетическая проверка'},check_candidates:[{job_id:'coach-new',match_id:'8984100002'}],stage:'check',jobs:[]}}));
+    await page.locator('nav [data-tab=training]').click();
+    await page.locator('#program-content').getByRole('heading',{name:fixture.exercise.title,exact:true}).waitFor();
+    await page.locator('#program-content').getByRole('button',{name:'Проверить следующий матч',exact:true}).click();
+    await page.locator('#learning-pool-coach-practice-match').waitFor();
+    assert.equal(await page.locator('#learning-pool-coach-practice-match').inputValue(),'coach-new');
+    await page.locator('#learning-pool-coach-practice-match').selectOption('coach-old');
+    await page.locator('nav [data-tab=training]').click();
+    await page.locator('#program-content').getByRole('button',{name:'Проверить следующий матч',exact:true}).click();
+    await page.locator('#learning-pool-coach-practice-match').waitFor();
+    assert.equal(await page.locator('#learning-pool-coach-practice-match').inputValue(),'coach-new','Next-game check must replace the older selected match.');
+    await page.locator('nav [data-tab=coach]').click();
     await page.locator('#coach-refresh').click();
     await page.locator('#coach-decisions .decision-details').waitFor();
     assert.equal(await page.locator('#coach-match-select').inputValue(),'coach-new');

@@ -1,8 +1,9 @@
 """One-off replay credits. Provider calls are explicit, bounded, and idempotent.
 
 Off by default. No payment callback is trusted without retrieving the payment.
-All accounting paths serialize on the owner billing lock (scope 2); they never
-acquire a replay row after taking this lock, avoiding worker/refund deadlocks.
+New spends and refunds serialize on the owner billing lock (scope 2); they
+never acquire a replay row after this lock. Terminal job transitions only move
+an existing hold to consumed/released and never create additional spending.
 """
 import base64
 from datetime import datetime, timezone, timedelta

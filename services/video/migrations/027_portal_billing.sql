@@ -37,12 +37,15 @@ CREATE TABLE portal_refunds (
  created_at timestamptz NOT NULL DEFAULT now(),
  updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- Terminal transitions only consume an existing hold or release it. They cannot
+-- increase committed spending and need no owner lock after locking replay rows.
+-- This keeps bulk expiry/account deletion from inverting reservation lock order.
 -- Keep commercial history when an account is deleted; ownership is anonymized.
 CREATE FUNCTION settle_portal_credit() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NEW.state IN ('ready','failed','deleted') AND EXISTS(SELECT 1 FROM portal_credit_uses WHERE job_id=NEW.id AND state='held') THEN
-  PERFORM pg_advisory_xact_lock(hashtextextended(NEW.owner_id,2));
   UPDATE portal_credit_uses SET state=CASE WHEN NEW.state='ready' AND NEW.result_payload#>>'{coaching,status}'='ready'
+    AND NEW.result_payload#>>'{coaching,origin}' IS DISTINCT FROM 'previous_report'
     THEN 'consumed' ELSE 'released' END,updated_at=now() WHERE job_id=NEW.id AND state='held';
  END IF;
  RETURN NEW;
@@ -52,7 +55,6 @@ CREATE TRIGGER settle_portal_credit_on_result AFTER UPDATE OF state ON replay_jo
 
 CREATE FUNCTION release_deleted_portal_credit() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- PERFORM pg_advisory_xact_lock(hashtextextended(OLD.owner_id,2));
  UPDATE portal_credit_uses SET state='released',updated_at=now() WHERE job_id=OLD.id AND state='held';
  RETURN OLD;
 END $$;

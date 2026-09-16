@@ -83,14 +83,14 @@ def test_unknown_old_intent_never_reissues_charge(shop,monkeypatch):
     assert shop.post(f"/api/billing/orders/{body['id']}/refresh",json={}).status_code==409
 
 
-@pytest.mark.parametrize('state,coaching,expected',[('failed',None,'released'),('deleted',None,'released'),('ready','unavailable','released'),('ready','ready','consumed')])
+@pytest.mark.parametrize('state,coaching,expected',[('failed',None,'released'),('deleted',None,'released'),('ready','unavailable','released'),('ready','ready','consumed'),('ready','fallback','released')])
 def test_all_terminal_paths_settle_once(shop,monkeypatch,state,coaching,expected):
     body=purchase(shop);settle(shop,body,monkeypatch)
     job=seed()
     with database() as con:
         con.execute("UPDATE replay_jobs SET state='queued' WHERE id=%s",(job,))
         con.execute("INSERT INTO portal_credit_uses(id,job_id,order_id,state) VALUES (%s,%s,%s,'held')",(job,job,body['id']))
-        con.execute('UPDATE replay_jobs SET state=%s,result_payload=%s WHERE id=%s',(state,Jsonb({'coaching':{'status':coaching}}),job))
+        con.execute('UPDATE replay_jobs SET state=%s,result_payload=%s WHERE id=%s',(state,Jsonb({'coaching':{'status':'ready' if coaching=='fallback' else coaching,**({'origin':'previous_report'} if coaching=='fallback' else {})}}),job))
         con.execute('UPDATE replay_jobs SET state=%s WHERE id=%s',(state,job))
         assert con.execute('SELECT state FROM portal_credit_uses WHERE id=%s',(job,)).fetchone()['state']==expected
     assert shop.get('/api/billing').json()['balance']==(4 if expected=='consumed' else 5)
