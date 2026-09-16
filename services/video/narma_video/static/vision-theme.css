@@ -259,3 +259,10 @@ h1, .home-lead h1 { font-family: var(--display); font-weight: 400; font-size: cl
   .workspace-shortcuts { gap: 6px; }
   .workspace-shortcuts a { padding: 8px 9px; gap: 7px; font-size: 11px; }
 }
+
+/* A single practice anchors the player workspace. */
+.nav-secondary-label{display:block;padding:1.25rem .7rem .5rem;font-size:.72rem;color:var(--muted,#737b81);text-transform:uppercase;letter-spacing:.09em}
+.program-steps{display:flex;gap:1.4rem;flex-wrap:wrap;padding:1rem 1rem 1rem 2rem;color:var(--muted,#737b81)}
+.program-steps [aria-current=step]{color:var(--ink,#1b2a35);font-weight:700}
+.program-focus{margin-bottom:1.25rem;max-width:900px}.program-focus h3{font-size:1rem;margin:1.25rem 0 .35rem}.program-action{font-size:1.25rem;line-height:1.6;max-width:65ch}
+#program-content .surface{margin-bottom:1rem}#program-content .text-link{display:inline-block;margin:1rem}#program-content button{white-space:normal}.replay-help{margin:1rem 0}.replay-help summary{cursor:pointer}.replay-help li{margin:.5rem 0}

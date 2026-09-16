@@ -212,6 +212,8 @@ def ask(owner_id, job_id, body, background=None):
                     or previous['evidence_id'] != body.evidence_id or previous['context'] != current['chat_context']):
                 reject(409, 'COACH_CHAT_CONFLICT', 'Этот вопрос уже отправлен в другом контексте.')
             return {'turn': _public(previous)}
+        from .billing import check_chat
+        check_chat(connection, owner_id, job_id)
         if connection.execute("""SELECT 1 FROM coach_chat_turns WHERE owner_id=%s AND state='running'
                 AND lease_until>clock_timestamp()""", (owner_id,)).fetchone():
             reject(409, 'COACH_CHAT_BUSY', 'Тренер ещё отвечает на предыдущий вопрос.')

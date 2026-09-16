@@ -1,3 +1,6 @@
+import { createBilling } from './billing.js';
+import { showReportFreshness } from './report-freshness.js';
+import { createPlayerProgram } from './player-program.js';
 import { roleGuidance } from './role-guidance.js';
 import { createVideoWorkspace } from './video-workspace.js';
 import { createPersonalCoach, renderDecisionPoints } from './personal-coach.js';
@@ -42,6 +45,7 @@ async function api(path, method='GET', body) {
   return data;
 }
 const videoWorkspace=createVideoWorkspace({api,onPlayer:()=>switchTab('review')});
+const billing=createBilling({host:$('billing-content'),api,current:()=>state.user});
 const ownerDashboard=createOwnerDashboard({api,host:$('owner-content')});
 $('owner-refresh').addEventListener('click',()=>void ownerDashboard.load());
 async function openGrowthReplay(id,evidenceId,expected){
@@ -60,8 +64,9 @@ const personalCoach=createPersonalCoach({api,heroName,heroIcon,onNavigate:tab=>s
   if(!expected?.report_sha256||state.detail.report_sha256!==expected.report_sha256||String(report?.match_id)!==String(expected.match_id)||report?.coverage?.source_sha256!==expected.source_sha256||report?.player?.hero!==expected.hero||position!==(expected.position??null)){notice('Этот разбор обновился. Открыта текущая версия; выбери эпизод заново, чтобы проверить актуальный таймкод.');return;}
   focusEvidence(evidenceId);
 }});
-const tabPaths={coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
-function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'review';}
+const playerProgram=createPlayerProgram({host:$('program-content'),api,current:()=>state.user,onNavigate:tab=>switchTab(tab),onOpen:openGrowthReplay,onCheck:async(plan,match)=>{if(!Array.from($('learning-hero').options).some(o=>o.value===plan.hero))$('learning-hero').append(new Option(plan.hero_label,plan.hero));$('learning-hero').value=plan.hero;$('learning-position').value=String(plan.position);switchTab('learning');await loadLearning();const card=document.querySelector(`[data-plan-id="${CSS.escape(plan.id)}"]`);if(card){for(let parent=card.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;const details=card.querySelector('.learning-check-toggle');if(details)details.open=true;card.scrollIntoView({block:'start'});}else notice('Открой все сохранённые фокусы и выбери текущее задание.');}});
+const tabPaths={training:'/training',coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
+function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'training';}
 function switchTab(tab,{historyMode='push'}={}) {
   if(!Object.hasOwn(tabPaths,tab)||!$(tab)) return;
   if(historyMode==='push'&&location.pathname!==tabPaths[tab])history.pushState({tab},'',tabPaths[tab]);
@@ -70,11 +75,13 @@ function switchTab(tab,{historyMode='push'}={}) {
   for(const button of document.querySelectorAll('nav [data-tab]')) { if(button.dataset.tab===tab) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); }
   // Keep the current report and unsaved forms in the DOM when changing sections.
   if(tab==='hero-pool'&&state.user&&(!state.pool||state.poolDirty)) void loadPool();
+  if(tab==='training'&&state.user)void playerProgram.load();
   if(tab==='learning'&&state.user) void loadLearning({preserveView:true});
   videoWorkspace.setVisible(tab==='videos');
   personalCoach.setVisible(tab==='coach');
   stopChatgptPolling();
-  if(tab!=='account') clearSecuritySecrets();
+  if(tab!=='account'){clearSecuritySecrets();billing.clear();}
+  if(tab==='account'&&state.user)void billing.load();
   if(tab==='account'&&state.user) void loadChatgpt();
   if(tab==='account'&&state.user) void loadSecurity();
   if(tab!=='owner')ownerDashboard.clearPassword();
@@ -125,6 +132,7 @@ async function session() {
   const data=await api('/api/session'); state.setup=data.setup_required===true; state.user=data.authenticated?data.user:null;
   state.coaching=data.coaching??{};
   state.registrationAvailable=data.registration_available===true;
+  if(!state.user){billing.clear();playerProgram.clear();}
   ownerDashboard.setSession(state.user);$('owner-nav').hidden=!state.user?.is_platform_owner;
   $('chatgpt-integration').hidden=state.coaching.personal_connect!==true;
   $('platform-coach').hidden=!state.user||state.coaching.mode!=='platform';
@@ -150,8 +158,9 @@ async function session() {
   if(pathTab()==='owner')void ownerDashboard.load();
   $('pilot-invitations').hidden=state.user.is_platform_owner!==true;
   if(state.invite) notice('Чтобы принять приглашение на другой аккаунт, сначала нажми «Выйти».');
-  if(['/register','/login'].includes(location.pathname))switchTab('coach',{historyMode:'replace'});
-  if(!$('account').hidden)void loadSecurity();
+  if(['/register','/login'].includes(location.pathname))switchTab('training',{historyMode:'replace'});
+  if(!$('account').hidden){void loadSecurity();void billing.load();}
+  if(!$('training').hidden)void playerProgram.load();
   if($('learning')&&!$('learning').hidden)void loadLearning();
   if(!$('account').hidden)void loadChatgpt();
   state.profile=(await api('/api/profile')).profile; profileView(); await refresh(); if(!$('hero-pool').hidden&&!state.pool) await loadPool();
@@ -664,6 +673,7 @@ function renderDetail() {
   $('report-body').hidden=!report;
   renderHeroHeader(report);
   renderCoachingStatus(detail,report);
+  const freshnessOwner=state.user;void showReportFreshness($('report-freshness'),report,{current:()=>state.user===freshnessOwner&&displayedReport()===report});
   const trainingContext=report?.coaching?.context??(!state.showArchived&&!detail.report_is_previous?job.training_context:null);
   const contextParts=[];
   if(trainingContext?.position>=1&&trainingContext.position<=5) contextParts.push(`Позиция ${trainingContext.position}`);
@@ -1116,6 +1126,7 @@ function learningPlanCard(plan,history,reportData=null) {
   if(plan.stale_checks>0)card.append(node('p',`Проверок с изменёнными или недоступными данными: ${num(plan.stale_checks)}. Они не входят в прогресс практики.`,'help'));
   if(!(plan.training_matches>0))card.append(node('p','Новых отмеченных матчей практики пока нет. Исходный матч и матчи без подтверждённой даты не показывают прогресс после начала задания.','help learning-no-matches'));
   const actions=node('div',undefined,'learning-actions');
+  if(plan.status==='active'&&plan.validity==='current'){const focus=node('button','Сделать текущей тренировкой','secondary');focus.type='button';focus.addEventListener('click',async()=>{focus.disabled=true;try{await api(`/api/program/focus/${encodeURIComponent(plan.id)}`,'PUT',{});switchTab('training');}catch(error){notice(error.message);}finally{focus.disabled=false;}});actions.append(focus);}
   const transitions=plan.status==='active'?[['paused','Пауза'],['completed','Завершить практику']]:plan.status==='paused'?[...(plan.validity==='current'?[['active','Продолжить практику']]:[]),['completed','Завершить практику']]:plan.validity==='current'?[['active','Вернуть в практику']]:[];
   for(const [status,label]of transitions){const button=node('button',label,'quiet');button.type='button';button.addEventListener('click',()=>void learningMutation(button,`/api/learning/plans/${encodeURIComponent(plan.id)}`,'PATCH',{status},card));actions.append(button);}card.append(actions);
   if(plan.can_check&&plan.validity==='current') {

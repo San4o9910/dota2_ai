@@ -1,3 +1,4 @@
+import {programFixture} from './program-fixtures.mjs';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -13,8 +14,8 @@ function dependency(name) {
 }
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
-const files=Object.fromEntries(['/register','/login','/coach','/replays','/hero-pool','/my-learning','/player','/account','/owner','/setup'].map(route=>[route,['index.html','text/html']]));
-Object.assign(files,{'/assets/brand-motion.js':['brand-motion.js','text/javascript'],'/assets/growth.js':['growth.js','text/javascript'],'/assets/owner-dashboard.js':['owner-dashboard.js','text/javascript'],'/assets/vision-theme.css':['vision-theme.css','text/css'],'/assets/coach-chat.js':['coach-chat.js','text/javascript'],'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
+const files=Object.fromEntries(['/training','/register','/login','/coach','/replays','/hero-pool','/my-learning','/player','/account','/owner','/setup'].map(route=>[route,['index.html','text/html']]));
+Object.assign(files,{'/assets/player-program.js':['player-program.js','text/javascript'],'/assets/billing.js':['billing.js','text/javascript'],'/assets/report-freshness.js':['report-freshness.js','text/javascript'],'/assets/brand-motion.js':['brand-motion.js','text/javascript'],'/assets/growth.js':['growth.js','text/javascript'],'/assets/owner-dashboard.js':['owner-dashboard.js','text/javascript'],'/assets/vision-theme.css':['vision-theme.css','text/css'],'/assets/coach-chat.js':['coach-chat.js','text/javascript'],'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type',file[1]); response.end(await readFile(path.join(root,file[0])));
@@ -135,7 +136,7 @@ try {
       else if(new URL(url).origin!==origin) {externalRequests.push(url);await route.abort();}
       else await route.fallback();
     });
-    await page.route('**/api/**',async route=>{
+    await page.route('**/api/**',async route=>{if(await programFixture(route))return;
       const request=route.request(), url=new URL(request.url()), endpoint=url.pathname, method=request.method(); requests.push(endpoint);
       let body, status=200, responseHeaders={};
       if(endpoint==='/api/auth/login') { authenticated=true; body={authenticated:true}; }
@@ -811,7 +812,7 @@ try {
     let authenticated=false,owner=true,remaining=0,invites=[],releaseCodes=null,delayCodes=false,releaseInvite=null,delayInvite=false,observeCredential=null;
     const code='01234567-89abcdef-01234567-89abcdef',inviteToken='A'.repeat(43),inviteId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     page.on('pageerror',error=>errors.push(error.message));
-    await page.route('**/api/**',async route=>{
+    await page.route('**/api/**',async route=>{if(await programFixture(route))return;
       const request=route.request(),endpoint=new URL(request.url()).pathname,method=request.method();
       if(method!=='GET')commands.push({endpoint,body:request.postDataJSON()});
       let body;
@@ -893,7 +894,7 @@ try {
     await page.route('**/*',async route=>{
       if(new URL(route.request().url()).origin!==origin)await route.abort();else await route.fallback();
     });
-    await page.route('**/api/**',async route=>{
+    await page.route('**/api/**',async route=>{if(await programFixture(route))return;
       const request=route.request(),endpoint=new URL(request.url()).pathname;
       let body,status=200;
       if(request.method()!=='GET')writes.push({endpoint,body:request.postDataJSON()});
@@ -947,8 +948,12 @@ try {
     assert.equal(await page.locator('#auth-submit').isDisabled(),true);
     assert.equal(await page.locator('#auth-switch').isDisabled(),true);
     assert.equal(writes.filter(write=>write.endpoint==='/api/auth/register').length,2);
-    releaseSignup();await page.locator('#workspace').waitFor();await page.locator('#coach').waitFor();
-    assert.equal(new URL(page.url()).pathname,'/coach');
+    releaseSignup();await page.locator('#workspace').waitFor();await page.locator('#training').waitFor();
+    assert.equal(new URL(page.url()).pathname,'/training');
+    await page.locator('#program-content').getByText('Начнём с твоего матча').waitFor();
+    await page.locator('#program-content').getByRole('button',{name:'Разобрать свой матч',exact:true}).click();
+    await page.locator('#review').waitFor();
+    await page.locator('nav [data-tab=training]').click();await page.locator('#training').waitFor();
     await page.locator('#notice').getByText(/Аккаунт создан/).waitFor();
     assert.equal(await page.locator('#password').inputValue(),'');assert.equal(await page.locator('#password-confirmation').inputValue(),'');
     assert.equal(await page.locator('#pilot-invitations').isHidden(),true);
@@ -975,7 +980,7 @@ try {
       else if(new URL(url).origin!==origin){externalRequests.push(url);await route.abort();}
       else await route.fallback();
     });
-    await page.route('**/api/**',async route=>{
+    await page.route('**/api/**',async route=>{if(await programFixture(route))return;
       const request=route.request(),endpoint=new URL(request.url()).pathname,method=request.method();commands.push({method,endpoint});
       let body;
       if(endpoint==='/api/session')body={authenticated,setup_required:false,user:authenticated?{email:'coach-owner@example.test',is_platform_owner:true}:null,coaching:{mode:'platform',available:true,personal_connect:false}};

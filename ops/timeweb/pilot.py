@@ -85,13 +85,12 @@ class Cloud:
                     continue
                 # Do not log bodies: VM/S3 responses may contain passwords and keys.
                 raise CheckError("cloud_http_" + str(status) + "_" + method + "_" + path.split("?")[0]) from None
-            except (urllib.error.URLError, TimeoutError):
+            except (urllib.error.URLError, TimeoutError, OSError):
                 if attempt + 1 < attempts:
                     time.sleep((2, 4)[attempt])
                     continue
-                raise CheckError("cloud_request_outcome_unknown") from None
-            except OSError:
-                raise CheckError("cloud_request_outcome_unknown") from None
+                code = "cloud_read_unavailable" if method == "GET" else "cloud_request_outcome_unknown"
+                raise CheckError(code + "_" + method + "_" + path.split("?")[0]) from None
             except (ValueError, UnicodeError):
                 raise CheckError("cloud_response_invalid") from None
 

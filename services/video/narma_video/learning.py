@@ -313,6 +313,8 @@ def create_plan(owner_id, body):
             saved = _saved(connection, owner_id, profile, history, existing["id"])
             if saved["plan"]["validity"] != "current":
                 reject(409, "LEARNING_PLAN_STALE", "Источник текущего задания изменился. Приостанови его и начни заново по актуальному разбору.")
+            from .player_program import remember
+            remember(connection, owner_id, existing["id"])
             return saved
         plan_id = uuid4()
         connection.execute("""INSERT INTO learning_plans(id,owner_id,account_id,hero,position,exercise_id,
@@ -321,6 +323,8 @@ def create_plan(owner_id, body):
             (plan_id, owner_id, profile["account_id"], fact["hero"], fact["position"], body.exercise_id,
              curriculum.VERSION, fact["job_id"], fact["match_id"], fact["source_sha256"], fact["report_sha256"],
              Jsonb([h["match_id"] for h in history])))
+        from .player_program import remember
+        remember(connection, owner_id, plan_id)
         return _saved(connection, owner_id, profile, history, plan_id)
 
 

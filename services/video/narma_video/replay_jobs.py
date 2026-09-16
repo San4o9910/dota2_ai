@@ -361,6 +361,8 @@ def complete_replay(job_id, owner_id):
                 reject(400, "REPLAY_METADATA", "Не удалось прочитать реплей. Выберите полный исходный файл .dem.")
             source_digest = digest.hexdigest()
             player = _resolve_identity(connection, row, metadata, source_digest)
+            from .billing import reserve
+            reserve(connection, owner_id, job_id)
             with media_storage.storage_errors():
                 os.replace(temporary, directory / "source.dem")
             row = connection.execute("""UPDATE replay_jobs SET state='queued',progress=0,

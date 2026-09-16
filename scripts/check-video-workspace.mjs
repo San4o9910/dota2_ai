@@ -1,3 +1,4 @@
+import {programFixture} from './program-fixtures.mjs';
 import {createServer} from 'node:http';
 import {readFile,mkdir} from 'node:fs/promises';
 import {createRequire} from 'node:module';
@@ -26,7 +27,7 @@ try{
     let authenticated=true,bound=true,coach=true,failPart=true;
     const records=new Map([[readyId,{id:readyId,filename:'support-match.mp4',size_bytes:64,state:'ready',nickname:'SyntheticPlayer',hero:'Crystal Maiden',position:5,analysis_mode:'selective_v1',analysis_phase:'complete',duration_seconds:2400}]]);
     const parts=new Map(),writes=[],integrationRequests=[];
-    await page.route('**/api/**',async route=>{const request=route.request(),url=new URL(request.url()),endpoint=url.pathname,method=request.method();let status=200,body;
+    await page.route('**/api/**',async route=>{if(await programFixture(route))return;const request=route.request(),url=new URL(request.url()),endpoint=url.pathname,method=request.method();let status=200,body;
       if(endpoint==='/api/session')body={authenticated,setup_required:false,user:authenticated?{email:'fixture@example.test'}:null,coaching:{mode:'platform',available:coach,personal_connect:false}};
       else if(endpoint==='/api/profile')body={profile:bound?{account_id:123,nickname:'SyntheticPlayer',match_id:'8984479726'}:null};
       else if(endpoint==='/api/replays')body={replays:[],worker_ready:true};
