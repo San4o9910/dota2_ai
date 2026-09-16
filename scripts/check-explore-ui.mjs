@@ -174,6 +174,7 @@ try {
     assert.equal(await signature.getByText('Движение отключено в настройках устройства.',{exact:true}).isVisible(),true);
     assert.deepEqual(await page.evaluate(()=>['::before','::after'].map(pseudo=>({animation:getComputedStyle(document.body,pseudo).animationName,transform:getComputedStyle(document.body,pseudo).transform}))),[{animation:'none',transform:'none'},{animation:'none',transform:'none'}],'Reduced-motion users receive a static background.');
     await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.waitForFunction(()=>!document.querySelector('#home-signature .signature-replay').disabled);
     assert.equal(await repeat.isEnabled(),true);
     await accessibility('home');
     const heroNav=page.locator('.main-nav a[href="/heroes"]');await heroNav.focus();await heroNav.press('Enter');
