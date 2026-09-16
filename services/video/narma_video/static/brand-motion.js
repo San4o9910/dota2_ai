@@ -19,7 +19,7 @@ function run(target, className, duration, dispose = () => {}) {
     dispose();
   };
   const ended = event => {
-    if (event.animationName === 'narma-cut-line' || event.animationName === 'narma-episode-cut') finish();
+    if (['narma-cut-line', 'narma-signature-cut', 'narma-episode-cut'].includes(event.animationName)) finish();
   };
   const timer = setTimeout(finish, duration + 150);
   running.set(target, finish);
@@ -45,6 +45,50 @@ export function paintNarmaMark(target) {
 export function playNarmaCut(target, duration = 800) {
   paintNarmaMark(target);
   return run(target, 'narma-cut-playing', duration);
+}
+
+// A visible, replayable introduction. The old 40px header accent alone was
+// easily missed. No requests, account state, blocking overlay or endless loop.
+export function mountNarmaSignature(host, { compact = false } = {}) {
+  if (!host || host.dataset.signatureMounted) return;
+  host.dataset.signatureMounted = 'true';
+  host.classList.add('narma-signature');
+  if (compact) host.classList.add('narma-signature-compact');
+  host.innerHTML = `<button type="button" class="signature-replay" aria-label="Повторить фирменную анимацию NARMA"><span class="signature-stage" aria-hidden="true"><span class="signature-index">NV / 01</span><span class="signature-mark"></span><span class="signature-wordmark">NARMA<span>VISION</span></span><span class="signature-axis">ТВОЯ ИГРА. ТВОИ РЕШЕНИЯ.</span></span><span class="signature-caption"><span class="signature-replay-icon" aria-hidden="true">↻</span><span data-signature-label>Повторить анимацию</span></span></button><p class="signature-motion-note" hidden>Движение отключено в настройках устройства.</p>`;
+  const mark = host.querySelector('.signature-mark');
+  const button = host.querySelector('button');
+  const label = host.querySelector('[data-signature-label]');
+  const note = host.querySelector('.signature-motion-note');
+  paintNarmaMark(mark);
+  const syncPreference = () => {
+    button.disabled = reducedMotion.matches;
+    label.textContent = reducedMotion.matches ? 'Фирменный знак NARMA' : 'Повторить анимацию';
+    note.hidden = !reducedMotion.matches;
+  };
+  syncPreference();
+  reducedMotion.addEventListener('change', syncPreference);
+  button.addEventListener('click', () => playNarmaCut(mark, 1100));
+  let introducedHere = false;
+  let inView = false;
+  const introduce = () => {
+    if (introducedHere || !inView || !visible(mark) || reducedMotion.matches) return;
+    let seen = false;
+    try { seen = sessionStorage.getItem('narma.n-cut.featured.v1') === '1'; } catch { /* Optional storage. */ }
+    if (seen) { introducedHere = true; return; }
+    if (playNarmaCut(mark, 1100)) {
+      introducedHere = true;
+      try { sessionStorage.setItem('narma.n-cut.featured.v1', '1'); } catch { /* At most once for this mount. */ }
+    }
+  };
+  // Hidden workspaces and offscreen mobile scenes must not consume the intro.
+  const observer = new IntersectionObserver(entries => {
+    inView = entries.some(entry => entry.isIntersecting && entry.intersectionRatio >= .6);
+    if (inView) {
+      requestAnimationFrame(() => requestAnimationFrame(introduce));
+    }
+  }, { threshold: .6 });
+  observer.observe(mark);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) introduce(); });
 }
 
 export function playEpisodeCut(target) {
@@ -84,7 +128,6 @@ for (const mark of document.querySelectorAll('.brand-symbol, .brand-mark, [data-
 const brand = document.querySelector('.brand .narma-mark');
 let introduced = false;
 try { introduced = sessionStorage.getItem('narma.n-cut.introduced') === '1'; } catch { /* Static mark still works. */ }
-if (!introduced && visible(brand)) {
+if (!introduced && location.pathname !== '/' && playNarmaCut(brand)) {
   try { sessionStorage.setItem('narma.n-cut.introduced', '1'); } catch { /* Storage is optional. */ }
-  playNarmaCut(brand);
 }

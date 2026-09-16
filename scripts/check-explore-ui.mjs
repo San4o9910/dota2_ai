@@ -96,6 +96,12 @@ const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
 try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
+    await page.addInitScript(()=>{
+      window.__signatureStarts=0;
+      document.addEventListener('animationstart',event=>{
+        if(event.animationName==='narma-signature-cut')window.__signatureStarts++;
+      });
+    });
     const errors=[],unexpected=[],apiRequests=[];
     let newsFailed=false,buildPatchOverride=null,metaStale=false,authoredMode=true,metaFailed=false,workshopEnabled=false;
     page.on('pageerror',error=>errors.push(error.message));
@@ -143,6 +149,19 @@ try {
     assert.equal(await page.locator('#home-heroes .hero-tile').count(),4);
     assert.equal(await page.locator('#home-stages .stage-preview').count(),6);
     assert.equal(await page.locator('#home-news .update-compact').count(),3);
+    await page.waitForFunction(()=>window.__signatureStarts===1);
+    const signature=page.locator('#home-signature');
+    assert.equal(await signature.isVisible(),true,'The signature is a prominent part of the first screen.');
+    const markSize=await signature.locator('.signature-mark').boundingBox();
+    assert.ok(markSize.width>=100&&markSize.height>=100,'The signature must not regress to a tiny header-only accent.');
+    assert.equal(await page.locator('.vision-path a[href="/coach"]').count(),1);
+    assert.equal(await page.locator('.vision-path a[href="/my-learning"]').count(),1);
+    await page.waitForFunction(()=>!document.querySelector('#home-signature .narma-cut-playing'));
+    await open('/');
+    assert.equal(await page.evaluate(()=>window.__signatureStarts),0,'Autoplay does not repeat in the same tab session.');
+    const repeat=signature.getByRole('button',{name:'Повторить фирменную анимацию NARMA'});
+    await repeat.focus();await repeat.press('Enter');
+    await page.waitForFunction(()=>window.__signatureStarts===1);
     assert.match(await page.locator('#home-news .source-note.is-stale').textContent(),/сохранённ.*верси/i);
     assert.equal(await page.locator('a[href="/replays"]').count()>0,true,'The public home leads to existing replay analysis.');
     for(const route of publicRoutes)assert.equal(await page.locator(`.main-nav a[href="${route}"]`).count(),1);
@@ -150,8 +169,13 @@ try {
     assert.equal(normalMotion.animation,'none','The approved theme uses short N-cut accents instead of a perpetual background.');
     assert.equal(normalMotion.events,'none','Background decoration cannot intercept user actions.');
     await page.emulateMedia({reducedMotion:'reduce'});
+    await page.waitForFunction(()=>!document.querySelector('#home-signature .narma-cut-playing'));
+    assert.equal(await repeat.isDisabled(),true,'Reduced-motion preferences cannot be bypassed by the replay control.');
+    assert.equal(await signature.getByText('Движение отключено в настройках устройства.',{exact:true}).isVisible(),true);
     assert.deepEqual(await page.evaluate(()=>['::before','::after'].map(pseudo=>({animation:getComputedStyle(document.body,pseudo).animationName,transform:getComputedStyle(document.body,pseudo).transform}))),[{animation:'none',transform:'none'},{animation:'none',transform:'none'}],'Reduced-motion users receive a static background.');
     await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.waitForFunction(()=>!document.querySelector('#home-signature .signature-replay').disabled);
+    assert.equal(await repeat.isEnabled(),true);
     await accessibility('home');
     const heroNav=page.locator('.main-nav a[href="/heroes"]');await heroNav.focus();await heroNav.press('Enter');
     await page.waitForURL(url=>url.pathname==='/heroes');await page.locator('#hero-grid [data-hero]').first().waitFor();

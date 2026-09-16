@@ -223,6 +223,16 @@ try {
     await page.getByLabel('Пароль',{exact:true}).fill('Synthetic passphrase 2026');
     await page.getByRole('button',{name:'Войти',exact:true}).click();
     await page.getByRole('heading',{name:'Разбор твоего матча'}).waitFor();
+    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='narma-signature-cut'));
+    assert.equal(await page.locator('#workspace-signature').isVisible(),true,'The signed-in player can see and replay the signature.');
+    const nicknameBeforeShortcut=await page.locator('#nickname').inputValue();
+    await page.locator('#nickname').fill('Unsubmitted fixture draft');
+    await page.locator('.workspace-shortcuts a[data-tab="coach"]').click();
+    assert.equal(new URL(page.url()).pathname,'/coach');
+    await page.locator('.workspace-shortcuts a[data-tab="review"]').click();
+    assert.equal(new URL(page.url()).pathname,'/replays');
+    assert.equal(await page.locator('#nickname').inputValue(),'Unsubmitted fixture draft','Shortcuts preserve an unfinished upload form.');
+    await page.locator('#nickname').fill(nicknameBeforeShortcut);
     if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-entry.png`)});
     // A new player gets a usable learning section before uploading any match.
     const initialPoolRequests=requests.filter(endpoint=>endpoint==='/api/hero-pool').length;
