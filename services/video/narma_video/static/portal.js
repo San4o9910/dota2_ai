@@ -64,10 +64,30 @@ const personalCoach=createPersonalCoach({api,heroName,heroIcon,onNavigate:tab=>s
   if(!expected?.report_sha256||state.detail.report_sha256!==expected.report_sha256||String(report?.match_id)!==String(expected.match_id)||report?.coverage?.source_sha256!==expected.source_sha256||report?.player?.hero!==expected.hero||position!==(expected.position??null)){notice('Этот разбор обновился. Открыта текущая версия; выбери эпизод заново, чтобы проверить актуальный таймкод.');return;}
   focusEvidence(evidenceId);
 }});
-const playerProgram=createPlayerProgram({host:$('program-content'),api,current:()=>state.user,onNavigate:tab=>switchTab(tab),onOpen:openGrowthReplay,onCheck:async(plan,match)=>{state.learningMatches.set(`learning-pool-${plan.id}`,match.job_id);if(!Array.from($('learning-hero').options).some(o=>o.value===plan.hero))$('learning-hero').append(new Option(plan.hero_label,plan.hero));$('learning-hero').value=plan.hero;$('learning-position').value=String(plan.position);switchTab('learning');await loadLearning();const card=document.querySelector(`[data-plan-id="${CSS.escape(plan.id)}"]`);if(card){for(let parent=card.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;const details=card.querySelector('.learning-check-toggle');if(details)details.open=true;card.scrollIntoView({block:'start'});}else notice('Открой все сохранённые фокусы и выбери текущее задание.');}});
+const playerProgram=createPlayerProgram({host:$('program-content'),api,current:()=>state.user,onNavigate:tab=>switchTab(tab),onOpen:openGrowthReplay,onCheck:openProgramCheck});
+async function openProgramCheck(plan,match){
+  const identity=state.user;
+  state.learningMatches.set(`learning-pool-${plan.id}`,match.job_id);
+  if(!Array.from($('learning-hero').options).some(o=>o.value===plan.hero))$('learning-hero').append(new Option(plan.hero_label,plan.hero));
+  $('learning-hero').value=plan.hero;$('learning-position').value=String(plan.position);
+  // This explicit jump must never expose the previous match's editable form
+  // while the requested scope loads. Per-match drafts already live in state.
+  $('pool-learning').replaceChildren(node('p','Открываем проверку следующего матча…','help'));
+  switchTab('learning',{loadPractice:false});
+  await loadLearning();
+  if(state.user!==identity||$('learning').hidden)return;
+  const card=document.querySelector(`[data-plan-id="${CSS.escape(plan.id)}"]`);
+  if(!card){notice('Задание изменилось. Выбери актуальную тренировку.');return;}
+  const selector=card.querySelector(`#${CSS.escape(`learning-pool-${plan.id}-match`)}`);
+  if(selector?.value!==match.job_id){notice('Этот матч больше не подходит для проверки. Выбери актуальный разбор.');return;}
+  for(let parent=card.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
+  const details=card.querySelector('.learning-check-toggle');if(details)details.open=true;
+  card.scrollIntoView({block:'start'});selector.focus({preventScroll:true});
+}
+
 const tabPaths={training:'/training',coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
 function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'training';}
-function switchTab(tab,{historyMode='push'}={}) {
+function switchTab(tab,{historyMode='push',loadPractice=true}={}) {
   if(!Object.hasOwn(tabPaths,tab)||!$(tab)) return;
   if(historyMode==='push'&&location.pathname!==tabPaths[tab])history.pushState({tab},'',tabPaths[tab]);
   if(historyMode==='replace')history.replaceState({tab},'',tabPaths[tab]);
@@ -76,7 +96,7 @@ function switchTab(tab,{historyMode='push'}={}) {
   // Keep the current report and unsaved forms in the DOM when changing sections.
   if(tab==='hero-pool'&&state.user&&(!state.pool||state.poolDirty)) void loadPool();
   if(tab==='training'&&state.user)void playerProgram.load();
-  if(tab==='learning'&&state.user) void loadLearning({preserveView:true});
+  if(tab==='learning'&&state.user&&loadPractice) void loadLearning({preserveView:true});
   videoWorkspace.setVisible(tab==='videos');
   personalCoach.setVisible(tab==='coach');
   stopChatgptPolling();
