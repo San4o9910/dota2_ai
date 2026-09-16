@@ -56,13 +56,14 @@ export function mountNarmaSignature(host, { compact = false } = {}) {
   host.classList.add('narma-signature');
   if (compact) host.classList.add('narma-signature-compact');
   const id = `narma-signature-${++signatureId}`;
+  // A two-unit clip overlap avoids an antialias seam before the intended cut.
   const letters = `<g class="signature-letter-n"><text>N</text></g><g class="signature-letter-v"><text>V</text></g><g class="signature-rest"><text x="155" y="148">ARMA</text><text x="155" y="248">ISION</text></g>`;
   host.innerHTML = `<div class="signature-stage" role="img" aria-label="Narma Vision — твоя игра, твои решения">
     <span class="signature-index" aria-hidden="true">NV / VISION IN MOTION</span>
     <svg class="signature-art" viewBox="0 0 560 340" fill="none" aria-hidden="true" focusable="false">
       <defs>
-        <clipPath id="${id}-upper"><path d="M0 0H560V111L0 285Z"/></clipPath>
-        <clipPath id="${id}-lower"><path d="M0 285L560 111V340H0Z"/></clipPath>
+        <clipPath id="${id}-upper"><path d="M0 0H560V112L0 286Z"/></clipPath>
+        <clipPath id="${id}-lower"><path d="M0 284L560 110V340H0Z"/></clipPath>
       </defs>
       <g clip-path="url(#${id}-upper)"><g class="signature-half signature-half-upper">${letters}</g></g>
       <g clip-path="url(#${id}-lower)"><g class="signature-half signature-half-lower">${letters}</g></g>
