@@ -16,6 +16,7 @@ def shop(browser, monkeypatch):
         'NARMA_TERMS_URL':'https://example.test/terms','NARMA_PRIVACY_URL':'https://example.test/privacy',
         'NARMA_FULFILLMENT_READY':'1','NARMA_RECEIPT_MODE':'external','NARMA_EXTERNAL_RECEIPTS_READY':'1'}
     for key,value in values.items(): monkeypatch.setenv(key,value)
+    with database() as con: con.execute("TRUNCATE portal_auth_limits")
     billing.attach_billing(browser.app)
     def unavailable(*args, **kwargs): raise billing.ProviderUnavailable()
     monkeypatch.setattr(billing,'provider',unavailable)

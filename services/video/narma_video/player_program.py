@@ -21,7 +21,8 @@ def select(owner_id, plan_id):
             reject(404, 'PROGRAM_PLAN', 'Задание не найдено.')
         if plan['status'] != 'active' or plan['validity'] != 'current':
             reject(409, 'PROGRAM_STALE', 'Выбери актуальное активное задание.')
-        learning._lock_plan_source(connection, owner_id, profile, plan)
+        row = learning._plan_row(connection, owner_id, profile, plan_id)
+        learning._lock_plan_source(connection, owner_id, profile, row)
         remember(connection, owner_id, plan_id)
     return {'saved': True}
 

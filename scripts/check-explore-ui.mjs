@@ -15,8 +15,8 @@ function dependency(name) {
 }
 const {chromium}=dependency('playwright'),axe=dependency('axe-core');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
-const publicRoutes=['/example','/start','/','/heroes','/builds','/learn','/practice','/updates'];
-const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
+const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
+const files=new Map([...publicRoutes,'/example','/start'].map(route=>[route,['explore.html','text/html']]));
 for(const filename of ['brand-motion.js','vision-theme.css','explore.js','learning-chapter.js','workshop-builds.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
 files.set('/assets/dota/items/hurricane_pike.png',['dota/items/hurricane_pike.png','image/png']);
 const server=createServer(async(request,response)=>{
@@ -559,6 +559,10 @@ try {
       assert.equal(history.includes('Личная проверка рассуждения'),false);
       assert.equal(JSON.parse(history).sessions.at(-1).total,length);
     }
+    await open('/example');await page.getByRole('heading',{name:'Из одного эпизода — в одну тренировку'}).waitFor();
+    assert.match(await page.locator('#page-content').textContent(),/вымышленная ситуация/);
+    await open('/start');await page.getByRole('heading',{name:'Подготовь запись своего матча'}).waitFor();
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     assert.ok(apiRequests.every(request=>request.path.startsWith('/api/explore/')&&request.method==='GET'),'Public visitors never invoke auth, replay, Hermes, or model APIs.');
     assert.deepEqual(unexpected,[],'The synthetic public UI run never contacts live sources or providers.');
     assert.deepEqual(errors,[]);await page.close();

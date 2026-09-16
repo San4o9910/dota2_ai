@@ -21,6 +21,7 @@ def test_focus_is_owned_persistent_and_never_silently_replaces_stale_plan(progra
     active = plan(c, job)
     data = c.get('/api/program').json()
     assert data['focus']['id'] == active['id'] and data['stage'] == 'practice'
+    assert c.put(f"/api/program/focus/{active['id']}", json={}).status_code == 200
     assert c.put(f"/api/program/focus/{uuid4()}", json={}).status_code == 404
     assert c.put(f"/api/program/focus/{active['id']}", json={}, headers={'Origin': 'https://evil.test'}).status_code == 403
     assert c.patch(f"/api/learning/plans/{active['id']}", json={'status': 'paused'}).status_code == 200

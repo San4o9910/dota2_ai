@@ -1005,7 +1005,7 @@ try {
     });
     await page.goto(origin+'/coach');
     await page.locator('#coach-empty').waitFor();
-    assert.equal(await page.locator('nav [data-tab]').first().getAttribute('data-tab'),'coach','The personal coach is the first customer tab.');
+    assert.equal(await page.locator('nav [data-tab]').first().getAttribute('data-tab'),'training','The current practice is the first customer tab.');
     assert.equal(await page.locator('nav [data-tab=coach]').getAttribute('aria-current'),'page');
     assert.match(await page.locator('#coach-empty').textContent(),/Загрузи полный \.dem/);
     assert.equal(await page.locator('#coach-decisions,#coach-match-select').count(),0,'An empty account never receives invented match findings.');
