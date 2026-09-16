@@ -55,8 +55,21 @@ its schedule and permissions do not need changing.
 ## Approved signature motion
 
 **N cut**: a short orange diagonal separates and recombines the N mark; 800 ms.
-The introduction appears once per tab session across the public pages and private
-workspace. A 560 ms variation marks an observed pending-to-ready report transition;
+The header introduction appears once per tab session. The home page and signed-in
+workspace additionally share a prominent, replayable signature scene: a 1100 ms
+N cut, a persistent orange diagonal and a native keyboard/touch replay button.
+Its first autoplay waits until the mark is visible, and plays once per tab across
+both scenes. Hidden workspaces, background tabs and reduced-motion preferences do
+not consume that introduction. Reduced motion disables the replay button and
+explains why, retaining a static mark. No replay action makes an API request.
+
+The public first screen now leads directly to replay analysis, conversation and
+practice; the workspace has equivalent shortcuts that preserve unsaved form and
+report state through the existing navigation handler. News remains below the
+main product journey. The signature module uses `mountNarmaSignature(host,
+{compact})` for the hero and workspace variants, with an idempotent mount.
+
+A 560 ms variation marks an observed pending-to-ready report transition;
 opening a saved report or polling a ready report does not replay completion.
 A 360 ms directional stroke highlights an explicitly selected replay episode.
 
