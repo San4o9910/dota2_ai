@@ -20,6 +20,7 @@ SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 MAX_ARCHIVE_BYTES = 4 * 1024**3
+MAX_UNPACKED_BYTES = 16 * 1024**3
 MAX_METADATA_BYTES = 16 * 1024**2
 STORAGE_RESERVE_BYTES = 4 * 1024**3
 MAX_RETENTION_ENTRIES = 256
@@ -75,15 +76,20 @@ def image_info(tag):
 def validate_manifest(value, release):
     if not SHA.fullmatch(release):
         raise ImageError("prebuilt_release_invalid")
-    if not isinstance(value, dict) or set(value) != {
-            "schema", "release", "source_tree", "images", "archive_sha256", "archive_bytes"}:
+    fields = {"schema", "release", "source_tree", "images", "archive_sha256", "archive_bytes"}
+    if isinstance(value, dict) and value.get("schema") == 3:
+        fields.add("unpacked_bytes")
+    if not isinstance(value, dict) or set(value) != fields:
         raise ImageError("prebuilt_manifest_invalid")
-    if (value["schema"] != 2 or value["release"] != release
+    if (type(value["schema"]) is not int or value["schema"] not in {2, 3} or value["release"] != release
             or not SHA.fullmatch(value.get("source_tree", ""))
             or not DIGEST.fullmatch(value.get("archive_sha256", ""))
             or type(value["archive_bytes"]) is not int
             or not 0 < value["archive_bytes"] <= MAX_ARCHIVE_BYTES
             or not isinstance(value["images"], dict) or set(value["images"]) != set(TAGS)):
+        raise ImageError("prebuilt_manifest_invalid")
+    if value["schema"] == 3 and (type(value["unpacked_bytes"]) is not int
+            or not 0 < value["unpacked_bytes"] <= MAX_UNPACKED_BYTES):
         raise ImageError("prebuilt_manifest_invalid")
     for info in value["images"].values():
         if (not isinstance(info, dict) or set(info) != {
@@ -208,6 +214,22 @@ def save_archive(path, *, export_timeout=600):
                 process.kill(); process.wait(timeout=10)
 
 
+def installed_size(identifiers):
+    # Docker reports image/layer size independently of gzip transport size.
+    # Counting shared layers for each distinct image is deliberately conservative.
+    total = 0
+    for identifier in sorted(set(identifiers)):
+        if not IMAGE_ID.fullmatch(identifier):
+            raise ImageError("prebuilt_image_reference_invalid")
+        raw = run(["docker", "image", "inspect", "--format", "{{.Size}}", identifier]).strip()
+        if not re.fullmatch(rb"[0-9]{1,12}", raw) or not 0 < int(raw) <= MAX_UNPACKED_BYTES:
+            raise ImageError("prebuilt_storage_estimate_invalid")
+        total += int(raw)
+    if not 0 < total <= MAX_UNPACKED_BYTES:
+        raise ImageError("prebuilt_storage_estimate_invalid")
+    return total
+
+
 def prepare_bundle(release, directory):
     """Called only after the same workflow has tested all three local images."""
     if not SHA.fullmatch(release):
@@ -233,8 +255,9 @@ def prepare_bundle(release, directory):
         raise ImageError("prebuilt_export_image_changed")
     contents = archive_image_contents(archive)
     images = {tag: {**info, **contents[tag]} for tag, info in images.items()}
-    value = validate_manifest({"schema": 2, "release": release, "source_tree": tree,
-        "images": images, "archive_sha256": file_hash(archive), "archive_bytes": archive.stat().st_size}, release)
+    value = validate_manifest({"schema": 3, "release": release, "source_tree": tree,
+        "images": images, "archive_sha256": file_hash(archive), "archive_bytes": archive.stat().st_size,
+        "unpacked_bytes": installed_size(info["id"] for info in images.values())}, release)
     from snapshot_worker_state import write_private
     manifest = directory / "images-manifest.json"
     write_private(manifest, value)
@@ -400,12 +423,25 @@ def reclaim_retired_archives(incoming):
     return result
 
 
+def required_storage(manifest):
+    # Keep room for compressed input, the verification export, Docker import
+    # staging plus extracted layers, and the operating reserve. Old manifests
+    # stay readable for rollback/retention, but cannot size a new deployment.
+    if manifest["schema"] != 3:
+        raise ImageError("prebuilt_storage_estimate_missing")
+    return 2 * manifest["archive_bytes"] + 2 * manifest["unpacked_bytes"] + STORAGE_RESERVE_BYTES
+
+
 def receive_archive(release, stream):
     manifest = read_manifest(release)
     root = release_path(release)
-    required = manifest["archive_bytes"] + STORAGE_RESERVE_BYTES
+    required = required_storage(manifest)
     before = shutil.disk_usage(root).free
     retention = reclaim_retired_archives(release)
+    if shutil.disk_usage(root).free < required:
+        from image_retention import reclaim_retired_images
+        print(json.dumps({"event": "prebuilt_image_retention",
+            **reclaim_retired_images(release, required)}), flush=True)
     after = shutil.disk_usage(root).free
     capacity_ok = after >= required
     print(json.dumps({"event": "prebuilt_storage_check", "required_bytes": required,

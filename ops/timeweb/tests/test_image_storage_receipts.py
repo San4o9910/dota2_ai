@@ -34,7 +34,7 @@ class ImageStorageReceiptsTest(unittest.TestCase):
     def test_untrusted_or_malformed_receipts_are_not_forwarded(self):
         invalid = [None, [], "unexpected", receipt(path="private server path"),
             receipt(raw_output="unfiltered content"), receipt(required_bytes=True),
-            receipt(required_bytes=9 * 1024**3), receipt(free_before_bytes=-1),
+            receipt(required_bytes=45 * 1024**3), receipt(free_before_bytes=-1),
             receipt(eligible_archives=257), receipt(reclaimed_archives=11),
             receipt(reclaimed_bytes=6 * 1024**3), receipt(capacity_ok="true"),
             receipt(capacity_ok=False), receipt(cleanup_status="private error")]
@@ -56,13 +56,27 @@ class ImageStorageReceiptsTest(unittest.TestCase):
                 options["stderr"].write(b"private stderr\n")
                 return SimpleNamespace(returncode=1)
             with patch.object(pilot.subprocess, "run", side_effect=run), patch.object(pilot, "event") as event:
-                with self.assertRaisesRegex(pilot.CheckError, "prebuilt_archive_transfer_failed"):
+                with self.assertRaisesRegex(pilot.CheckError, "prebuilt_storage_insufficient"):
                     pilot.transfer_image_archive(["ssh", "fixture"], archive)
                 self.assertEqual(event.call_count, 2)
                 self.assertEqual(event.call_args_list[0].args, ("prebuilt_storage_check",))
                 self.assertEqual(event.call_args_list[0].kwargs,
                     {key: value for key, value in storage.items() if key != "event"})
                 self.assertEqual(event.call_args_list[1].kwargs, {"code": "prebuilt_storage_insufficient"})
+
+    def test_image_retention_receipt_cannot_leak_paths_or_raw_docker_output(self):
+        valid = {"event": "prebuilt_image_retention", "removed_images": 2,
+            "examined_images": 3, "cleanup_status": "completed"}
+        with patch.object(pilot, "event") as event:
+            pilot.emit_image_failure(json.dumps(valid))
+            event.assert_called_once_with("prebuilt_image_retention", removed_images=2,
+                examined_images=3, cleanup_status="completed")
+        for invalid in ({**valid, "removed_images": 4}, {**valid, "removed_images": True},
+                {**valid, "examined_images": 25}, {**valid, "path": "private"},
+                {**valid, "cleanup_status": "raw Docker error"}):
+            with patch.object(pilot, "event") as event:
+                pilot.emit_image_failure(json.dumps(invalid))
+                event.assert_not_called()
 
 
 if __name__ == "__main__":
