@@ -98,8 +98,14 @@ try {
     const page=await browser.newPage({viewport:{width,height:1000}});
     await page.addInitScript(()=>{
       window.__signatureStarts=0;
+      window.__interfaceMotion=[];
+      const animate=Element.prototype.animate;
+      Element.prototype.animate=function(frames,options){
+        window.__interfaceMotion.push({duration:options?.duration,tag:this.tagName});
+        return animate.call(this,frames,options);
+      };
       document.addEventListener('animationstart',event=>{
-        if(event.animationName==='narma-signature-cut')window.__signatureStarts++;
+        if(event.animationName==='signature-fall')window.__signatureStarts++;
       });
     });
     const errors=[],unexpected=[],apiRequests=[];
@@ -152,16 +158,34 @@ try {
     await page.waitForFunction(()=>window.__signatureStarts===1);
     const signature=page.locator('#home-signature');
     assert.equal(await signature.isVisible(),true,'The signature is a prominent part of the first screen.');
-    const markSize=await signature.locator('.signature-mark').boundingBox();
-    assert.ok(markSize.width>=100&&markSize.height>=100,'The signature must not regress to a tiny header-only accent.');
+    const markSize=await signature.locator('.signature-art').boundingBox();
+    assert.ok(markSize.width>=200&&markSize.height>=100,'The signature remains legible on desktop and mobile.');
+    assert.equal(await signature.getByRole('button').count(),0,'The replay button and clickable wrapper are removed.');
+    assert.equal(await signature.getByRole('img',{name:'Narma Vision — твоя игра, твои решения'}).count(),1,'The complete brand has one accessible name.');
     assert.equal(await page.locator('.vision-path a[href="/coach"]').count(),1);
     assert.equal(await page.locator('.vision-path a[href="/training"]').count(),1);
-    await page.waitForFunction(()=>!document.querySelector('#home-signature .narma-cut-playing'));
-    await open('/');
-    assert.equal(await page.evaluate(()=>window.__signatureStarts),0,'Autoplay does not repeat in the same tab session.');
-    const repeat=signature.getByRole('button',{name:'Повторить фирменную анимацию NARMA'});
-    await repeat.focus();await repeat.press('Enter');
-    await page.waitForFunction(()=>window.__signatureStarts===1);
+    const duration=await signature.evaluate(host=>host.getAnimations({subtree:true}).find(a=>a.animationName==='signature-fall').effect.getTiming().duration);
+    assert.ok(duration>=4500&&duration<=5000,'The introduction is deliberate and finishes before five seconds.');
+    for(const [phase,time] of [['line',600],['wordmark',2700],['fold',3550],['cut',4600]]) {
+      const state=await signature.evaluate((host,time)=>{
+        for(const a of host.getAnimations({subtree:true})){a.pause();a.currentTime=time;}
+        const style=selector=>getComputedStyle(host.querySelector(selector));
+        return {rest:Number(style('.signature-rest').opacity),slash:Number(style('.signature-slash').opacity),name:Number(style('.signature-name').opacity)};
+      },time);
+      if(phase==='wordmark'){assert.equal(state.rest,1);assert.equal(state.slash,0);}
+      if(phase==='cut'){assert.equal(state.rest,0);assert.equal(state.slash,1);}
+      if(screenshotDir)await signature.screenshot({path:path.join(screenshotDir,`signature-${width}-${phase}.png`),animations:'allow'});
+    }
+    // Let the non-blocking cleanup settle into the static NV. No looping on scroll.
+    await page.waitForFunction(()=>!document.querySelector('#home-signature.signature-playing'));
+    assert.equal(await page.evaluate(()=>window.__signatureStarts),1);
+    assert.equal(await signature.locator('.signature-name').textContent(),'NARMA VISION');
+    assert.ok(await page.evaluate(()=>window.__interfaceMotion.some(m=>m.duration===720)),'Editorial blocks appear progressively.');
+    if(width===390){
+      await page.setViewportSize({width:320,height:900});
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'The smallest supported phone has no horizontal overflow.');
+      await page.setViewportSize({width,height:1000});
+    }
     assert.match(await page.locator('#home-news .source-note.is-stale').textContent(),/сохранённ.*верси/i);
     assert.equal(await page.locator('a[href="/replays"]').count()>0,true,'The public home leads to existing replay analysis.');
     for(const route of publicRoutes)assert.equal(await page.locator(`.main-nav a[href="${route}"]`).count(),1);
@@ -169,13 +193,13 @@ try {
     assert.equal(normalMotion.animation,'none','The approved theme uses short N-cut accents instead of a perpetual background.');
     assert.equal(normalMotion.events,'none','Background decoration cannot intercept user actions.');
     await page.emulateMedia({reducedMotion:'reduce'});
-    await page.waitForFunction(()=>!document.querySelector('#home-signature .narma-cut-playing'));
-    assert.equal(await repeat.isDisabled(),true,'Reduced-motion preferences cannot be bypassed by the replay control.');
-    assert.equal(await signature.getByText('Движение отключено в настройках устройства.',{exact:true}).isVisible(),true);
+    await open('/');
+    assert.equal(await page.evaluate(()=>window.__signatureStarts),0,'Reduced motion starts with a static NV.');
+    assert.equal(await signature.getByRole('button').count(),0);
+    assert.equal(await signature.evaluate(host=>host.getAnimations({subtree:true}).length),0);
     assert.deepEqual(await page.evaluate(()=>['::before','::after'].map(pseudo=>({animation:getComputedStyle(document.body,pseudo).animationName,transform:getComputedStyle(document.body,pseudo).transform}))),[{animation:'none',transform:'none'},{animation:'none',transform:'none'}],'Reduced-motion users receive a static background.');
     await page.emulateMedia({reducedMotion:'no-preference'});
-    await page.waitForFunction(()=>!document.querySelector('#home-signature .signature-replay').disabled);
-    assert.equal(await repeat.isEnabled(),true);
+    assert.equal(await page.evaluate(()=>window.__signatureStarts),0,'Changing preferences does not replay a completed introduction.');
     await accessibility('home');
     const heroNav=page.locator('.main-nav a[href="/heroes"]');await heroNav.focus();await heroNav.press('Enter');
     await page.waitForURL(url=>url.pathname==='/heroes');await page.locator('#hero-grid [data-hero]').first().waitFor();
@@ -183,7 +207,9 @@ try {
     assert.equal(await page.locator('#hero-grid [data-hero]').count(),4);
     await page.locator('#hero-search').fill('necro');
     assert.equal(await page.locator('#hero-grid [data-hero]').count(),1);
+    const pressesBefore=await page.evaluate(()=>window.__interfaceMotion.filter(m=>m.duration===320).length);
     const necrophos=page.locator('#hero-grid [data-hero="36"]');await necrophos.focus();await necrophos.press('Enter');
+    assert.ok(await page.evaluate(()=>window.__interfaceMotion.filter(m=>m.duration===320).length)>pressesBefore,'Keyboard activation gets tactile feedback without delaying selection.');
     assert.equal(await page.locator('#hero-inspector h2').textContent(),'Necrophos');
     assert.equal(await page.locator('#hero-inspector a[target="_blank"]').getAttribute('href'),'https://www.dota2.com/hero/necrophos');
     assert.equal(await necrophos.getAttribute('aria-pressed'),'true');

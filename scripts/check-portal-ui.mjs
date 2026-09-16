@@ -208,7 +208,7 @@ try {
     await page.addInitScript(()=>{
       window.__narmaMotion=[];
       document.addEventListener('animationstart',event=>{
-        if(event.animationName.startsWith('narma-'))window.__narmaMotion.push({name:event.animationName,parent:event.target.parentElement?.id});
+        if(event.animationName.startsWith('narma-')||event.animationName==='signature-fall')window.__narmaMotion.push({name:event.animationName,parent:event.target.parentElement?.id});
       });
     });
     await page.goto(origin+'/replays');
@@ -224,8 +224,9 @@ try {
     await page.getByLabel('Пароль',{exact:true}).fill('Synthetic passphrase 2026');
     await page.getByRole('button',{name:'Войти',exact:true}).click();
     await page.getByRole('heading',{name:'Разбор твоего матча'}).waitFor();
-    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='narma-signature-cut'));
-    assert.equal(await page.locator('#workspace-signature').isVisible(),true,'The signed-in player can see and replay the signature.');
+    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='signature-fall'));
+    assert.equal(await page.locator('#workspace-signature').isVisible(),true,'The signed-in player sees the automatic signature after login.');
+    assert.equal(await page.locator('#workspace-signature button').count(),0,'The private workspace also removes replay controls.');
     const nicknameBeforeShortcut=await page.locator('#nickname').inputValue();
     await page.locator('#nickname').fill('Unsubmitted fixture draft');
     await page.locator('.workspace-shortcuts a[data-tab="coach"]').click();
