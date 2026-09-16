@@ -324,6 +324,10 @@ from .learning import attach_learning
 attach_learning(app)
 from .growth import attach_growth
 attach_growth(app)
+from .player_program import attach_program
+attach_program(app)
+from .billing import attach_billing
+attach_billing(app)
 from .owner_dashboard import attach_owner_dashboard
 attach_owner_dashboard(app)
 from .hermes_bridge import attach_hermes
@@ -344,6 +348,8 @@ app.mount('/assets',StaticFiles(directory=STATIC_ROOT),name='portal-assets')
 @app.get('/learn')
 @app.get('/practice')
 @app.get('/updates')
+@app.get('/example')
+@app.get('/start')
 def explore_page():
     return FileResponse(STATIC_ROOT/'explore.html',media_type='text/html',headers={'Cache-Control':'no-cache'})
 
@@ -357,6 +363,7 @@ def explore_page():
 @app.get('/hero-pool')
 @app.get('/player')
 @app.get('/my-learning')
+@app.get('/training')
 @app.get('/account')
 @app.get('/owner')
 def portal_page():
