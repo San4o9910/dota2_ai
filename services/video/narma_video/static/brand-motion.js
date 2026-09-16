@@ -120,7 +120,7 @@ const revealObserver = new IntersectionObserver(entries => {
     // Opacity-only on links containing controls: their hit boxes never move.
     const interactive = entry.target.matches('a') || entry.target.querySelector('button,a,input,select');
     animateInterface(entry.target, [
-      { opacity: .25, transform: interactive ? 'none' : 'translateY(12px)' },
+      { opacity: .85, transform: interactive ? 'none' : 'translateY(12px)' },
       { opacity: 1, transform: 'none' }
     ], { duration: 720, delay: Math.min(order++, 4) * 65, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
   }
