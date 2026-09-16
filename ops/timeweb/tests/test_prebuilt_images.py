@@ -45,9 +45,10 @@ def manifest(data):
         for tag in aliases:
             contents[tag] = {**info(REPLAY_ID if tag == "narma-video-replay-worker" else HERMES_ID if tag == "narma-video-hermes-runner" else VIDEO_ID),
                 "config_digest": digest, "rootfs_diff_ids": config["rootfs"]["diff_ids"]}
-    return {"schema": 2, "release": RELEASE, "source_tree": "b" * 40,
+    return {"schema": 3, "release": RELEASE, "source_tree": "b" * 40,
         "images": contents,
-        "archive_sha256": hashlib.sha256(data).hexdigest(), "archive_bytes": len(data)}
+        "archive_sha256": hashlib.sha256(data).hexdigest(), "archive_bytes": len(data),
+        "unpacked_bytes": len(data) * 3}
 
 
 def cached_archive(root, release, data=b"authenticated transport cache"):
@@ -119,6 +120,33 @@ class Stream(io.BytesIO):
 
 
 class PrebuiltImagesTest(unittest.TestCase):
+    def test_storage_covers_import_verification_and_operating_reserve(self):
+        value = {**manifest(b"fixture"), "archive_bytes": 600_000_000, "unpacked_bytes": 3_000_000_000}
+        self.assertEqual(images.required_storage(value), 7_200_000_000 + 4 * 1024**3)
+        # This is the failure observed in production: ~4.96 GB passed the
+        # compressed-size-only check, then import left less than 2 GiB free.
+        self.assertGreater(images.required_storage(value), 4_962_369_536)
+
+    def test_legacy_manifests_remain_readable_but_cannot_size_a_new_transfer(self):
+        value = manifest(b"legacy")
+        value["schema"] = 2
+        value.pop("unpacked_bytes")
+        self.assertEqual(images.validate_manifest(value, RELEASE), value)
+        with self.assertRaisesRegex(images.ImageError, "prebuilt_storage_estimate_missing"):
+            images.required_storage(value)
+        for size in (None, True, -1, 0, images.MAX_UNPACKED_BYTES + 1):
+            with self.subTest(size=size), self.assertRaises(images.ImageError):
+                images.validate_manifest({**manifest(b"new"), "unpacked_bytes": size}, RELEASE)
+
+    def test_installed_size_uses_distinct_immutable_images_not_alias_count(self):
+        with patch.object(images, "run", return_value=b"3000000000\n") as run:
+            self.assertEqual(images.installed_size([VIDEO_ID, VIDEO_ID, REPLAY_ID]), 6_000_000_000)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual({call.args[0][-1] for call in run.call_args_list}, {VIDEO_ID, REPLAY_ID})
+        for raw in (b"-1", b"0", b"secret text", b"9999999999999"):
+            with patch.object(images, "run", return_value=raw), self.assertRaises(images.ImageError):
+                images.installed_size([VIDEO_ID])
+
     def test_retention_keeps_current_previous_incoming_and_unrelated_files_and_is_idempotent(self):
         with cache_host() as (root, checks, current, previous):
             old = cached_archive(root, "d" * 40)
@@ -203,7 +231,7 @@ class PrebuiltImagesTest(unittest.TestCase):
         data = b"incoming archive"
         with cache_host() as (root, checks, current, previous):
             old = cached_archive(root, "d" * 40, b"x" * 200)
-            required = len(data) + 4 * 1024**3
+            required = images.required_storage(manifest(data))
             def disk_usage(path):
                 return SimpleNamespace(free=required - 100 + (0 if old.exists() else 200))
             output = io.StringIO()
@@ -229,7 +257,7 @@ class PrebuiltImagesTest(unittest.TestCase):
                 with self.assertRaisesRegex(images.ImageError, "prebuilt_storage_insufficient"):
                     images.receive_archive(RELEASE, Unreadable())
             self.assertFalse(old.exists())
-            self.assertFalse(json.loads(output.getvalue())["capacity_ok"])
+            self.assertFalse(json.loads(output.getvalue().splitlines()[-1])["capacity_ok"])
             self.assertEqual((root / RELEASE / "images.tar.gz").read_bytes(), previous_incoming)
             self.assertEqual(list((root / RELEASE).glob(".images-upload-*")), [])
 
