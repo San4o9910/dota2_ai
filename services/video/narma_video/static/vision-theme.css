@@ -179,7 +179,7 @@ h1, .home-lead h1 { font-family: var(--display); font-weight: 400; font-size: cl
   *, *::before, *::after { scroll-behavior: auto!important; transition: none!important; animation: none!important; }
 }
 
-/* The signature is a first-screen experience, with a persistent replay control. */
+/* A non-interactive signature shares the page with immediately usable content. */
 .vision-arrival { grid-template-columns: minmax(0,1.55fr) minmax(280px,1fr); align-items: stretch; }
 .vision-arrival .practice-feature { display: flex; flex-direction: column; justify-content: center; padding: clamp(26px,3.4vw,48px); min-height: 430px; }
 .vision-arrival h1 { font-size: clamp(40px,4.7vw,68px); max-width: 650px; }
@@ -187,24 +187,67 @@ h1, .home-lead h1 { font-family: var(--display); font-weight: 400; font-size: cl
 .vision-arrival .practice-feature::before { opacity: .32; }
 .vision-arrival .practice-feature > .muted { max-width: 43ch; }
 .vision-arrival .button-row { align-items: stretch; }
+/* The full wordmark draws, holds, folds into NV, then receives one precise cut. */
 .narma-signature { min-width: 0; border: 1px solid var(--line); background: var(--bg); position: relative; isolation: isolate; }
-.signature-replay { display: flex; flex-direction: column; width: 100%; height: 100%; padding: 0; background: transparent; border: 0; color: var(--text); font: inherit; cursor: pointer; text-align: center; }
-.signature-replay:hover:not(:disabled) { background: var(--surface); }
-.signature-replay:disabled { opacity: 1; cursor: default; }
-.signature-stage { position: relative; isolation: isolate; display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; min-height: 345px; padding: 44px 24px 28px; overflow: hidden; background: linear-gradient(157deg,transparent 49.7%,var(--line) 49.9%,transparent 50.1%); }
-.signature-stage::before { content: ''; position: absolute; inset: 18px; border: 1px solid var(--surface-raised); z-index: -1; pointer-events: none; }
-.signature-index { position: absolute; top: 23px; left: 28px; color: var(--muted); font-size: 10px; letter-spacing: 2px; }
-.signature-mark.narma-mark { width: 166px; height: 172px; font-size: 188px; }
-.signature-mark .narma-cut-line { width: 140%; left: -20%; height: 3px; opacity: .9; transform: rotate(-23deg); }
-.signature-mark.narma-cut-playing .narma-cut-line { animation-name: narma-signature-cut; }
-.signature-wordmark { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-top: 14px; font-size: 22px; letter-spacing: 4px; }
-.signature-wordmark > span { font-family: var(--display); letter-spacing: 2px; }
-.signature-axis { margin-top: 17px; color: var(--muted); font-size: 8px; letter-spacing: 2px; }
-.signature-caption { display: flex; min-height: 52px; justify-content: center; align-items: center; gap: 10px; border-top: 1px solid var(--line); width: 100%; padding: 8px 14px; color: var(--muted); font-size: 12px; }
-.signature-replay-icon { color: var(--accent-text); font-size: 22px; }
-.signature-motion-note { color: var(--muted); text-align: center; padding: 8px 12px; font-size: 11px; }
-.signature-motion-note[hidden] { display: none; }
-@keyframes narma-signature-cut { 0% { opacity: 0; transform: rotate(-23deg) translateX(-25%) scaleX(0); } 35% { opacity: 1; transform: rotate(-23deg) translateX(0) scaleX(1.1); } 75%,100% { opacity: .9; transform: rotate(-23deg) scaleX(1); } }
+.signature-stage { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 400px; padding: 36px 16px 28px; overflow: hidden; color: var(--text); }
+.signature-stage::before { content: ''; position: absolute; inset: 16px; border: 1px solid var(--surface-raised); pointer-events: none; }
+.signature-index { position: absolute; top: 27px; left: 28px; color: var(--muted); font-size: 9px; letter-spacing: 1.7px; }
+.signature-art { display: block; width: 100%; max-width: 560px; height: auto; overflow: visible; flex: 0 0 auto; }
+.signature-art text { font: 400 96px var(--display); letter-spacing: 1px; fill: var(--text); stroke: var(--text); stroke-width: .65px; paint-order: stroke fill; }
+.signature-letter-n { transform: translate(198px,224px); }
+.signature-letter-v { transform: translate(292px,224px); }
+.signature-rest { opacity: 0; }
+.signature-half-upper { transform: translate(-1px,-1px); }
+.signature-half-lower { transform: translate(1px,1px); }
+.signature-drop { stroke: var(--accent); stroke-width: 2; opacity: 0; }
+.signature-slash { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 1; stroke-dashoffset: 0; }
+.signature-name { font-size: 12px; letter-spacing: 4px; margin-top: 0; }
+.signature-axis { margin-top: 14px; color: var(--muted); font-size: 8px; letter-spacing: 1.6px; text-align: center; }
+.signature-playing { --signature-duration: 4900ms; --signature-ease: cubic-bezier(.45,0,.18,1); }
+.signature-playing .signature-drop { animation: signature-fall var(--signature-duration) var(--signature-ease) both; }
+.signature-playing .signature-art text { animation: signature-draw var(--signature-duration) ease both; }
+.signature-playing .signature-letter-n { animation: signature-fold-n var(--signature-duration) var(--signature-ease) both; }
+.signature-playing .signature-letter-v { animation: signature-fold-v var(--signature-duration) var(--signature-ease) both; }
+.signature-playing .signature-rest { animation: signature-fold-rest var(--signature-duration) var(--signature-ease) both; }
+.signature-playing .signature-half-upper { animation: signature-split-upper var(--signature-duration) var(--signature-ease) both; }
+.signature-playing .signature-half-lower { animation: signature-split-lower var(--signature-duration) var(--signature-ease) both; }
+.signature-playing .signature-slash { animation: signature-slash var(--signature-duration) var(--signature-ease) both; }
+.signature-playing .signature-name { animation: signature-name var(--signature-duration) ease both; }
+@keyframes signature-fall {
+  0% { opacity: 0; transform: translateY(-115px) scaleY(.5); }
+  7% { opacity: 1; }
+  18% { opacity: 1; transform: translateY(80px) scaleY(1); }
+  38% { opacity: 0; transform: translateY(230px) scaleY(.2); }
+  100% { opacity: 0; transform: translateY(230px) scaleY(.2); }
+}
+@keyframes signature-draw {
+  0%,14% { opacity: 0; fill-opacity: 0; stroke-dasharray: 380; stroke-dashoffset: 380; }
+  24% { opacity: 1; fill-opacity: 0; }
+  38% { opacity: 1; fill-opacity: 0; stroke-dasharray: 380; stroke-dashoffset: 0; }
+  44%,100% { opacity: 1; fill-opacity: 1; stroke-dasharray: 380; stroke-dashoffset: 0; }
+}
+@keyframes signature-fold-n { 0%,58% { transform: translate(74px,148px); } 80%,100% { transform: translate(198px,224px); } }
+@keyframes signature-fold-v { 0%,58% { transform: translate(74px,248px); } 80%,100% { transform: translate(292px,224px); } }
+@keyframes signature-fold-rest { 0%,58% { opacity: 1; transform: translateX(0); } 76%,100% { opacity: 0; transform: translateX(-18px); } }
+@keyframes signature-split-upper { 0%,83% { transform: translate(0,0); } 92% { transform: translate(-5px,-2px); } 100% { transform: translate(-1px,-1px); } }
+@keyframes signature-split-lower { 0%,83% { transform: translate(0,0); } 92% { transform: translate(5px,2px); } 100% { transform: translate(1px,1px); } }
+@keyframes signature-slash { 0%,80% { opacity: 0; stroke-dashoffset: 1; } 84% { opacity: 1; } 94%,100% { opacity: 1; stroke-dashoffset: 0; } }
+@keyframes signature-name { 0%,72% { opacity: 0; transform: translateY(5px); } 94%,100% { opacity: 1; transform: translateY(0); } }
+.narma-signature-compact .signature-stage { min-height: 164px; padding: 18px 8px; }
+.narma-signature-compact .signature-index, .narma-signature-compact .signature-axis { display: none; }
+.narma-signature-compact .signature-name { font-size: 8px; letter-spacing: 1.8px; }
+@media(max-width:820px) {
+  .vision-arrival .signature-stage { min-height: 230px; padding: 28px 18px 24px; }
+  .vision-arrival .signature-art { max-width: 350px; }
+  .signature-index { top: 22px; left: 26px; font-size: 8px; }
+}
+@media(max-width:560px) {
+  .workspace-intro .signature-stage { min-height: 200px; }
+  .workspace-intro .signature-art { max-width: 290px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .signature-playing *, .signature-playing { animation: none !important; }
+}
 .vision-path { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); margin-block: 28px 40px; border-block: 1px solid var(--line); }
 .vision-path > a { display: block; min-width: 0; padding: 27px 24px; text-decoration: none; color: var(--text); }
 .vision-path > a + a { border-left: 1px solid var(--line); }
@@ -220,21 +263,10 @@ h1, .home-lead h1 { font-family: var(--display); font-weight: 400; font-size: cl
 .workspace-shortcuts a { display: inline-flex; gap: 12px; align-items: center; min-height: 44px; padding: 8px 12px; color: var(--text); background: var(--surface); border: 1px solid var(--line); text-decoration: none; font-size: 12px; }
 .workspace-shortcuts a > span { color: var(--accent-text); }
 .workspace-shortcuts a:hover { background: var(--surface-raised); }
-.narma-signature-compact .signature-stage { min-height: 155px; padding: 25px 14px 12px; }
-.narma-signature-compact .signature-index,.narma-signature-compact .signature-axis { display: none; }
-.narma-signature-compact .signature-mark { width: 92px; height: 100px; font-size: 110px; }
-.narma-signature-compact .signature-wordmark { font-size: 11px; letter-spacing: 2px; gap: 6px; margin-top: 7px; }
-.narma-signature-compact .signature-caption { min-height: 44px; padding: 6px; font-size: 10px; }
 @media(max-width:820px) {
   .vision-arrival { grid-template-columns: 1fr; }
   .vision-arrival .practice-feature { min-height: 0; }
   .vision-arrival > .narma-signature { order: -1; }
-  .vision-arrival .signature-stage { min-height: 180px; width: 100%; padding: 20px 32px; display: grid; grid-template-columns: 120px minmax(0,1fr); grid-template-rows: 1fr 35px; align-items: end; column-gap: 30px; }
-  .vision-arrival .signature-index { top: 12px; left: 22px; font-size: 8px; }
-  .vision-arrival .signature-mark { grid-row: 1 / 3; align-self: center; width: 106px; height: 118px; font-size: 135px; }
-  .vision-arrival .signature-wordmark { justify-content: start; font-size: 20px; letter-spacing: 2px; margin: 0; }
-  .vision-arrival .signature-axis { text-align: left; font-size: 7px; letter-spacing: 1px; align-self: start; margin-top: 8px; }
-  .vision-arrival .signature-caption { min-height: 44px; }
   .vision-path > a { padding: 23px 16px; }
   .vision-path h2 { font-size: 16px; }
   .workspace-intro { grid-template-columns: minmax(0,1fr) 150px; gap: 18px; }
@@ -243,19 +275,12 @@ h1, .home-lead h1 { font-family: var(--display); font-weight: 400; font-size: cl
   .vision-arrival { gap: 16px; }
   .vision-arrival h1 { font-size: 40px; letter-spacing: -1px; }
   .vision-arrival .practice-feature { padding: 26px 22px; }
-  .vision-arrival .signature-stage { grid-template-columns: 102px minmax(0,1fr); column-gap: 15px; min-height: 164px; padding-inline: 22px; }
-  .vision-arrival .signature-wordmark { flex-direction: column; align-items: start; gap: 4px; font-size: 22px; }
-  .vision-arrival .signature-axis { font-size: 6px; letter-spacing: .6px; }
   .vision-path { grid-template-columns: 1fr; margin-top: 22px; }
   .vision-path > a { padding: 20px 6px; }
   .vision-path > a + a { border-left: 0; border-top: 1px solid var(--line); }
   .vision-path h2 { font-size: 20px; margin-top: 8px; }
   .workspace-intro { grid-template-columns: 1fr; gap: 18px; margin-bottom: 28px; padding-bottom: 24px; }
   .workspace-intro > .narma-signature { order: -1; }
-  .workspace-intro .signature-stage { min-height: 104px; flex-direction: row; gap: 24px; padding: 12px; }
-  .workspace-intro .signature-mark { width: 62px; height: 72px; font-size: 83px; }
-  .workspace-intro .signature-wordmark { font-size: 18px; }
-  .workspace-intro .signature-caption { min-height: 44px; font-size: 11px; }
   .workspace-shortcuts { gap: 6px; }
   .workspace-shortcuts a { padding: 8px 9px; gap: 7px; font-size: 11px; }
 }
@@ -266,3 +291,14 @@ h1, .home-lead h1 { font-family: var(--display); font-weight: 400; font-size: cl
 .program-steps [aria-current=step]{color:var(--ink,#1b2a35);font-weight:700}
 .program-focus{margin-bottom:1.25rem;max-width:900px}.program-focus h3{font-size:1rem;margin:1.25rem 0 .35rem}.program-action{font-size:1.25rem;line-height:1.6;max-width:65ch}
 #program-content .surface{margin-bottom:1rem}#program-content .text-link{display:inline-block;margin:1rem}#program-content button{white-space:normal}.replay-help{margin:1rem 0}.replay-help summary{cursor:pointer}.replay-help li{margin:.5rem 0}
+
+/* Small tactile feedback; hover belongs only to devices with a real pointer. */
+:is(button, .button, .account-link, .workspace-shortcuts a, .main-nav a, summary) {
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 220ms ease;
+}
+@media(hover:hover) and (pointer:fine) {
+  :is(button, .button):not(:disabled):not([aria-disabled=true]):hover { box-shadow: 0 3px 14px #0003; }
+}
+@media(prefers-reduced-motion:reduce) {
+  :is(button, .button, .account-link, .workspace-shortcuts a, .main-nav a, summary) { transition: none; }
+}
