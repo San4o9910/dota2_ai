@@ -80,7 +80,7 @@ export default function NarmaScanFlow() {
     <p id="match-dialog-description">Укажите матч и свой ник. Персональный разбор закрепляется за одним игроком.</p>
     <form onSubmit={scan} noValidate aria-busy={pending||bindingBusy}>
       <label htmlFor="scan-match-id">Match ID</label>
-      <input id="scan-match-id" disabled={bindingBusy} data-dialog-initial-focus name="matchId" inputMode="numeric" maxLength={12} autoComplete="off" value={matchId} placeholder="8963624400" onChange={event=>{cancel();setMessage("");setMatchId(event.target.value.replace(/\D/g,"").slice(0,12));setTarget(null);setPreview(null);}}/>
+      <input id="scan-match-id" disabled={bindingBusy} data-dialog-initial-focus name="matchId" inputMode="numeric" maxLength={12} autoComplete="off" value={matchId} placeholder="ID твоего матча" onChange={event=>{cancel();setMessage("");setMatchId(event.target.value.replace(/\D/g,"").slice(0,12));setTarget(null);setPreview(null);}}/>
       <PlayerIdentityPanel matchId={matchId} onResolved={setTarget} onBusyChange={setBindingBusy}/>
       <button className="dialog-submit" type="submit" disabled={pending||!target||target.matchId!==matchId}>{pending?"Загружаем факт…":"Показать мой эпизод"}</button>
       {pending&&<button className="dialog-secondary" type="button" onClick={cancel}>Отменить загрузку</button>}

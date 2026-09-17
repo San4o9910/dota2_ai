@@ -19,10 +19,12 @@ def public_client(monkeypatch):
 
 
 def test_public_browsing_does_not_require_database_or_login(public_client):
-    for path in ('/', '/heroes', '/builds', '/learn', '/practice', '/updates'):
+    for path in ('/', '/heroes', '/builds', '/learn', '/practice', '/updates', '/example', '/start'):
         response = public_client.get(path)
         assert response.status_code == 200
         assert '/assets/explore.js' in response.text
+        assert 'papa_prima' not in response.text.lower()
+        assert '8963624400' not in response.text
         assert 'script-src \'self\'' in response.headers['content-security-policy']
         assert response.headers['x-frame-options'] == 'DENY'
 
@@ -47,4 +49,14 @@ def test_private_navigation_direct_links_keep_the_portal_shell(public_client):
         response = public_client.get(path)
         assert response.status_code == 200
         assert '/assets/portal.js' in response.text
+        assert 'papa_prima' not in response.text.lower()
+        assert '8963624400' not in response.text
         assert response.headers['cache-control'] == 'no-store'
+
+
+def test_public_script_assets_do_not_embed_owner_demo(public_client):
+    for path in ('/assets/explore.js', '/assets/portal.js'):
+        response = public_client.get(path)
+        assert response.status_code == 200
+        assert 'papa_prima' not in response.text.lower()
+        assert '8963624400' not in response.text

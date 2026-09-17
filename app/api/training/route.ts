@@ -6,7 +6,7 @@ import { AccountApiError,accountApiError,accountJson,requireApiAccount } from "@
 import { readBoundedJson } from "@/lib/security/bounded-json";
 
 export const dynamic="force-dynamic";
-const contextSchema=z.string().refine(v=>v==="demo:8963624400"||ANALYSIS_ID_PATTERN.test(v));
+const contextSchema=z.string().refine(v=>v==="demo:training-example"||ANALYSIS_ID_PATTERN.test(v));
 const updateSchema=z.object({contextId:contextSchema,taskId:z.string().min(1).max(100),completed:z.boolean()}).strict();
 const demoTasks=new Set(Object.values(TRAINING_PLAN).flatMap(stage=>stage.drills.map(d=>d.id)));
 
@@ -24,7 +24,7 @@ export async function PUT(request:Request) {
   try {
     const {account,db}=await requireApiAccount(request,true);
     const input=updateSchema.parse(await readBoundedJson(request,4096));
-    if(input.contextId==="demo:8963624400") {
+    if(input.contextId==="demo:training-example") {
       if(!demoTasks.has(input.taskId)) throw new AccountApiError("Упражнение не найдено.",404);
     } else {
       const detail=await new D1AnalysisStore(db).getOwned(account.id,input.contextId);

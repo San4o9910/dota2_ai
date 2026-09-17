@@ -23,7 +23,7 @@ workflow и серверные контуры готовы, но расход Op
 
 ## Что работает сейчас
 
-- **Golden demo матча `8963624400`**: четыре стадии, фиксированный пример для Juggernaut,
+- **Вымышленный учебный пример**: четыре стадии, фиксированный пример для Juggernaut,
   карта и события, золото/опыт, 15 окон драк и тренировочные задачи по
   пяти навыкам. Demo не выдаёт себя за обработку произвольного Match ID.
 - **Гейтированный NARMA Scan**: `POST /api/scan` после входа получает Match ID и
@@ -133,8 +133,9 @@ Gold, XP и интервалы драк используют одну шкалу
 
 ## Достоверность
 
-Источник golden fixture — [OpenDota match API](https://api.opendota.com/api/matches/8963624400),
-parser version 22. В продукте разделяются:
+Публичный пример составлен вручную: игроки, числа, события и советы вымышлены.
+Он не использует матч владельца и не является оценкой посетителя. Личные отчёты
+доступны только в аккаунте, которому принадлежат. В продукте разделяются:
 
 - факты из доступной телеметрии;
 - интерпретация тренера;
@@ -146,13 +147,15 @@ OpenDota не предоставляет непрерывный помомент
 
 ## Структура
 
-- `app/data/match-8963624400.ts` — проверенный golden fixture;
+- `app/data/demo-match.ts` — вымышленный учебный пример;
 - `components/narma/` — demo и доступный двухшаговый Scan UI;
 - `lib/analysis/` — нормализация, evidence, OpenDota и OpenAI contracts;
 - `lib/scan/` и `app/api/scan/` — изолированный anonymous Scan runtime;
 - `lib/billing/`, `lib/payments/`, `drizzle/` — закрытый payment/data scaffold;
 - `docs/RECOVERY_ARCHITECTURE.md` — границы и целевая архитектура;
 - `docs/RELEASE_RUNBOOK.md` — обязательные staging и release gates.
+
+Проект анкеты и персонального плана: [docs/player-profile-onboarding.md](docs/player-profile-onboarding.md).
 
 ## Атрибуция
 
