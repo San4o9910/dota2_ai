@@ -32,9 +32,9 @@ It does **not** yet implement the authenticated full-analysis routes, job runner
 history, questions, refund/reconciliation workflow or model-backed UI. Those
 remain the next delivery slices and all related flags stay off.
 
-The existing match `8963624400` remains a public golden demo and regression
-fixture. It is not presented as proof that arbitrary-match processing is already
-available.
+The public teaching demo is authored synthetic data in `app/data/demo-match.ts`.
+It does not expose an actual player or match, and is not presented as proof that
+arbitrary-match processing is available.
 
 ## Deliberate release boundaries
 

@@ -111,7 +111,7 @@ export default function PricingSection({
           </div>
           <h3>Пример разбора</h3>
           <div className="price"><strong>0 ₽</strong><span>без регистрации</span></div>
-          <p>Готовый матч 8963624400: факты, карта, таймлайн и тренировка.</p>
+          <p>Вымышленный учебный пример: карта, таймлайн и тренировка.</p>
           <ul>
             <li><CheckCircle2 />Карта и события матча</li>
             <li><CheckCircle2 />Экономика и драки</li>
@@ -183,7 +183,7 @@ export default function PricingSection({
                 inputMode="numeric"
                 value={matchId}
                 onChange={(event) => { setMatchId(event.target.value.replace(/\D/g, "").slice(0, 12)); setNotice(""); }}
-                placeholder="8963624400"
+                placeholder="ID твоего матча"
                 required={selected.code === "single_analysis"}
                 aria-describedby="checkout-description"
               />

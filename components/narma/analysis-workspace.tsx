@@ -387,7 +387,7 @@ export default function AnalysisWorkspace({
                 setMatchId(event.target.value.replace(/\D/g, "").slice(0, 12));
                 setNotice("");setTarget(null);
               }}
-              placeholder="8963624400"
+              placeholder="ID твоего матча"
             />
             <small id="full-analysis-help">От восьми до двенадцати цифр из клиента Dota&nbsp;2.</small>
 

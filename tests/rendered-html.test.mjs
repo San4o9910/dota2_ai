@@ -33,7 +33,8 @@ test("renders development preview metadata", async () => {
     signOutHref: "/signout-with-chatgpt?return_to=%2F",
   }));
   assert.match(html, /NARMA/);
-  assert.match(html, /8963624400/);
+  assert.match(html, /Учебный сценарий/);
+  assert.doesNotMatch(html, /8963624400|papa_prima/i);
   assert.match(html, /Драфт/);
   assert.match(html, /Лайнинг/);
   assert.match(html, /Мид-гейм/);

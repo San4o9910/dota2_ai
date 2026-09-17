@@ -1,4 +1,4 @@
-import { EVENTS, WARDS } from "@/app/data/match-8963624400";
+import { EVENTS, WARDS } from "@/app/data/demo-match";
 import { gridToWorld, type ReplayMap } from "@/lib/replay/map-state";
 
 export const DEMO_REPLAY_MAP: ReplayMap = {
