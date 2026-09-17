@@ -310,7 +310,7 @@ h1, .home-lead h1 { font-family: var(--display); font-weight: 400; font-size: cl
 .profile-question { border:0; margin:28px 0; padding:0; min-width:0; }
 .profile-question legend { font-size:20px; font-weight:650; padding:0; max-width:100%; }
 .profile-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:18px; }
-.profile-choice { display:flex; align-items:center; gap:12px; min-height:66px; padding:17px; margin:0; border:1px solid var(--line); background:var(--bg); color:var(--text); cursor:pointer; transition:border-color 180ms,background 180ms; }
+.profile-options .profile-choice { display:flex; align-items:center; gap:12px; min-height:66px; padding:17px; margin:0; border:1px solid var(--line); background:var(--bg); color:var(--text); cursor:pointer; transition:border-color 180ms,background 180ms; }
 .profile-choice:has(input:checked) { border-color:var(--accent); background:var(--surface-raised); box-shadow:inset 3px 0 var(--accent); }
 .profile-choice:focus-within { outline:2px solid var(--accent-text); outline-offset:3px; }
 .profile-choice input { width:18px; height:18px; flex:0 0 18px; margin:0; accent-color:var(--accent); }
@@ -332,7 +332,7 @@ h1, .home-lead h1 { font-family: var(--display); font-weight: 400; font-size: cl
 .profile-banner { border-left:3px solid var(--accent); padding:18px 22px; margin-bottom:26px; background:var(--surface); }
 @media(max-width:600px) {
  .profile-options { grid-template-columns:1fr; gap:10px; }
- .profile-choice { min-height:60px; }
+ .profile-options .profile-choice { min-height:60px; }
  .profile-actions { align-items:stretch; flex-direction:column; }
  .profile-actions .primary { width:100%; }
  .profile-question legend { font-size:19px; }

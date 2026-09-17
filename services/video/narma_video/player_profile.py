@@ -93,7 +93,7 @@ def snapshot(profile):
 
 
 def guidance(profile):
-    answers = profile.get('answers', {})
+    answers = snapshot(profile).get('preferences', {})
     if not answers:
         return None
     goal = answers.get('goal_note') if answers.get('goal') == 'custom' and answers.get('goal_note') else GOALS.get(answers.get('goal'), 'Выбрать одно действие')
@@ -172,9 +172,10 @@ def save(owner_id, body):
         lock(connection, owner_id)
         current = read(connection, owner_id)
         answers = current['answers'] | patch
-        desired = 'skipped' if body.action == 'skip' else 'ready' if body.action == 'finish' or current['state'] == 'ready' else 'partial'
+        complete = CORE.issubset(answers) and all(answers.get(k) is not None for k in CORE - {'position'})
+        desired = 'skipped' if body.action == 'skip' else 'ready' if body.action == 'finish' or (current['state'] == 'ready' and complete) else 'partial'
         if body.action == 'finish':
-            if not CORE.issubset(answers) or any(answers.get(k) is None for k in CORE - {'position'}):
+            if not complete:
                 reject(400, 'PLAYER_PROFILE_INCOMPLETE', 'Ответь на основные вопросы или выбери «Настроить позже».')
             if answers['goal'] == 'custom' and not answers.get('goal_note'):
                 reject(400, 'PLAYER_PROFILE_GOAL', 'Коротко опиши свою цель.')

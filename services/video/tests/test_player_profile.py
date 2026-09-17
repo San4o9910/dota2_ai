@@ -108,6 +108,7 @@ def test_profile_snapshot_keeps_existing_plan_and_match_facts(client):
 
 
 def test_same_evidence_different_practice_and_safe_scoped_snapshot():
+    assert profiles.guidance({'revision':1,'answers':{'goal_note':'','heroes':[]}}) is None
     first={'revision':1,'answers':BASE}
     second={'revision':2,'answers':{**BASE,'practice_minutes':10,'experience':'regular','explanation':'detailed','focus_skill':'items'}}
     assert profiles.guidance(first)['dose'] != profiles.guidance(second)['dose']

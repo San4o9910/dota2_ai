@@ -46,7 +46,7 @@ export function createPlayerProfile({host,api,current,onNavigate,onChanged}){
   try{
    const data=await api('/api/player-profile');if(!valid(token,user))return;
    profile=data.profile;guide=data.guidance;onChanged?.(data);
-   if(autoStart&&profile.state==='not_started'){step=0;mode='form';onNavigate('player-profile');}
+   if(autoStart&&location.pathname==='/training'&&profile.state==='not_started'){step=0;mode='form';onNavigate('player-profile');}
    else if(profile.state==='partial'||(profile.state==='ready'&&profile.last_step>7&&profile.last_step<TOTAL)){step=Math.min(profile.last_step,TOTAL-1);mode='form';}
    else mode='summary';
    render();return data;
@@ -66,8 +66,8 @@ export function createPlayerProfile({host,api,current,onNavigate,onChanged}){
  function collect(form){
   const answers={},f=fields[step];
   if(f){const value=selected(form,f.key);if(value!==undefined)answers[f.key]=f.key==='position'?(value==='unknown'?null:Number(value)):f.key==='practice_minutes'?Number(value):value;
-   if(step===0)answers.goal_note=form.elements.goal_note.value.trim();
-   if(step===1)answers.heroes=form.elements.heroes.value.split(',').map(x=>x.trim()).filter(Boolean);
+   if(step===0){const note=form.elements.goal_note.value.trim();if(note||Object.hasOwn(profile.answers,'goal_note'))answers.goal_note=note;}
+   if(step===1){const heroes=form.elements.heroes.value.split(',').map(x=>x.trim()).filter(Boolean);if(heroes.length||Object.hasOwn(profile.answers,'heroes'))answers.heroes=heroes;}
    if(step===6){const toneValue=selected(form,'tone');if(toneValue)answers.tone=toneValue;}
   }else{const scenario=scenarios[step-fields.length],choice=selected(form,'scenario');if(choice)answers.scenarios={...profile.answers.scenarios,[scenario.id]:{choice,reason:form.elements.reason.value.trim()}};}
   return answers;
@@ -104,13 +104,13 @@ export function createPlayerProfile({host,api,current,onNavigate,onChanged}){
   const error=node('p','','profile-error');error.setAttribute('role','alert');form.append(error);
   const actions=node('div',null,'profile-actions');if(step>0)actions.append(button('Назад',()=>{step--;render();focusHeading();},'quiet'));
   const next=node('button',step===6?'Получить первую тренировку':step===TOTAL-1?'Сохранить профиль':'Сохранить и продолжить','primary');next.type='submit';actions.append(next);form.append(actions);
-  const later=button(deep?'Закончить на этом':'Настроить позже',()=>persist(deep&&profile.state==='ready'?'finish':'skip',collect(form),step,form,()=>{mode='summary';render();onNavigate('training');}), 'quiet');form.append(later);
+  const later=button(deep?'Закончить на этом':'Настроить позже',()=>persist(deep&&profile.state==='ready'?'finish':'skip',collect(form),step,form,()=>{mode='summary';render();if(!host.closest('[hidden]'))onNavigate('training');}), 'quiet');form.append(later);
   const status=node('p','','help');status.setAttribute('role','status');status.setAttribute('aria-live','polite');form.append(status);
   form.append(node('p','Ответы доступны в твоём аккаунте. Нужные для ответа настройки и пояснения передаются ИИ-тренеру. Не указывай личные контакты или другие сведения, не нужные тренировке.','profile-privacy help'));
   form.addEventListener('submit',event=>{event.preventDefault();const answers=collect(form);const f=fields[step];if((f&&!Object.hasOwn(answers,f.key))||(!f&&!answers.scenarios)){error.textContent='Выбери вариант. Если не уверен, можно вернуться к настройке позже.';form.querySelector('input')?.focus();return;}
    if(step===0&&answers.goal==='custom'&&!answers.goal_note){error.textContent='Коротко опиши свою цель.';form.elements.goal_note.focus();return;}
    const finish=step===6||step===TOTAL-1;
-   void persist(finish?'finish':'save',answers,step+1,form,()=>{if(finish)mode='summary';else step++;render();focusHeading();});
+   void persist(finish&&(step===6||profile.state==='ready')?'finish':'save',answers,step+1,form,()=>{if(finish)mode='summary';else step++;render();focusHeading();});
   });
  }
  function summary(){

@@ -73,7 +73,7 @@ try{
   assert.ok(await page.evaluate(()=>window.__profileMotion.some(x=>x.duration===1050&&x.frames.some(f=>f.clipPath))),'Text has a visible sweep, not an imperceptible opacity change.');
   assert.ok(await page.evaluate(()=>window.__profileMotion.some(x=>x.duration===480&&x.frames.some(f=>f.transform==='scale(.955)'))),'Buttons provide press feedback.');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'No mobile horizontal overflow.');
-  const screenshots=process.env.NARMA_PORTAL_SCREENSHOTS;if(screenshots){await mkdir(screenshots,{recursive:true});await page.screenshot({path:path.join(screenshots,`player-profile-${width}.png`),fullPage:true,animations:'disabled'});}
+  const screenshots=process.env.NARMA_PORTAL_SCREENSHOTS;if(screenshots){await mkdir(screenshots,{recursive:true});await page.locator('#profile-goal_note').fill('Лучше понимать решения в матче.');await page.screenshot({path:path.join(screenshots,`player-profile-${width}.png`),fullPage:true,animations:'disabled'});}
   await page.emulateMedia({reducedMotion:'reduce'});const count=await page.evaluate(()=>window.__profileMotion.length);await choose('goal','decisions');assert.equal(await page.evaluate(()=>window.__profileMotion.length),count);
   // The browser keeps the draft on a conflict; only an explicit reload replaces it.
   profile={...profile,revision:profile.revision+1};await next();await page.getByText(/Профиль изменён в другой вкладке/).waitFor();assert.equal(await page.locator('input[value="decisions"]').isChecked(),true);

@@ -95,6 +95,7 @@ function switchTab(tab,{historyMode='push',loadPractice=true}={}) {
   if(historyMode==='push'&&location.pathname!==tabPaths[tab])history.pushState({tab},'',tabPaths[tab]);
   if(historyMode==='replace')history.replaceState({tab},'',tabPaths[tab]);
   for(const section of document.querySelectorAll('.tab-section')) section.hidden=section.id!==tab;
+  document.querySelector('.workspace-intro').hidden=tab==='player-profile';
   for(const button of document.querySelectorAll('nav [data-tab]')) { if(button.dataset.tab===tab) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); }
   // Keep the current report and unsaved forms in the DOM when changing sections.
   if(tab==='hero-pool'&&state.user&&(!state.pool||state.poolDirty)) void loadPool();
