@@ -14,6 +14,7 @@ export function mountCoachChat(host,{api,jobId,reportHash,evidence=[],context={}
   mounts.set(host,{key,dispose:()=>{live=false;clearTimeout(timer);}});
   host.className='coach-chat';host.setAttribute('aria-label','Чат с ИИ-тренером');
   const heading=el('div',undefined,'chat-heading');heading.append(el('p','Вопрос → объяснение → действие','eyebrow'),el('h3','Обсуди матч с тренером'));
+  const profileNote=el('p','','help');
   const description=el('p',`Матч и история разговора останутся контекстом ответа. ${labels[context.training_level]??'Обычный разбор'}.`,'help');
   const scopeLabel=el('label','Контекст разговора'),scopeInput=el('select');scopeInput.append(new Option('Этот матч','replay'),new Option('Мои матчи и текущая цель','series'));scopeLabel.append(scopeInput);
   scopeInput.setAttribute('aria-label','Контекст разговора');
@@ -33,7 +34,7 @@ export function mountCoachChat(host,{api,jobId,reportHash,evidence=[],context={}
   for(const text of ['Объясни главное решение проще','Какие были варианты?','Что проверить в следующей игре?']){const button=el('button',text,'quiet');button.type='button';button.addEventListener('click',()=>{input.value=text;input.focus();});prompts.append(button);}
   const actions=el('div',undefined,'chat-actions');actions.append(send,refresh);
   form.append(field,episodeLabel,actions,el('p','Ответ расходует доступный лимит ИИ. Открытие истории не создаёт запрос.','help'));
-  host.append(heading,scopeLabel,description,log,prompts,form,status);
+  host.append(heading,scopeLabel,description,profileNote,log,prompts,form,status);
   host.addEventListener('narma-question',event=>{if(current()&&!busy&&typeof event.detail==='string'){input.value=event.detail.slice(0,2000);input.focus();}});
   function render(turns){
     log.replaceChildren();
@@ -54,6 +55,7 @@ export function mountCoachChat(host,{api,jobId,reportHash,evidence=[],context={}
     clearTimeout(timer);refresh.disabled=true;
     try{const data=await api(`/api/replays/${encodeURIComponent(jobId)}/chat${scope==='series'?'?scope=series':''}`);if(!current()||generation!==revision)return;
       if(data.report_sha256!==reportHash)throw Error('Разбор обновился. Открой матч заново.');
+      profileNote.textContent=data.player_profile_revision?'Тренер учитывает твои цели, опыт и настройки из раздела «Профиль и цели».':'';
       render(data.turns);busy=data.turns.some(turn=>turn.state==='running');
       const completed=pending&&data.turns.find(turn=>turn.id===pending.id&&turn.state!=='running');if(completed){pending=null;input.value='';}
       send.disabled=busy||!data.available;input.disabled=busy;episode.disabled=busy;

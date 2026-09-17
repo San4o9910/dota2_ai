@@ -1,7 +1,7 @@
 """One owned practice and an honest next step, using the existing learning contract."""
 from uuid import UUID
 from fastapi import APIRouter, Depends
-from . import learning
+from . import learning, player_profile
 from .db import database
 from .growth import assess
 from .web import account_required, csrf, reject
@@ -31,6 +31,7 @@ def program(owner_id):
     with database() as connection:
         profile, history = learning._context(connection, owner_id)
         plans = learning._plans(connection, owner_id, profile, history)
+        coaching = player_profile.read(connection, owner_id)
         pointer = connection.execute('SELECT plan_id FROM player_program_focus WHERE owner_id=%s', (owner_id,)).fetchone()
         jobs = connection.execute('''SELECT id,state,progress,created_at FROM replay_jobs
             WHERE owner_id=%s AND state IN ('uploading','queued','processing','failed')
@@ -53,7 +54,8 @@ def program(owner_id):
             if a is not None and b is not None and str(a) != str(b):
                 continue
             candidates.append({'job_id': match['job_id'], 'match_id': match['match_id']})
-    return {'focus': focus, 'choices': active, 'review': review, 'check_candidates': candidates,
+    return {'player_profile': {'state': coaching['state'], 'revision': coaching['revision']},
+            'guidance': player_profile.guidance(coaching), 'focus': focus, 'choices': active, 'review': review, 'check_candidates': candidates,
             'stage': 'check' if candidates else 'practice' if focus else 'choose' if history else 'upload',
             'focus_needs_review': bool(pointer and not focus), 'jobs': jobs,
             'latest_report': history[0]['job_id'] if history else None}

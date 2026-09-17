@@ -1,3 +1,4 @@
+import { createPlayerProfile } from './player-profile.js';
 import { createBilling } from './billing.js';
 import { showReportFreshness } from './report-freshness.js';
 import { createPlayerProgram } from './player-program.js';
@@ -85,7 +86,9 @@ async function openProgramCheck(plan,match){
   card.scrollIntoView({block:'start'});selector.focus({preventScroll:true});
 }
 
-const tabPaths={training:'/training',coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
+const playerProfile=createPlayerProfile({host:$('player-profile-content'),api,current:()=>state.user,onNavigate:tab=>switchTab(tab),onChanged:data=>{state.coachingProfile=data.profile;}});
+
+const tabPaths={'player-profile':'/player-profile',training:'/training',coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
 function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'training';}
 function switchTab(tab,{historyMode='push',loadPractice=true}={}) {
   if(!Object.hasOwn(tabPaths,tab)||!$(tab)) return;
@@ -96,6 +99,7 @@ function switchTab(tab,{historyMode='push',loadPractice=true}={}) {
   // Keep the current report and unsaved forms in the DOM when changing sections.
   if(tab==='hero-pool'&&state.user&&(!state.pool||state.poolDirty)) void loadPool();
   if(tab==='training'&&state.user)void playerProgram.load();
+  if(tab==='player-profile'&&state.user&&!playerProfile.value)void playerProfile.load();
   if(tab==='learning'&&state.user&&loadPractice) void loadLearning({preserveView:true});
   videoWorkspace.setVisible(tab==='videos');
   personalCoach.setVisible(tab==='coach');
@@ -152,7 +156,7 @@ async function session() {
   const data=await api('/api/session'); state.setup=data.setup_required===true; state.user=data.authenticated?data.user:null;
   state.coaching=data.coaching??{};
   state.registrationAvailable=data.registration_available===true;
-  if(!state.user){billing.clear();playerProgram.clear();}
+  if(!state.user){billing.clear();playerProgram.clear();playerProfile.clear();state.coachingProfile=null;}
   ownerDashboard.setSession(state.user);$('owner-nav').hidden=!state.user?.is_platform_owner;
   $('chatgpt-integration').hidden=state.coaching.personal_connect!==true;
   $('platform-coach').hidden=!state.user||state.coaching.mode!=='platform';
@@ -183,7 +187,9 @@ async function session() {
   if(!$('training').hidden)void playerProgram.load();
   if($('learning')&&!$('learning').hidden)void loadLearning();
   if(!$('account').hidden)void loadChatgpt();
-  state.profile=(await api('/api/profile')).profile; profileView(); await refresh(); if(!$('hero-pool').hidden&&!state.pool) await loadPool();
+  state.profile=(await api('/api/profile')).profile; profileView();
+  await playerProfile.load({autoStart:location.pathname==='/training'});
+  await refresh(); if(!$('hero-pool').hidden&&!state.pool) await loadPool();
 }
 $('auth-form').addEventListener('submit',async event=>{
   event.preventDefault();if(state.authBusy||$('auth-submit').disabled)return;notice();

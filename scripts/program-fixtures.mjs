@@ -2,7 +2,8 @@
 export async function programFixture(route){
   const endpoint=new URL(route.request().url()).pathname;
   let body;
-  if(endpoint==='/api/program')body={focus:null,choices:[],review:null,check_candidates:[],stage:'upload',focus_needs_review:false,jobs:[],latest_report:null};
+  if(endpoint==='/api/player-profile')body={profile:{revision:0,state:'skipped',last_step:0,answers:{},questionnaire_version:'narma.player-profile.v1'},guidance:null};
+  else if(endpoint==='/api/program')body={focus:null,choices:[],review:null,check_candidates:[],stage:'upload',focus_needs_review:false,jobs:[],latest_report:null};
   else if(endpoint==='/api/billing')body={mode:'off',checkout_enabled:false,balance:0,held:0,orders:[],refunds:[],products:[],seller:'',support_email:''};
   else if(endpoint==='/api/billing/refunds')body={refunds:[]};
   else if(endpoint==='/api/explore/updates')body={latest_patch:null,stale:true};
