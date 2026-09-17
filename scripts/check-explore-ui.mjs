@@ -180,7 +180,7 @@ try {
     await page.waitForFunction(()=>!document.querySelector('#home-signature.signature-playing'));
     assert.equal(await page.evaluate(()=>window.__signatureStarts),1);
     assert.equal(await signature.locator('.signature-name').textContent(),'NARMA VISION');
-    assert.ok(await page.evaluate(()=>window.__interfaceMotion.some(m=>m.duration===720)),'Editorial blocks appear progressively.');
+    assert.ok(await page.evaluate(()=>window.__interfaceMotion.some(m=>m.duration===1050)),'Editorial blocks appear progressively.');
     if(width===390){
       await page.setViewportSize({width:320,height:900});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'The smallest supported phone has no horizontal overflow.');
@@ -207,9 +207,9 @@ try {
     assert.equal(await page.locator('#hero-grid [data-hero]').count(),4);
     await page.locator('#hero-search').fill('necro');
     assert.equal(await page.locator('#hero-grid [data-hero]').count(),1);
-    const pressesBefore=await page.evaluate(()=>window.__interfaceMotion.filter(m=>m.duration===320).length);
+    const pressesBefore=await page.evaluate(()=>window.__interfaceMotion.filter(m=>m.duration===480).length);
     const necrophos=page.locator('#hero-grid [data-hero="36"]');await necrophos.focus();await necrophos.press('Enter');
-    assert.ok(await page.evaluate(()=>window.__interfaceMotion.filter(m=>m.duration===320).length)>pressesBefore,'Keyboard activation gets tactile feedback without delaying selection.');
+    assert.ok(await page.evaluate(()=>window.__interfaceMotion.filter(m=>m.duration===480).length)>pressesBefore,'Keyboard activation gets tactile feedback without delaying selection.');
     assert.equal(await page.locator('#hero-inspector h2').textContent(),'Necrophos');
     assert.equal(await page.locator('#hero-inspector a[target="_blank"]').getAttribute('href'),'https://www.dota2.com/hero/necrophos');
     assert.equal(await necrophos.getAttribute('aria-pressed'),'true');
@@ -246,7 +246,7 @@ try {
     assert.equal(await slots.nth(5).getAttribute('aria-pressed'),'true');
     assert.equal(await selectedGuide.locator('#build-slot-detail h4').count(),1);
     assert.equal(await selectedGuide.locator('#build-slot-detail h4').textContent(),initialGuide.final_items[5].name);
-    const slotBoxes=await slots.evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect();return {x:Math.round(b.x),y:Math.round(b.y)};}));
+    const slotBoxes=await slots.evaluateAll(elements=>elements.map(e=>({x:e.offsetLeft,y:e.offsetTop})));
     assert.equal(new Set(slotBoxes.map(b=>b.x)).size,3,'Inventory keeps three columns.');
     assert.equal(new Set(slotBoxes.map(b=>b.y)).size,2,'Inventory keeps two rows.');
     assert.equal(await page.locator('#build-statistics').isVisible(),false,'Authored releases do not display provider setup or unavailable statistics controls.');

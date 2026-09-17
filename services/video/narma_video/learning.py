@@ -167,6 +167,7 @@ def chronology(plan, fact):
 
 
 def _plans(connection, owner_id, profile, history):
+    from .player_profile import adapt_exercise
     if not profile:
         return []
     rows = connection.execute("""SELECT * FROM learning_plans WHERE owner_id=%s AND account_id=%s
@@ -223,7 +224,7 @@ def _plans(connection, owner_id, profile, history):
         result.append({key: plan[key] for key in ("id", "exercise_id", "curriculum_version", "hero", "position", "status", "created_at", "updated_at", "source_job_id", "source_match_id")} | {
             "hero_label": next((f["label"] for f in history if f["hero"] == plan["hero"]), plan["hero"].removeprefix("npc_dota_hero_").replace("_", " ").title()),
             "baseline_match_ids": plan['baseline_match_ids'],
-            "exercise": curriculum.get_exercise(plan["exercise_id"], plan["position"]),
+            "exercise": adapt_exercise(curriculum.get_exercise(plan["exercise_id"], plan["position"]), plan.get("coaching_profile")),
             "validity": validity, "can_check": validity == "current" and plan["status"] == "active",
             "checks": checks, "stale_checks": stale, "self_report_counts": counts,
             "training_matches": sum(counts.values()),
@@ -316,13 +317,15 @@ def create_plan(owner_id, body):
             from .player_program import remember
             remember(connection, owner_id, existing["id"])
             return saved
+        from .player_profile import read, snapshot
+        coaching_profile = snapshot(read(connection, owner_id))
         plan_id = uuid4()
         connection.execute("""INSERT INTO learning_plans(id,owner_id,account_id,hero,position,exercise_id,
-            curriculum_version,source_job_id,source_match_id,source_sha256,report_sha256,baseline_match_ids)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            curriculum_version,source_job_id,source_match_id,source_sha256,report_sha256,baseline_match_ids,coaching_profile)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (plan_id, owner_id, profile["account_id"], fact["hero"], fact["position"], body.exercise_id,
              curriculum.VERSION, fact["job_id"], fact["match_id"], fact["source_sha256"], fact["report_sha256"],
-             Jsonb([h["match_id"] for h in history])))
+             Jsonb([h["match_id"] for h in history]), Jsonb(coaching_profile)))
         from .player_program import remember
         remember(connection, owner_id, plan_id)
         return _saved(connection, owner_id, profile, history, plan_id)

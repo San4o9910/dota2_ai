@@ -98,7 +98,10 @@ const revealTargets = [
   '.vision-path > a', '.section-heading', '.home-news', '.personal-promo',
   '.workspace-intro > div:first-child', '.card-heading', '.coach-overview',
   '.coach-section > h2', '.coach-summary', '.program-focus > h2', '.program-action',
-  '.lesson-stage-intro', '.lesson-card > h3', '.lesson-question', '.lesson-copy'
+  '.lesson-stage-intro', '.lesson-card > h3', '.lesson-question', '.lesson-copy',
+  '.profile-wizard h2', '.profile-question legend', '.profile-scenario',
+  '.profile-guidance > h3', '.profile-guidance > p', '.report-section > h3',
+  '.next-game-section > .eyebrow', '.profile-summary > h2'
 ].join(',');
 const revealed = new WeakSet();
 const observed = new Set();
@@ -118,12 +121,16 @@ const revealObserver = new IntersectionObserver(entries => {
     revealObserver.unobserve(entry.target);
     observed.delete(entry.target);
     revealed.add(entry.target);
-    // Opacity-only on links containing controls: their hit boxes never move.
+    // Text reveals by a moving edge at full contrast. Controls keep stable hit boxes.
     const interactive = entry.target.matches('a') || entry.target.querySelector('button,a,input,select');
-    animateInterface(entry.target, [
-      { opacity: .85, transform: interactive ? 'none' : 'translateY(12px)' },
-      { opacity: 1, transform: 'none' }
-    ], { duration: 720, delay: Math.min(order++, 4) * 65, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
+    const frames = interactive ? [
+      { boxShadow: '0 0 0 2px rgba(255,76,0,.32)' }, { boxShadow: '0 0 0 8px rgba(255,76,0,0)' }
+    ] : [
+      { clipPath: 'inset(0 0 80% 0)', transform: 'translateY(22px)' },
+      { clipPath: 'inset(0 0 0% 0)', transform: 'translateY(0)' }
+    ];
+    animateInterface(entry.target, frames, { duration: 1050, delay: Math.min(order++, 4) * 95,
+      easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' });
   }
 }, { threshold: .08 });
 let scanFrame = 0;
@@ -133,7 +140,7 @@ function scanMotion() {
     if (!target.isConnected) { revealObserver.unobserve(target); observed.delete(target); }
   }
   for (const target of document.querySelectorAll(revealTargets)) {
-    if (revealed.has(target) || observed.has(target) || target.closest('[aria-live], [role=status], [role=alert]')) continue;
+    if (revealed.has(target) || observed.has(target) || target.closest('[role=status], [role=alert], [role=log], .chat-message')) continue;
     observed.add(target);
     revealObserver.observe(target);
   }
@@ -145,7 +152,7 @@ scanMotion();
 
 // Delegated activation also covers controls rendered after login / API updates.
 // No preventDefault or delayed navigation; one activation still means one action.
-const pressable = 'button, a.button, .account-link, .workspace-shortcuts a, .main-nav a, .vision-path > a, summary';
+const pressable = 'button, a.button, .account-link, .workspace-shortcuts a, .main-nav a, .vision-path > a, .profile-choice, summary';
 const pressed = new WeakMap();
 function pressFeedback(event) {
   if (event.type === 'pointerdown' && (event.button !== 0 || event.isPrimary === false)) return;
@@ -154,10 +161,10 @@ function pressFeedback(event) {
   if (!target || target.matches(':disabled,[aria-disabled="true"]') || target.closest('[inert]')) return;
   pressed.get(target)?.cancel();
   const animation = animateInterface(target, [
-    { scale: '1', filter: 'brightness(1)' },
-    { scale: '.975', filter: 'brightness(1.12)', offset: .3 },
-    { scale: '1', filter: 'brightness(1)' }
-  ], { duration: 320, easing: 'cubic-bezier(.22,1,.36,1)' });
+    { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(255,76,0,.5)' },
+    { transform: 'scale(.955)', boxShadow: '0 0 0 3px rgba(255,76,0,.35)', offset: .12 },
+    { transform: 'scale(1)', boxShadow: '0 0 0 9px rgba(255,76,0,0)' }
+  ], { duration: 480, easing: 'cubic-bezier(.22,1,.36,1)' });
   if (animation) pressed.set(target, animation);
 }
 document.addEventListener('pointerdown', pressFeedback, { passive: true });

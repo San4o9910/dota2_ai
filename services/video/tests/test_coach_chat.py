@@ -182,3 +182,40 @@ def test_deletion_during_answer_hides_text_but_settles_cost(replay, monkeypatch)
         call = connection.execute('SELECT * FROM openai_api_calls WHERE task_id=%s', (body.id,)).fetchone()
         assert turn['question'] == '' and turn['answer'] is None and turn['input_data'] is None
         assert call['output_text'] is None and call['charged_microusd'] > 0
+
+
+def test_player_profile_changes_coaching_context_without_changing_replay(replay, monkeypatch):
+    from narma_video import player_profile
+    job,current=replay;calls=fake_provider(monkeypatch)
+    saved=player_profile.save(job['owner_id'], player_profile.Update(expected_revision=0,
+        answers={'goal':'new_role','practice_minutes':0,'explanation':'short','experience':'returning'}))
+    body=command(current)
+    assert chat.ask(job['owner_id'],job['id'],body)['turn']['state']=='succeeded'
+    data=json.loads(calls[0]['input'][1]['content'][0]['text'])
+    assert data['player_profile']['preferences']['practice_minutes']==0
+    assert data['player_profile']['classification']=='self_report_not_match_evidence'
+    assert 'account_id' not in data['player_profile']
+    assert chat.history(job['owner_id'],job['id'])['player_profile_revision']==saved['profile']['revision']
+    assert data['replay']['metrics']==current['result_payload']['metrics']
+    # Old conversation remains readable; a new question receives new preferences.
+    player_profile.save(job['owner_id'],player_profile.Update(expected_revision=1, answers={'practice_minutes':10}))
+    assert len(chat.history(job['owner_id'],job['id'])['turns'])==1
+    assert chat.ask(job['owner_id'],job['id'],command(current))['turn']['state']=='succeeded'
+    assert json.loads(calls[1]['input'][1]['content'][0]['text'])['player_profile']['preferences']['practice_minutes']==10
+
+
+@pytest.mark.parametrize('reset',[False,True])
+def test_profile_edit_or_reset_during_answer_cannot_publish_old_preferences(replay, monkeypatch, reset):
+    from narma_video import player_profile
+    job,current=replay
+    player_profile.save(job['owner_id'], player_profile.Update(expected_revision=0,answers={'goal':'consistency'}))
+    def change():
+        if reset:player_profile.reset(job['owner_id'])
+        else:player_profile.save(job['owner_id'],player_profile.Update(expected_revision=1,answers={'goal':'decisions'}))
+    fake_provider(monkeypatch,before=change)
+    body=command(current)
+    assert chat.ask(job['owner_id'],job['id'],body)['context_changed'] is True
+    with database() as con:
+        turn=con.execute('SELECT * FROM coach_chat_turns WHERE id=%s',(body.id,)).fetchone()
+        assert turn['state']=='failed' and turn['answer'] is None and turn['input_data'] is None
+        if reset:assert turn['coaching_profile']=={}

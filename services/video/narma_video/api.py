@@ -324,6 +324,8 @@ from .learning import attach_learning
 attach_learning(app)
 from .growth import attach_growth
 attach_growth(app)
+from .player_profile import attach_player_profile
+attach_player_profile(app)
 from .player_program import attach_program
 attach_program(app)
 from .billing import attach_billing
@@ -362,6 +364,7 @@ def explore_page():
 @app.get('/replays')
 @app.get('/hero-pool')
 @app.get('/player')
+@app.get('/player-profile')
 @app.get('/my-learning')
 @app.get('/training')
 @app.get('/account')

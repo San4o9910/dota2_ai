@@ -35,6 +35,7 @@ jobs:
           node scripts/check-explore-ui.mjs
           node scripts/check-portal-ui.mjs
           node scripts/check-video-workspace.mjs
+          node scripts/check-player-profile.mjs
       - name: Preserve synthetic UI screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
