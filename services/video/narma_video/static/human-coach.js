@@ -10,9 +10,9 @@ let serial=0;
 function field(form,label,{type='text',value='',maxLength=2000,required=true,rows=4}={}){
  const id=`human-field-${++serial}`,wrap=el('label',label),input=el(type==='textarea'?'textarea':'input');input.id=id;wrap.htmlFor=id;
  if(type!=='textarea')input.type=type;else input.rows=rows;
- input.value=value;input.maxLength=maxLength;input.required=required;wrap.append(input);form.append(wrap);return input;
+ input.value=value;input.maxLength=maxLength;input.required=required;const group=el('div',undefined,'human-field');group.append(wrap,input);form.append(group);return input;
 }
-function select(form,label,options){const id=`human-field-${++serial}`,wrap=el('label',label),input=el('select');input.id=id;wrap.htmlFor=id;for(const [value,text] of options)input.append(new Option(text,value));wrap.append(input);form.append(wrap);return input;}
+function select(form,label,options){const id=`human-field-${++serial}`,wrap=el('label',label),input=el('select');input.id=id;wrap.htmlFor=id;for(const [value,text] of options)input.append(new Option(text,value));const group=el('div',undefined,'human-field');group.append(wrap,input);form.append(group);return input;}
 function block(title,copy){const n=el('section',undefined,'human-card');n.append(el('h2',title));if(copy)n.append(el('p',copy,'muted'));return n;}
 function disclosure(title){const d=el('details',undefined,'human-details');d.append(el('summary',title));return d;}
 function displayDate(s){return s?new Date(s).toLocaleString('ru-RU',{dateStyle:'medium',timeStyle:'short'}):'Время уточняется';}

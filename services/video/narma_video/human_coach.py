@@ -53,10 +53,6 @@ class Consent(Body):
     share_profile: bool = Field(strict=True)
 
 
-class Share(Body):
-    job_id: UUID
-
-
 class Task(Body):
     id: UUID
     title: str = Field(min_length=3, max_length=100)
@@ -185,9 +181,14 @@ def dashboard(owner_id):
             (SELECT count(*) FROM coaching_tasks t WHERE t.link_id=l.id AND t.state='submitted') AS awaiting_review,
             (SELECT count(*) FROM coaching_shares s WHERE s.link_id=l.id AND s.reviewed_at IS NULL) AS new_reports,
             (SELECT count(*) FROM coaching_messages m WHERE m.link_id=l.id AND m.author_id<>%s
-                AND m.seq>CASE WHEN l.coach_id=%s THEN l.coach_seen ELSE l.student_seen END) AS unread
+                AND m.seq>CASE WHEN l.coach_id=%s THEN l.coach_seen ELSE l.student_seen END
+                AND (m.job_id IS NULL OR EXISTS (SELECT 1 FROM coaching_shares s JOIN replay_jobs r ON r.id=s.job_id
+                    JOIN portal_dota_profiles p ON p.owner_id=r.owner_id AND p.account_id=r.account_id
+                    WHERE s.link_id=l.id AND s.job_id=m.job_id AND r.owner_id=l.student_id AND r.state='ready'
+                    AND s.report_sha256=m.report_sha256
+                    AND encode(sha256(convert_to(r.result_payload::text,'UTF8')),'hex')=s.report_sha256))) AS unread
             FROM coaching_links l JOIN human_coaches c ON c.owner_id=l.coach_id
-            WHERE (l.student_id=%s OR l.coach_id=%s) AND l.status<>'revoked'
+            WHERE (l.student_id=%s OR (l.coach_id=%s AND c.status='approved')) AND l.status<>'revoked'
               AND (l.status='active' OR l.expires_at>now()) ORDER BY l.updated_at DESC LIMIT 100''',
             (owner_id,owner_id,owner_id,owner_id,owner_id)).fetchall()
         choices = con.execute('''SELECT r.id,r.match_id,r.result_payload#>>'{player,hero}' AS hero
@@ -233,6 +234,8 @@ def invite(owner_id):
         coach(con,owner_id,approved=True)
         if con.execute("SELECT count(*) AS n FROM coaching_links WHERE coach_id=%s AND (status='active' OR (status='invited' AND expires_at>now()))",(owner_id,)).fetchone()['n']>=25:
             reject(409,'COACH_CAPACITY','Лимит — 25 действующих приглашений и учеников.')
+        if con.execute("SELECT count(*) AS n FROM coaching_links WHERE coach_id=%s AND created_at>now()-interval '1 day'",(owner_id,)).fetchone()['n']>=60:
+            reject(429,'COACH_INVITE_LIMIT','До 60 приглашений в сутки. Продолжи позже.')
         row=con.execute('INSERT INTO coaching_links(id,coach_id,token_hash) VALUES (%s,%s,%s) RETURNING id,expires_at',
                         (uuid4(),owner_id,digest(token))).fetchone()
     return {**row,'url':origin()+'/human-coach#coach_invite='+token}

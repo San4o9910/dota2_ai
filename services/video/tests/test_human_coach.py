@@ -153,6 +153,7 @@ def test_only_owned_current_shared_reports_and_allowed_fields(actors):
     assert coach.get(base).json()['reports'][0]['reviewed_at'] is None
     assert student.delete(base+'/reports/'+mine).status_code==200
     assert coach.get(base).json()['reports']==[]
+    assert student.get(P).json()['relationships'][0]['unread']==0
     assert coach.post(base+'/messages',json={**message,'id':str(uuid4())}).status_code==404
 
 
@@ -193,6 +194,7 @@ def test_revocation_closes_every_route_and_suspension_blocks_trainer(actors):
     assert student.put(base+'/consent',json={'share_profile':True}).status_code==200
     assert owner.put(P+'/applications/'+ids['coach'],json={'status':'suspended','expected_revision':2,'current_password':PASSWORD}).status_code==200
     assert coach.get(base).status_code==404 and coach.post(P+'/invitations').status_code==403
+    assert coach.get(P).json()['relationships']==[]
     assert student.get(base).status_code==200
     assert other.delete(base).status_code==404
     assert student.delete(base).status_code==200

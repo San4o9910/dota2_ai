@@ -17,3 +17,5 @@
 .human-messages { display: grid; gap: 16px; margin-block: 20px; }.human-message { padding: 16px 20px; border-left: 2px solid var(--teal); background: var(--bg); }.human-message .eyebrow { letter-spacing: .6px; }
 .human-answers dt { color: var(--muted); margin-top: 12px; }.human-answers dd { margin: 4px 0 14px; white-space: pre-wrap; }
 @media(max-width:600px) { .human-card { padding: 20px 16px; }.human-form button { width: 100%; }.human-stats { gap: 20px; }.human-episodes li { flex-wrap: wrap; }.human-message { padding: 14px; } }
+
+.human-field { display: grid; gap: 8px; min-width: 0; }
