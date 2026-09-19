@@ -51,3 +51,7 @@ next-env.d.ts
 /public/generated/dota/
 /replays/
 /data/raw/
+
+# Private evaluation reports, prompts, answers, and imported player evidence.
+/evals/open_coach/runs/
+/evals/open_coach/private/

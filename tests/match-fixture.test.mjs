@@ -15,24 +15,28 @@ const vite = await createServer({
 
 after(async () => vite.close());
 
-test("first match fixture preserves the complete top-level evidence contract", async () => {
-  const data = await vite.ssrLoadModule("/app/data/match-8963624400.ts");
-
-  assert.equal(data.MATCH.id, 8963624400);
-  assert.equal(data.MATCH.duration, 2829);
+test("public demo is explicitly fictional and internally consistent", async () => {
+  const data = await vite.ssrLoadModule("/app/data/demo-match.ts");
+  assert.equal(data.MATCH.id, "training-example");
+  assert.match(data.MATCH.source, /Вымышленные/);
   assert.equal(data.HEROES.length, 10);
-  assert.equal(data.STAGES.length, 4);
-  assert.equal(data.AXES.length, 5);
-  assert.equal(data.GOLD_ADV.length, 48);
-  assert.equal(data.XP_ADV.length, 48);
-  assert.equal(data.FIGHTS.length, 15);
-  assert.equal(data.WARDS.length, 114);
-  assert.equal(data.HEROES.reduce((sum, hero) => sum + hero.wards, 0), 41);
-  assert.equal(data.HEROES.reduce((sum, hero) => sum + hero.sentries, 0), 73);
+  assert.equal(new Set(data.HEROES.map(hero => hero.id)).size, 10);
+  assert.ok(data.HEROES.every(hero => /^Учебный игрок \d+$/.test(hero.player)));
+  assert.equal(data.GOLD_ADV.length, data.MATCH.duration / 60 + 1);
+  assert.equal(data.XP_ADV.length, data.GOLD_ADV.length);
+  assert.equal(data.HEROES.filter(h => h.side === "R").reduce((n,h) => n+h.kills,0), data.MATCH.score.radiant);
+  assert.equal(data.HEROES.filter(h => h.side === "D").reduce((n,h) => n+h.deaths,0), data.MATCH.score.radiant);
+  assert.equal(data.HEROES.filter(h => h.side === "D").reduce((n,h) => n+h.kills,0), data.MATCH.score.dire);
+  assert.equal(data.HEROES.filter(h => h.side === "R").reduce((n,h) => n+h.deaths,0), data.MATCH.score.dire);
+  for (const hero of data.HEROES) {
+    assert.equal(data.WARDS.filter(w => w.heroId === hero.id && w.type === "obs").length, hero.wards);
+    assert.equal(data.WARDS.filter(w => w.heroId === hero.id && w.type === "sen").length, hero.sentries);
+  }
+  assert.ok(data.WARDS.every(w => w.t <= data.MATCH.duration && data.HEROES.some(h => h.id === w.heroId && h.side === w.side)));
 });
 
 test("map fixture exposes every requested Dota object class", async () => {
-  const { MAP_OBJECTS } = await vite.ssrLoadModule("/app/data/match-8963624400.ts");
+  const { MAP_OBJECTS } = await vite.ssrLoadModule("/app/data/demo-match.ts");
   const kinds = new Set(MAP_OBJECTS.map((object) => object.kind));
 
   for (const kind of ["roshan", "tormentor", "wisdom", "lotus", "gate", "watcher", "outpost", "shop", "tower", "ancient", "camp", "bounty", "power"]) {
@@ -40,20 +44,21 @@ test("map fixture exposes every requested Dota object class", async () => {
   }
 });
 
-test("the decisive 43:06 fight is encoded without reversing deaths", async () => {
-  const { FIGHTS, EVENTS } = await vite.ssrLoadModule("/app/data/match-8963624400.ts");
-  const fight = FIGHTS.find((item) => item.start === 2586);
-
-  assert.ok(fight);
-  assert.equal(fight.radiant.kills, 0);
-  assert.equal(fight.radiant.deaths, 3);
-  assert.equal(fight.dire.kills, 3);
-  assert.equal(fight.dire.deaths, 0);
-  assert.ok(EVENTS.some((event) => event.t === 2586 && /3×4/.test(event.title)));
+test("authored fight evidence agrees with participants and timeline", async () => {
+  const { FIGHTS, EVENTS, MATCH, HEROES } = await vite.ssrLoadModule("/app/data/demo-match.ts");
+  for (const fight of FIGHTS) {
+    assert.ok(fight.start < fight.end && fight.end <= MATCH.duration);
+    assert.equal(fight.radiant.kills, fight.dire.deaths);
+    assert.equal(fight.dire.kills, fight.radiant.deaths);
+    assert.equal(fight.deaths.filter(p => p.side === "R").length, fight.radiant.deaths);
+    assert.equal(fight.deaths.filter(p => p.side === "D").length, fight.dire.deaths);
+    assert.ok(fight.deaths.every(p => HEROES.some(h => h.id === p.heroId && h.side === p.side)));
+    assert.ok(EVENTS.some(event => event.t === fight.start && event.type === "fight"));
+  }
 });
 
 test("training plan covers every stage and every analysis axis", async () => {
-  const { MATCH } = await vite.ssrLoadModule("/app/data/match-8963624400.ts");
+  const { MATCH } = await vite.ssrLoadModule("/app/data/demo-match.ts");
   const { TRAINING_PLAN } = await vite.ssrLoadModule("/components/narma/narma-analysis.tsx");
   const stages = Object.entries(TRAINING_PLAN);
   const drills = stages.flatMap(([, stage]) => stage.drills);
@@ -85,7 +90,7 @@ test("training plan covers every stage and every analysis axis", async () => {
 });
 
 test("demo coaching copy does not invent replay-only mechanics", async () => {
-  const data = await vite.ssrLoadModule("/app/data/match-8963624400.ts");
+  const data = await vite.ssrLoadModule("/app/data/demo-match.ts");
   const { TRAINING_PLAN } = await vite.ssrLoadModule("/components/narma/narma-analysis.tsx");
   const coachingCopy = JSON.stringify({
     stages: data.STAGES,
@@ -96,4 +101,16 @@ test("demo coaching copy does not invent replay-only mechanics", async () => {
   for (const unsupported of ["Black Hole", "BKB", "Blink", "Requiem", "Eclipse"]) {
     assert.equal(coachingCopy.includes(unsupported), false, `unsupported replay claim: ${unsupported}`);
   }
+});
+
+test("public demo render contains no former player identities or match identifier", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { default: NarmaAnalysis } = await vite.ssrLoadModule("/components/narma/narma-analysis.tsx");
+  const html = renderToStaticMarkup(React.createElement(NarmaAnalysis, {
+    viewer: null, signInHref: "/signin", signOutHref: "/signout",
+  }));
+  assert.match(html, /Учебный сценарий/);
+  assert.match(html, /Все игроки, показатели и события вымышлены/);
+  assert.doesNotMatch(html, /8963624400|papa_prima/i);
 });

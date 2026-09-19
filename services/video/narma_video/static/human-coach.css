@@ -1,0 +1,21 @@
+.human-card { margin-block: 24px; padding: clamp(20px,3vw,36px); border: 1px solid var(--line); background: var(--surface); overflow-wrap: anywhere; min-width: 0; }
+.human-card h2 { font: 400 clamp(26px,3vw,38px)/1.15 var(--display); margin: 0 0 18px; }
+.human-card h3 { margin-block: 18px 12px; }.human-card h4 { margin-block: 20px 8px; }
+.human-card p { line-height: 1.7; white-space: pre-wrap; }
+.human-intro { border-top: 3px solid var(--accent); background: linear-gradient(135deg,var(--surface),var(--bg)); }
+.human-focus { border-inline-start: 3px solid var(--teal); }
+.human-note,.human-signal { color: var(--teal); }
+.human-stats { display: flex; flex-wrap: wrap; gap: 32px; margin-block: 28px; }
+.human-stats dt { color: var(--muted); font-size: 13px; }.human-stats dd { font: 400 44px/1.25 var(--display); margin: 8px 0; }
+.human-form { display: grid; gap: 18px; margin-block: 24px; }.human-form label { display: grid; gap: 8px; min-width: 0; font-size: 15px; }
+.human-form :is(input,select,textarea) { width: 100%; min-width: 0; }.human-form button { justify-self: start; }
+.human-form .human-check { display: flex; gap: 14px; align-items: start; }.human-form input[type=checkbox] { width: 24px; height: 24px; flex-shrink: 0; min-height: 24px; }
+.human-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-block: 20px; }
+.human-person,.human-history { padding-block: 24px; border-block-end: 1px solid var(--line); }.human-person > button { margin: 8px 12px 0 0; }
+.human-details { padding: 18px 0; border-block-end: 1px solid var(--line); min-width: 0; }.human-details > summary { cursor: pointer; min-height: 44px; padding-block: 10px; font-weight: 600; line-height: 1.6; }
+.human-episodes { list-style: none; padding: 0; max-height: 340px; overflow-y: auto; }.human-episodes li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }.human-episodes button { flex-shrink: 0; }
+.human-messages { display: grid; gap: 16px; margin-block: 20px; }.human-message { padding: 16px 20px; border-left: 2px solid var(--teal); background: var(--bg); }.human-message .eyebrow { letter-spacing: .6px; }
+.human-answers dt { color: var(--muted); margin-top: 12px; }.human-answers dd { margin: 4px 0 14px; white-space: pre-wrap; }
+@media(max-width:600px) { .human-card { padding: 20px 16px; }.human-form button { width: 100%; }.human-stats { gap: 20px; }.human-episodes li { flex-wrap: wrap; }.human-message { padding: 14px; } }
+
+.human-field { display: grid; gap: 8px; min-width: 0; }

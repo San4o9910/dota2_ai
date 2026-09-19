@@ -1,15 +1,17 @@
 name: Deep learning and public builds verification
 
 on:
+  pull_request:
+    branches: [codex/openai-video-coach]
   push:
-    branches: [codex/deep-learning-workshop-builds]
+    branches: [codex/deep-learning-workshop-builds, codex/openai-video-coach, codex/production-readiness]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: deep-learning-verification
+  group: deep-learning-verification-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,9 +31,12 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/narma-portal-qa" --no-audit --no-fund playwright@1.62.1 axe-core@4.10.3
           "$RUNNER_TEMP/narma-portal-qa/node_modules/.bin/playwright" install --with-deps chromium
+          node scripts/check-human-coach.mjs
           node scripts/check-workshop-builds.mjs
           node scripts/check-explore-ui.mjs
           node scripts/check-portal-ui.mjs
+          node scripts/check-video-workspace.mjs
+          node scripts/check-player-profile.mjs
       - name: Preserve synthetic UI screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -49,6 +54,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Validate operational checks and build runtime
+        env:
+          NARMA_DOCKER_STORAGE_TESTS: "1"
         run: |
           python3 -m compileall -q services/video/narma_video ops/timeweb
           bash -n ops/timeweb/bootstrap.sh
@@ -82,5 +89,28 @@ jobs:
           docker run --rm --user root --network narma-video-ci_default \
             --env TEST_DATABASE_URL="$DATABASE_URL" \
             --env NARMA_EXPLORE_REFRESH_ENABLED=0 --env NARMA_WORKSHOP_REFRESH_ENABLED=0 \
-            --volume "$PWD/services/video/tests:/app/tests:ro" narma-video-check \
-            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest tests -q'
+            --volume "$PWD:/repo:ro" narma-video-check \
+            sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest /repo/services/video/tests -q -p no:cacheprovider'
+      - name: Rehearse concurrent accounts and replay admission without providers
+        env:
+          POSTGRES_PASSWORD: narma_ci_only
+          DATABASE_URL: postgresql://narma:narma_ci_only@db:5432/narma
+          VIDEO_SERVICE_TOKEN: local_ci_fixture_token_0000000000000000000000000000000000000000
+          GEMINI_API_KEY: unused_offline_ci_fixture
+          GEMINI_MODEL: gemini-3.8-flash
+        run: |
+          compose=(docker compose --project-name narma-pilot-rehearsal --file services/video/compose.yaml)
+          trap 'docker compose --project-name narma-pilot-rehearsal --file services/video/compose.yaml down --volumes >/dev/null' EXIT
+          "${compose[@]}" up -d db
+          for attempt in {1..30}; do
+            if "${compose[@]}" exec -T db pg_isready -U narma -d narma; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "${ready:-0}" = 1
+          docker run --rm --user root --network narma-pilot-rehearsal_default \
+            --env TEST_DATABASE_URL="$DATABASE_URL" --env NARMA_PILOT_CI_ISOLATED=1 \
+            --volume "$PWD:/repo:ro" narma-video-check \
+            python /repo/services/video/scripts/pilot_loadcheck.py --ci-container --users 4 --concurrency 8

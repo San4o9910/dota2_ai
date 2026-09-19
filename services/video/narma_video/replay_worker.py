@@ -16,6 +16,7 @@ from .replay_jobs import (claim_replay, fail_replay, finish_replay,
     heartbeat_replay_worker, replay_directory, replay_progress)
 from .replay_report import build_report, ReportError
 from .replay_coach import enrich_report
+from .resource_lock import media_slot
 
 WORKER_ID = 'replay'
 PARSER_TIMEOUT = 300
@@ -137,7 +138,8 @@ def run_job(job):
     output = replay_directory(job['id']) / ('parse-' + str(UUID(str(job['lease_token']))))
     output.mkdir(mode=0o700, exist_ok=False)
     try:
-        parse(job, output)
+        with media_slot(lambda: renew(job, 5)):
+            parse(job, output)
         factual = build_report(output / 'events.jsonl', output / 'summary.json', job)
         renew(job, 90)
         report = enrich_report(job, factual)

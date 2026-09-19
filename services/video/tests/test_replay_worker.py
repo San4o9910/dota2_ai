@@ -1,4 +1,5 @@
 """No paid or network calls: parser boundaries and publication fencing."""
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -27,6 +28,14 @@ def replay(tmp_path, monkeypatch):
     monkeypatch.setattr(worker.shutil, "which", lambda name: "/usr/bin/java")
     monkeypatch.setattr(worker, "heartbeat_replay_worker", lambda _: None)
     monkeypatch.setattr(worker, "replay_progress", lambda *args: True)
+    # These parser/publication unit tests do not have a database. Keep lease
+    # renewal behavior while native test_resource_lock.py checks real exclusion.
+    @contextmanager
+    def media_slot(heartbeat=None):
+        if heartbeat:
+            heartbeat()
+        yield
+    monkeypatch.setattr(worker, "media_slot", media_slot)
     return directory, home, job
 
 

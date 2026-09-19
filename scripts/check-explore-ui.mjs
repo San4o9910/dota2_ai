@@ -16,8 +16,8 @@ function dependency(name) {
 const {chromium}=dependency('playwright'),axe=dependency('axe-core');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
 const publicRoutes=['/','/heroes','/builds','/learn','/practice','/updates'];
-const files=new Map(publicRoutes.map(route=>[route,['explore.html','text/html']]));
-for(const filename of ['explore.js','learning-chapter.js','workshop-builds.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
+const files=new Map([...publicRoutes,'/example','/start'].map(route=>[route,['explore.html','text/html']]));
+for(const filename of ['brand-motion.js','vision-theme.css','explore.js','learning-chapter.js','workshop-builds.js','role-guidance.js','practice.js','builds.js','build-meta.js','build-adaptations.js','explore.css','practice.css','builds.css','practice-scenarios.json','build-guides.json'])files.set('/assets/'+filename,[filename,filename.endsWith('.css')?'text/css':filename.endsWith('.json')?'application/json':'text/javascript']);
 files.set('/assets/dota/items/hurricane_pike.png',['dota/items/hurricane_pike.png','image/png']);
 const server=createServer(async(request,response)=>{
   const file=files.get(new URL(request.url,'http://localhost').pathname);
@@ -96,6 +96,18 @@ const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
 try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
+    await page.addInitScript(()=>{
+      window.__signatureStarts=0;
+      window.__interfaceMotion=[];
+      const animate=Element.prototype.animate;
+      Element.prototype.animate=function(frames,options){
+        window.__interfaceMotion.push({duration:options?.duration,tag:this.tagName});
+        return animate.call(this,frames,options);
+      };
+      document.addEventListener('animationstart',event=>{
+        if(event.animationName==='signature-fall')window.__signatureStarts++;
+      });
+    });
     const errors=[],unexpected=[],apiRequests=[];
     let newsFailed=false,buildPatchOverride=null,metaStale=false,authoredMode=true,metaFailed=false,workshopEnabled=false;
     page.on('pageerror',error=>errors.push(error.message));
@@ -143,15 +155,51 @@ try {
     assert.equal(await page.locator('#home-heroes .hero-tile').count(),4);
     assert.equal(await page.locator('#home-stages .stage-preview').count(),6);
     assert.equal(await page.locator('#home-news .update-compact').count(),3);
+    await page.waitForFunction(()=>window.__signatureStarts===1);
+    const signature=page.locator('#home-signature');
+    assert.equal(await signature.isVisible(),true,'The signature is a prominent part of the first screen.');
+    const markSize=await signature.locator('.signature-art').boundingBox();
+    assert.ok(markSize.width>=200&&markSize.height>=100,'The signature remains legible on desktop and mobile.');
+    assert.equal(await signature.getByRole('button').count(),0,'The replay button and clickable wrapper are removed.');
+    assert.equal(await signature.getByRole('img',{name:'Narma Vision — твоя игра, твои решения'}).count(),1,'The complete brand has one accessible name.');
+    assert.equal(await page.locator('.vision-path a[href="/coach"]').count(),1);
+    assert.equal(await page.locator('.vision-path a[href="/training"]').count(),1);
+    const duration=await signature.evaluate(host=>host.getAnimations({subtree:true}).find(a=>a.animationName==='signature-fall').effect.getTiming().duration);
+    assert.ok(duration>=4500&&duration<=5000,'The introduction is deliberate and finishes before five seconds.');
+    for(const [phase,time] of [['line',600],['wordmark',2700],['fold',3550],['cut',4600]]) {
+      const state=await signature.evaluate((host,time)=>{
+        for(const a of host.getAnimations({subtree:true})){a.pause();a.currentTime=time;}
+        const style=selector=>getComputedStyle(host.querySelector(selector));
+        return {rest:Number(style('.signature-rest').opacity),slash:Number(style('.signature-slash').opacity),name:Number(style('.signature-name').opacity)};
+      },time);
+      if(phase==='wordmark'){assert.equal(state.rest,1);assert.equal(state.slash,0);}
+      if(phase==='cut'){assert.equal(state.rest,0);assert.equal(state.slash,1);}
+      if(screenshotDir)await signature.screenshot({path:path.join(screenshotDir,`signature-${width}-${phase}.png`),animations:'allow'});
+    }
+    // Let the non-blocking cleanup settle into the static NV. No looping on scroll.
+    await page.waitForFunction(()=>!document.querySelector('#home-signature.signature-playing'));
+    assert.equal(await page.evaluate(()=>window.__signatureStarts),1);
+    assert.equal(await signature.locator('.signature-name').textContent(),'NARMA VISION');
+    assert.ok(await page.evaluate(()=>window.__interfaceMotion.some(m=>m.duration===1050)),'Editorial blocks appear progressively.');
+    if(width===390){
+      await page.setViewportSize({width:320,height:900});
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'The smallest supported phone has no horizontal overflow.');
+      await page.setViewportSize({width,height:1000});
+    }
     assert.match(await page.locator('#home-news .source-note.is-stale').textContent(),/сохранённ.*верси/i);
     assert.equal(await page.locator('a[href="/replays"]').count()>0,true,'The public home leads to existing replay analysis.');
     for(const route of publicRoutes)assert.equal(await page.locator(`.main-nav a[href="${route}"]`).count(),1);
     const normalMotion=await page.evaluate(()=>({animation:getComputedStyle(document.body,'::before').animationName,events:getComputedStyle(document.body,'::before').pointerEvents}));
-    assert.equal(normalMotion.animation,'battlefield-mist','The Dota-themed background has gentle motion.');
-    assert.equal(normalMotion.events,'none','Decorative mist cannot intercept user actions.');
+    assert.equal(normalMotion.animation,'none','The approved theme uses short N-cut accents instead of a perpetual background.');
+    assert.equal(normalMotion.events,'none','Background decoration cannot intercept user actions.');
     await page.emulateMedia({reducedMotion:'reduce'});
+    await open('/');
+    assert.equal(await page.evaluate(()=>window.__signatureStarts),0,'Reduced motion starts with a static NV.');
+    assert.equal(await signature.getByRole('button').count(),0);
+    assert.equal(await signature.evaluate(host=>host.getAnimations({subtree:true}).length),0);
     assert.deepEqual(await page.evaluate(()=>['::before','::after'].map(pseudo=>({animation:getComputedStyle(document.body,pseudo).animationName,transform:getComputedStyle(document.body,pseudo).transform}))),[{animation:'none',transform:'none'},{animation:'none',transform:'none'}],'Reduced-motion users receive a static background.');
     await page.emulateMedia({reducedMotion:'no-preference'});
+    assert.equal(await page.evaluate(()=>window.__signatureStarts),0,'Changing preferences does not replay a completed introduction.');
     await accessibility('home');
     const heroNav=page.locator('.main-nav a[href="/heroes"]');await heroNav.focus();await heroNav.press('Enter');
     await page.waitForURL(url=>url.pathname==='/heroes');await page.locator('#hero-grid [data-hero]').first().waitFor();
@@ -159,7 +207,9 @@ try {
     assert.equal(await page.locator('#hero-grid [data-hero]').count(),4);
     await page.locator('#hero-search').fill('necro');
     assert.equal(await page.locator('#hero-grid [data-hero]').count(),1);
+    const pressesBefore=await page.evaluate(()=>window.__interfaceMotion.filter(m=>m.duration===480).length);
     const necrophos=page.locator('#hero-grid [data-hero="36"]');await necrophos.focus();await necrophos.press('Enter');
+    assert.ok(await page.evaluate(()=>window.__interfaceMotion.filter(m=>m.duration===480).length)>pressesBefore,'Keyboard activation gets tactile feedback without delaying selection.');
     assert.equal(await page.locator('#hero-inspector h2').textContent(),'Necrophos');
     assert.equal(await page.locator('#hero-inspector a[target="_blank"]').getAttribute('href'),'https://www.dota2.com/hero/necrophos');
     assert.equal(await necrophos.getAttribute('aria-pressed'),'true');
@@ -196,7 +246,7 @@ try {
     assert.equal(await slots.nth(5).getAttribute('aria-pressed'),'true');
     assert.equal(await selectedGuide.locator('#build-slot-detail h4').count(),1);
     assert.equal(await selectedGuide.locator('#build-slot-detail h4').textContent(),initialGuide.final_items[5].name);
-    const slotBoxes=await slots.evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect();return {x:Math.round(b.x),y:Math.round(b.y)};}));
+    const slotBoxes=await slots.evaluateAll(elements=>elements.map(e=>({x:e.offsetLeft,y:e.offsetTop})));
     assert.equal(new Set(slotBoxes.map(b=>b.x)).size,3,'Inventory keeps three columns.');
     assert.equal(new Set(slotBoxes.map(b=>b.y)).size,2,'Inventory keeps two rows.');
     assert.equal(await page.locator('#build-statistics').isVisible(),false,'Authored releases do not display provider setup or unavailable statistics controls.');
@@ -535,6 +585,10 @@ try {
       assert.equal(history.includes('Личная проверка рассуждения'),false);
       assert.equal(JSON.parse(history).sessions.at(-1).total,length);
     }
+    await open('/example');await page.getByRole('heading',{name:'Из одного эпизода — в одну тренировку'}).waitFor();
+    assert.match(await page.locator('#page-content').textContent(),/вымышленная ситуация/);
+    await open('/start');await page.getByRole('heading',{name:'Подготовь запись своего матча'}).waitFor();
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     assert.ok(apiRequests.every(request=>request.path.startsWith('/api/explore/')&&request.method==='GET'),'Public visitors never invoke auth, replay, Hermes, or model APIs.');
     assert.deepEqual(unexpected,[],'The synthetic public UI run never contacts live sources or providers.');
     assert.deepEqual(errors,[]);await page.close();

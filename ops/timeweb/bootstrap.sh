@@ -14,6 +14,8 @@ exec 9>/var/lock/narma-deploy.lock
 flock -n 9
 [[ "$1" =~ ^[0-9a-f]{40}$ ]]
 release="/opt/narma/releases/$1"
+deployment_attempt="${3:-00000000000000000000000000000000}"
+[[ "$deployment_attempt" =~ ^[0-9a-f]{32}$ ]]
 export DEBIAN_FRONTEND=noninteractive
 mark_stage cloud_init
 timeout 180 cloud-init status --wait >/dev/null
@@ -26,10 +28,11 @@ ufw allow 22/tcp
 ufw --force enable
 cd "$release/services/video"
 compose=(docker compose --project-name narma-video --env-file /opt/narma/secrets/video.env)
+mark_stage quiesce_workers
+# The installed workers do not implement graceful drain. Refuse an active
+# replay/video/Hermes attempt, and prevent new claims while stopping idle ones.
+python3 "$release/ops/timeweb/quiesce_workers.py" "$deployment_attempt"
 mark_stage stop_worker
-"${compose[@]}" --profile analysis stop worker
-"${compose[@]}" --profile analysis stop replay-worker
-"${compose[@]}" --profile hermes stop hermes-broker hermes-runner
 up_options=()
 if [[ "${2:-}" == "--prebuilt" ]]; then
   mark_stage prebuilt_images

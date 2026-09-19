@@ -1,7 +1,9 @@
 """Offline regression tests for image integrity, streaming and pinned rollback."""
 import hashlib
+from contextlib import contextmanager, redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tarfile
@@ -43,9 +45,45 @@ def manifest(data):
         for tag in aliases:
             contents[tag] = {**info(REPLAY_ID if tag == "narma-video-replay-worker" else HERMES_ID if tag == "narma-video-hermes-runner" else VIDEO_ID),
                 "config_digest": digest, "rootfs_diff_ids": config["rootfs"]["diff_ids"]}
-    return {"schema": 2, "release": RELEASE, "source_tree": "b" * 40,
+    return {"schema": 3, "release": RELEASE, "source_tree": "b" * 40,
         "images": contents,
-        "archive_sha256": hashlib.sha256(data).hexdigest(), "archive_bytes": len(data)}
+        "archive_sha256": hashlib.sha256(data).hexdigest(), "archive_bytes": len(data),
+        "unpacked_bytes": len(data) * 3}
+
+
+def cached_archive(root, release, data=b"authenticated transport cache"):
+    directory = root / release
+    directory.mkdir(exist_ok=True)
+    archive = directory / "images.tar.gz"
+    archive.write_bytes(data)
+    value = {**manifest(data), "release": release}
+    manifest_path = directory / "images-manifest.json"
+    manifest_path.write_text(json.dumps(value))
+    (directory / "images-validated.json").write_text(json.dumps({"release": release,
+        "manifest_sha256": images.file_hash(manifest_path),
+        "images": {tag: info(VIDEO_ID) for tag in images.TAGS}}))
+    return archive
+
+
+@contextmanager
+def cache_host():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary) / "releases"
+        root.mkdir()
+        checks = Path(temporary) / "checks"
+        checks.mkdir()
+        current, previous = "b" * 40, "c" * 40
+        for release in (RELEASE, current, previous):
+            cached_archive(root, release)
+        pointer = Path(temporary) / "current"
+        pointer.symlink_to(root / current)
+        (checks / ("images-before-" + current + ".json")).write_text(json.dumps({
+            "release": current, "images": {tag: OLD_ID for tag in images.TAGS},
+            "api": None, "previous_release": previous}))
+        with patch.object(images, "RELEASES_ROOT", root), \
+                patch.object(images, "CURRENT_RELEASE", pointer), \
+                patch.object(images, "CHECKS_ROOT", checks):
+            yield root, checks, current, previous
 
 
 def image_archive(configs=None, *, layout="classic", swap_tags=False, bad_hash=False,
@@ -82,6 +120,178 @@ class Stream(io.BytesIO):
 
 
 class PrebuiltImagesTest(unittest.TestCase):
+    def test_storage_covers_import_verification_and_operating_reserve(self):
+        value = {**manifest(b"fixture"), "archive_bytes": 600_000_000, "unpacked_bytes": 3_000_000_000}
+        self.assertEqual(images.required_storage(value), 7_200_000_000 + 4 * 1024**3)
+        # This is the failure observed in production: ~4.96 GB passed the
+        # compressed-size-only check, then import left less than 2 GiB free.
+        self.assertGreater(images.required_storage(value), 4_962_369_536)
+
+    def test_legacy_manifests_remain_readable_but_cannot_size_a_new_transfer(self):
+        value = manifest(b"legacy")
+        value["schema"] = 2
+        value.pop("unpacked_bytes")
+        self.assertEqual(images.validate_manifest(value, RELEASE), value)
+        with self.assertRaisesRegex(images.ImageError, "prebuilt_storage_estimate_missing"):
+            images.required_storage(value)
+        for size in (None, True, -1, 0, images.MAX_UNPACKED_BYTES + 1):
+            with self.subTest(size=size), self.assertRaises(images.ImageError):
+                images.validate_manifest({**manifest(b"new"), "unpacked_bytes": size}, RELEASE)
+
+    def test_installed_size_uses_distinct_immutable_images_not_alias_count(self):
+        with patch.object(images, "run", return_value=b"3000000000\n") as run:
+            self.assertEqual(images.installed_size([VIDEO_ID, VIDEO_ID, REPLAY_ID]), 6_000_000_000)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual({call.args[0][-1] for call in run.call_args_list}, {VIDEO_ID, REPLAY_ID})
+        for raw in (b"-1", b"0", b"secret text", b"9999999999999"):
+            with patch.object(images, "run", return_value=raw), self.assertRaises(images.ImageError):
+                images.installed_size([VIDEO_ID])
+
+    def test_retention_keeps_current_previous_incoming_and_unrelated_files_and_is_idempotent(self):
+        with cache_host() as (root, checks, current, previous):
+            old = cached_archive(root, "d" * 40)
+            old_bytes = old.stat().st_size
+            unrelated = root / "operator-copy.tar.gz"
+            unrelated.write_bytes(b"not a transport-cache candidate")
+            source = old.parent / "source.py"
+            source.write_text("retained release source")
+            result = images.reclaim_retired_archives(RELEASE)
+            self.assertEqual(result, {"reclaimed_bytes": old_bytes, "reclaimed_archives": 1,
+                "eligible_bytes": old_bytes, "eligible_archives": 1, "cleanup_status": "completed"})
+            self.assertFalse(old.exists())
+            for release in (RELEASE, current, previous):
+                self.assertTrue((root / release / "images.tar.gz").is_file())
+            self.assertTrue(source.is_file())
+            self.assertTrue(unrelated.is_file())
+            self.assertTrue((old.parent / "images-manifest.json").is_file())
+            self.assertTrue((old.parent / "images-validated.json").is_file())
+            self.assertEqual(images.reclaim_retired_archives(RELEASE)["reclaimed_archives"], 0)
+
+    def test_unknown_current_or_rollback_evidence_disables_reclamation(self):
+        for failure in ("missing_checkpoint", "invalid_checkpoint", "unknown_previous", "self_previous", "current_outside", "no_current"):
+            with self.subTest(failure=failure), cache_host() as (root, checks, current, previous):
+                old = cached_archive(root, "d" * 40)
+                checkpoint = checks / ("images-before-" + current + ".json")
+                if failure == "missing_checkpoint":
+                    checkpoint.unlink()
+                elif failure == "invalid_checkpoint":
+                    checkpoint.write_text('{"release": "wrong"}')
+                elif failure in ("unknown_previous", "self_previous"):
+                    value = json.loads(checkpoint.read_text())
+                    value["previous_release"] = current if failure == "self_previous" else "f" * 40
+                    checkpoint.write_text(json.dumps(value))
+                else:
+                    images.CURRENT_RELEASE.unlink()
+                    if failure == "current_outside":
+                        images.CURRENT_RELEASE.symlink_to(root.parent)
+                result = images.reclaim_retired_archives(RELEASE)
+                self.assertEqual(result["cleanup_status"], "unavailable")
+                self.assertEqual(result["reclaimed_archives"], 0)
+                self.assertTrue(old.is_file())
+
+    def test_retention_skips_corrupt_unvalidated_symlink_hardlink_and_foreign_cache(self):
+        for failure in ("hash", "size", "manifest", "marker_hash", "marker_images", "unvalidated",
+                "archive_symlink", "archive_hardlink", "directory_symlink", "manifest_symlink", "marker_hardlink"):
+            with self.subTest(failure=failure), cache_host() as (root, checks, current, previous):
+                old = cached_archive(root, "d" * 40)
+                marker = old.parent / "images-validated.json"
+                manifest_path = old.parent / "images-manifest.json"
+                if failure == "hash":
+                    old.write_bytes(b"X" * old.stat().st_size)
+                elif failure == "size":
+                    old.write_bytes(b"short")
+                elif failure == "manifest":
+                    value = json.loads(manifest_path.read_text())
+                    value["release"] = "e" * 40
+                    manifest_path.write_text(json.dumps(value))
+                elif failure in ("marker_hash", "marker_images"):
+                    value = json.loads(marker.read_text())
+                    value["manifest_sha256" if failure == "marker_hash" else "images"] = "invalid"
+                    marker.write_text(json.dumps(value))
+                elif failure == "unvalidated":
+                    marker.unlink()
+                elif failure == "directory_symlink":
+                    original = old.parent
+                    foreign = root.parent / "foreign-release"
+                    original.rename(foreign)
+                    original.symlink_to(foreign)
+                else:
+                    target = manifest_path if failure == "manifest_symlink" else marker if failure == "marker_hardlink" else old
+                    foreign = root.parent / "foreign-file"
+                    target.rename(foreign)
+                    if failure.endswith("symlink"):
+                        target.symlink_to(foreign)
+                    else:
+                        os.link(foreign, target)
+                result = images.reclaim_retired_archives(RELEASE)
+                self.assertEqual(result["reclaimed_archives"], 0)
+                self.assertTrue(old.exists())
+
+    def test_reclaimed_cache_restores_capacity_without_lowering_reserve(self):
+        data = b"incoming archive"
+        with cache_host() as (root, checks, current, previous):
+            old = cached_archive(root, "d" * 40, b"x" * 200)
+            required = images.required_storage(manifest(data))
+            def disk_usage(path):
+                return SimpleNamespace(free=required - 100 + (0 if old.exists() else 200))
+            output = io.StringIO()
+            with patch.object(images, "read_manifest", return_value=manifest(data)), \
+                    patch.object(images.shutil, "disk_usage", side_effect=disk_usage), redirect_stdout(output):
+                images.receive_archive(RELEASE, Stream(data))
+            event = json.loads(output.getvalue())
+            self.assertEqual(event, {"event": "prebuilt_storage_check", "required_bytes": required,
+                "free_before_bytes": required - 100, "free_after_bytes": required + 100,
+                "reclaimed_bytes": 200, "reclaimed_archives": 1, "eligible_bytes": 200,
+                "eligible_archives": 1, "cleanup_status": "completed", "capacity_ok": True})
+            self.assertEqual((root / RELEASE / "images.tar.gz").read_bytes(), data)
+
+    def test_insufficient_capacity_after_retention_emits_evidence_before_reading_stream(self):
+        class Unreadable:
+            def read(self, *args):
+                raise AssertionError("insufficient capacity must refuse before reading")
+        with cache_host() as (root, checks, current, previous):
+            old = cached_archive(root, "d" * 40)
+            previous_incoming = (root / RELEASE / "images.tar.gz").read_bytes()
+            output = io.StringIO()
+            with patch.object(images.shutil, "disk_usage", return_value=SimpleNamespace(free=1)), redirect_stdout(output):
+                with self.assertRaisesRegex(images.ImageError, "prebuilt_storage_insufficient"):
+                    images.receive_archive(RELEASE, Unreadable())
+            self.assertFalse(old.exists())
+            self.assertFalse(json.loads(output.getvalue().splitlines()[-1])["capacity_ok"])
+            self.assertEqual((root / RELEASE / "images.tar.gz").read_bytes(), previous_incoming)
+            self.assertEqual(list((root / RELEASE).glob(".images-upload-*")), [])
+
+    def test_retention_hash_and_entry_work_is_bounded(self):
+        with cache_host() as (root, checks, current, previous):
+            old = [cached_archive(root, digit * 40, b"x" * 100) for digit in ("d", "e", "f")]
+            with patch.object(images, "MAX_RETENTION_BYTES", 150):
+                result = images.reclaim_retired_archives(RELEASE)
+            self.assertEqual(result["cleanup_status"], "bounded")
+            self.assertEqual(result["reclaimed_archives"], 1)
+            self.assertEqual(sum(path.exists() for path in old), 2)
+            with patch.object(images, "MAX_RETENTION_ENTRIES", 0):
+                result = images.reclaim_retired_archives(RELEASE)
+            self.assertEqual(result["cleanup_status"], "bounded")
+            self.assertEqual(result["reclaimed_archives"], 0)
+
+    def test_changed_current_release_before_unlink_stops_reclamation(self):
+        with cache_host() as (root, checks, current, previous):
+            old = cached_archive(root, "d" * 40)
+            original = images._protected_cache_releases
+            calls = 0
+            def protection(incoming):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    images.CURRENT_RELEASE.unlink()
+                    images.CURRENT_RELEASE.symlink_to(root / previous)
+                return original(incoming)
+            with patch.object(images, "_protected_cache_releases", side_effect=protection):
+                result = images.reclaim_retired_archives(RELEASE)
+            self.assertEqual(result["cleanup_status"], "unavailable")
+            self.assertEqual(result["reclaimed_archives"], 0)
+            self.assertTrue(old.is_file())
+
     def test_streamed_receive_checks_hash_size_and_keeps_previous_file_on_failure(self):
         data = b"synthetic-image-block" * 120000
         with tempfile.TemporaryDirectory() as directory:

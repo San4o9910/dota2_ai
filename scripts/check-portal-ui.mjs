@@ -1,3 +1,4 @@
+import {programFixture} from './program-fixtures.mjs';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -13,8 +14,8 @@ function dependency(name) {
 }
 const {chromium}=dependency('playwright');
 const root=path.resolve(process.env.NARMA_PORTAL_TEST_ROOT||'services/video/narma_video/static');
-const files=Object.fromEntries(['/replays','/hero-pool','/my-learning','/player','/account','/setup'].map(route=>[route,['index.html','text/html']]));
-Object.assign(files,{'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
+const files=Object.fromEntries(['/human-coach','/player-profile','/training','/register','/login','/coach','/replays','/hero-pool','/my-learning','/player','/account','/owner','/setup'].map(route=>[route,['index.html','text/html']]));
+Object.assign(files,{'/assets/human-coach.js':['human-coach.js','text/javascript'],'/assets/human-coach.css':['human-coach.css','text/css'],'/assets/player-profile.js':['player-profile.js','text/javascript'],'/assets/player-program.js':['player-program.js','text/javascript'],'/assets/billing.js':['billing.js','text/javascript'],'/assets/report-freshness.js':['report-freshness.js','text/javascript'],'/assets/brand-motion.js':['brand-motion.js','text/javascript'],'/assets/growth.js':['growth.js','text/javascript'],'/assets/owner-dashboard.js':['owner-dashboard.js','text/javascript'],'/assets/vision-theme.css':['vision-theme.css','text/css'],'/assets/coach-chat.js':['coach-chat.js','text/javascript'],'/assets/role-guidance.js':['role-guidance.js','text/javascript'],'/assets/portal.js':['portal.js','text/javascript'],'/assets/personal-coach.js':['personal-coach.js','text/javascript'],'/assets/video-workspace.js':['video-workspace.js','text/javascript'],'/assets/portal.css':['portal.css','text/css']});
 const server=createServer(async(request,response)=>{
   const file=files[request.url]; if(!file) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type',file[1]); response.end(await readFile(path.join(root,file[0])));
@@ -64,10 +65,37 @@ report.insights.gold.recorded_loss=report.insights.gold.bins.reduce((sum,bin)=>s
 report.insights.gold.total_earned_gold=report.insights.gold.recorded_income;
 report.metrics.total_earned_gold=report.insights.gold.recorded_income;
 report.insights.pace=report.insights.gold.bins.map((bin,index)=>({...bin,last_hits:3+index%7,kills:index%11===0?1:0,deaths:index%15===0?1:0,assists:index%9===0?1:0,earned_gold:bin.income,xp:bin.income*1.5}));
+
+function personalCoachFixtures() {
+  const history=[
+    {job_id:'coach-new',match_id:'8984100002',played_at:'2026-09-12T18:00:00Z',outcome:'win'},
+    {job_id:'coach-old',match_id:'8984100001',played_at:'2026-09-10T18:00:00Z',outcome:'loss'},
+  ].map(match=>({...match,hero:'npc_dota_hero_necrolyte',label:'Necrophos',position:2,date_source:'user',chronology_at:match.played_at,report_state:'ready',source_sha256:'a'.repeat(64),report_sha256:(match.job_id==='coach-new'?'b':'c').repeat(64),metrics:{gpm:450,xpm:500,deaths_per_30:5}}));
+  const structuredPoint={kind:'review',title:'Возвращение после смерти',observation:malicious,decision_question:'Что проверить перед возвращением на линию?',reasoning:'Смерть записана, но причина требует проверки окружения.',alternative:'Проверь доступные пути возвращения и состояние линии.',when_to_apply:'Перед возвращением после смерти.',when_not_to_apply:'Если команда уже требует срочной защиты базы.',evidence_ids:['coach-new-death']};
+  const exercise={id:'coach-risk',stage_id:'risk',title:'Проверка перед возвращением',roles:[2],decision_question:'Что было известно до решения?',signal:'Перед возвращением на линию.',action:'Проверь доступный путь и цель.',why:'Это позволяет заранее оценить риск.',exception:'Срочная защита может изменить план.',drill:'Сравни три возвращения.',measurement:'Запиши информацию, доступную до выбора.',focus_window_matches:3,review_mode:'episode_review',evidence_types:['death'],source_refs:[]};
+  const plan={id:'coach-practice',exercise_id:exercise.id,exercise,hero:history[0].hero,hero_label:'Necrophos',position:2,status:'active',validity:'current',can_check:true,source_job_id:'coach-old',source_match_id:'8984100001',created_at:'2026-09-11T18:00:00Z',training_matches:1,reviewed_matches:1,self_report_counts:{applied:0,partial:1,not_applied:0,no_opportunity:0,uncertain:0},checks:[]};
+  const catalog={schema_version:'narma.curriculum.v1',version:'narma.curriculum.v1',role_context:roleProfiles[2],position:2,position_required:false,stages:[{id:'risk',title:'Риск и возвращение в игру',order:3,description:'Проверь решение до возвращения.',exercise_ids:[exercise.id]}],exercises:[exercise],sources:[]};
+  function detail(id,{unavailable=false}={}) {
+    const match=history.find(item=>item.job_id===id);assert.ok(match);
+    const event={id:`${id}-death`,type:'death',time:id==='coach-new'?720:600,title:'Возвращение и смерть',details:'Синтетический факт для проверки перехода.'};
+    const coaching=id==='coach-new'?{status:'ready',schema_version:'narma.replay-coaching.v3',training_level:'advanced',lesson:{first:'Сравни возвращение с ожиданием.',second:'Проверь доступную информацию перед решением.',third:'При потере цели отмени возвращение.',evidence_ids:[event.id]},summary:'Начни с решения о возвращении на линию.',points:[structuredPoint],next_game:[{title:'Одна проверка до возвращения',action:'До выхода назови цель и безопасный путь.',measure:'После игры проверь три таких решения.',evidence_ids:[event.id]}]}:{status:'ready',summary:'Сохранённый комментарий старого формата.',points:[{title:'Старое наблюдение',observation:'В реплее есть смерть на десятой минуте.',advice:'Проверь положение перед возвращением.',evidence_ids:[event.id]}],next_game:[]};
+    coaching.context={position:match.position};
+    if(unavailable){coaching.status='unavailable';coaching.failure_code='OPENAI_BUDGET_EXCEEDED';}
+    return {replay:{id,state:'ready',progress:100,match_id:match.match_id,nickname:profile.nickname,created_at:match.played_at,source_retained:true},report:{...structuredClone(report),match_id:match.match_id,player:{...report.player,match_id:match.match_id},evidence:[event],coaching,coverage:{...report.coverage,source_sha256:match.source_sha256}},report_sha256:match.report_sha256,hero_context:null,parts:[],archived_report:null,coaching_status:unavailable?{state:'unavailable',provider:'openai_api',verified_openai:false,reason_code:'OPENAI_BUDGET_EXCEEDED',usage:null,billing_state:'none',charged_microusd:null}:{state:'ready',provider:'openai_api',verified_openai:true,reason_code:null,usage:{input_tokens:1000,output_tokens:200,cached_input_tokens:0},billing_state:'settled',charged_microusd:2000}};
+  }
+  function pool(empty) {
+    return {profile:empty?null:profile,role_context:roleProfiles[2],summary:{matches:empty?0:2,wins:empty?0:1,losses:empty?0:1,known_outcomes:empty?0:2,unknown_outcomes:0,winrate_pct:empty?null:50,unknown_positions:0,analysis_dated_matches:0},heroes:empty?[]:[{hero:history[0].hero,label:'Necrophos',position:2,matches:2,wins:1,losses:1,known_outcomes:2,unknown_outcomes:0,winrate_pct:50,favorite:false}],available_heroes:empty?[]:[{hero:history[0].hero,label:'Necrophos'}],history:empty?[]:history,trends:[],patterns:[],coaching:null,goals:[],limitations:['Синтетические данные для проверки интерфейса.']};
+  }
+  function learning(empty,id=null) {
+    const match=history.find(item=>item.job_id===id);
+    return {schema_version:'narma.learning.v1',catalog,profile:empty?null:profile,scope:{hero:null,position:null},plans:empty?[]:[plan],history:empty?[]:history,...(match?{job_id:id,requested_job_id:id,match_id:match.match_id,hero:match.hero,hero_label:match.label,position:2,position_required:false,suggestions:[],review_candidates:[{evidence_id:`${id}-death`,type:'death',time:id==='coach-new'?720:600,title:'Возвращение и смерть'}]}:{})};
+  }
+  return {history,structuredPoint,exercise,plan,detail,pool,learning};
+}
 try {
   for(const width of [390,1440]) {
     const page=await browser.newPage({viewport:{width,height:1000}});
-    let authenticated=false, bound=false, job=null, uploaded=false, legacy=false, poolFailed=false, poolSaveFailed=false, learningEmpty=true, learningFailed=false, connectionMissing=false;
+    let authenticated=false, bound=false, job=null, uploaded=false, legacy=false, poolFailed=false, poolSaveFailed=false, learningEmpty=true, learningFailed=false, connectionMissing=false, archivedCoachingState='saved';
     const poolMatches=Array.from({length:8},(_,index)=>({job_id:'pool-'+index,match_id:String(8984000000+index),hero:index===7?'npc_dota_hero_lion':'npc_dota_hero_necrolyte',label:index===7?'Lion':'Necrophos',position:index===7?5:index===6?null:2,outcome:index===6?null:index%2?'loss':'win',played_at:index===6?null:new Date(Date.now()-(50-index*7)*86400000).toISOString(),date_source:index===6?'analysis':'user',chronology_at:new Date(Date.now()-(50-index*7)*86400000).toISOString(),metrics:{deaths_per_30:10-index,gpm:400+index*20,xpm:500+index*20,last_hits_10:30+index,net_worth_10:4000+index*100,item_delay_seconds:index===3?null:120-index*10}}));
     const favorites=new Set(), goals=[], poolWrites=[], externalRequests=[];
     let learningPosition=null, learningAlias=false;
@@ -95,7 +123,7 @@ try {
     }
     const errors=[], requests=[];
     const integrationRequests=[];
-    const replayCreates=[];
+    const replayCreates=[],chatTurns=[],growthAttempts=[],feedbackWrites=[];
     let releaseReplayCreate,observeFirstReplayCreate;
     const firstReplayCreateGate=new Promise(resolve=>{releaseReplayCreate=resolve;});
     const firstReplayCreateStarted=new Promise(resolve=>{observeFirstReplayCreate=resolve;});
@@ -108,12 +136,13 @@ try {
       else if(new URL(url).origin!==origin) {externalRequests.push(url);await route.abort();}
       else await route.fallback();
     });
-    await page.route('**/api/**',async route=>{
+    await page.route('**/api/**',async route=>{if(await programFixture(route))return;
       const request=route.request(), url=new URL(request.url()), endpoint=url.pathname, method=request.method(); requests.push(endpoint);
       let body, status=200, responseHeaders={};
       if(endpoint==='/api/auth/login') { authenticated=true; body={authenticated:true}; }
       else if(endpoint==='/api/auth/logout') {authenticated=false;body={authenticated:false};}
-      else if(endpoint==='/api/session') body={authenticated,setup_required:false,user:authenticated?{email:'fixture@example.test'}:null};
+      else if(endpoint==='/api/auth/security') body={recovery_codes_remaining:0};
+      else if(endpoint==='/api/session') body={authenticated,setup_required:false,user:authenticated?{email:'fixture@example.test'}:null,coaching:{mode:'personal',personal_connect:true,available:false}};
       else if(endpoint.startsWith('/api/integrations/chatgpt')) {
         integrationRequests.push({method,endpoint,body:request.postDataJSON()});
         if(chatgptRejectSession){status=401;authenticated=false;responseHeaders={'X-Narma-Error':'PORTAL_SIGN_IN'};body={detail:malicious};}
@@ -125,6 +154,7 @@ try {
         body=chatgpt;}
       }
       else if(endpoint==='/api/learning'&&learningFailed) {status=503;body={detail:'Synthetic learning refresh failure.'};}
+      else if(endpoint==='/api/learning/progress') body={plans:[]};
       else if(endpoint==='/api/learning') {const hero=url.searchParams.get('hero'),position=Number(url.searchParams.get('position'))||null;body={schema_version:'narma.learning.v1',catalog:learningCatalog(position),profile:bound?profile:null,scope:{hero,position},plans:learningPlans.filter(plan=>(!hero||plan.hero===hero)&&(!position||plan.position===position)).map(projectPlan),history:(learningEmpty?[]:[...poolMatches,...(job?[learningMatch(job.id)]:[])]).filter(match=>(!hero||match.hero===hero)&&(!position||match.position===position))};}
       else if(endpoint.startsWith('/api/learning/reports/')) body=learningReport(endpoint.split('/').at(-1));
       else if(endpoint==='/api/learning/plans'&&method==='POST') {const command=request.postDataJSON(),match=learningMatch(command.job_id);assert.ok(match.position);for(const plan of learningPlans)if(plan.hero===match.hero&&plan.position===match.position)plan.status='paused';const plan={id:`practice-${learningPlans.length+1}`,exercise_id:command.exercise_id,exercise:learningExercises.find(item=>item.id===command.exercise_id),hero:match.hero,hero_label:'Necrophos',position:match.position,status:'active',created_at:new Date().toISOString(),source_job_id:match.job_id,source_match_id:match.match_id,checks:[]};learningPlans.push(plan);body={saved:true,plan:projectPlan(plan)};}
@@ -143,6 +173,15 @@ try {
         const event={id:'death-1',type:'death',time:coachReference(Number(match.job_id.slice(5))).time,title:'Смерть выбранного героя',details:'Синтетический эпизод для проверки ссылки.'};
         body={replay:{id:match.job_id,state:'ready',progress:100,match_id:match.match_id,nickname:profile.nickname,created_at:new Date().toISOString()},report:{...report,match_id:match.match_id,player:{...report.player,hero:match.hero},evidence:[event]},hero_context:null,archived_report:null,parts:[]};
       }
+      else if(endpoint.endsWith('/practice')&&endpoint.startsWith('/api/replays/')){
+        if(method==='POST'){growthAttempts.push(request.postDataJSON());body={saved:true,reflection:{action:'Сначала назови достижимую цель.',why:'Это позволяет сравнить варианты.',exception:'Срочная защита меняет приоритет.',measurement:'Проверь информацию до решения.'},note:'Ориентир для самостоятельной проверки.'};}
+        else body={report_sha256:'c'.repeat(64),position_required:false,attempts:[],scenarios:[{exercise_id:'r1',title:'Решение до смерти',question:'Какую пользу ты ожидал и какие варианты были доступны?',episode:{evidence_id:'death-1',time:600}}]};
+      }
+      else if(endpoint.endsWith('/feedback')){feedbackWrites.push(request.postDataJSON());body={saved:true};}
+      else if(/^\/api\/replays\/[^/]+\/chat$/.test(endpoint)) {
+        if(method==='POST'){const value=request.postDataJSON();assert.equal(value.report_sha256,'c'.repeat(64));const turn={...value,state:'succeeded',answer:{answer:'Проверь, какую цель давало возвращение.',next_step:'Перед выходом назови цель.',evidence_ids:['death-1']}};if(!chatTurns.some(item=>item.id===value.id))chatTurns.push(turn);body={turn};}
+        else body={turns:chatTurns,report_sha256:'c'.repeat(64),context:{training_level:'advanced'},available:true};
+      }
       else if(endpoint==='/api/replays'&&method==='POST') {
         const command=request.postDataJSON(); assert.equal(command.filename,'synthetic.dem'); assert.equal(command.nickname,'SyntheticPlayer'); assert.equal('account_id' in command,false);
         replayCreates.push(command);
@@ -156,17 +195,46 @@ try {
       else if(job&&endpoint===`/api/replays/${job.id}/source`&&method==='DELETE') {job.source_retained=false;body={source_deleted:true,report_retained:true};}
       else if(job&&endpoint===`/api/replays/${job.id}`) body={replay:job,hero_context:legacy?{...heroContext,hero:'npc_dota_hero_lion',label:'Lion'}:heroContext,parts:uploaded?[1]:[],archived_report:job.state==='ready'?{id:1,created_at:new Date().toISOString(),hero_context:{...heroContext,summary:'Контекст сохранённого разбора.',abilities:[{...heroContext.abilities[0],casts:7}]},report:{...report,metrics:{...report.metrics,kills:9},evidence:[{id:'old-death',type:'death',time:500,title:'Старый эпизод'}],coaching:{status:'ready',summary:'Сохранённый комментарий',points:[{title:'Сохранённый эпизод',observation:'Предыдущий разбор.',evidence_ids:['old-death']}]}}}:null,report:job.state==='ready'?{...report,...(legacy?{insights:undefined,coaching:{status:'unavailable',points:[]}}:{}),...(width===1440?{coaching:{status:'unavailable',summary:'',points:[]}}:{}),...(connectionMissing?{coaching:{status:'unavailable',failure_code:'CHATGPT_NOT_CONNECTED',points:[]}}:{})}:null};
       else throw Error(`Unexpected frontend API request: ${method} ${endpoint}`);
+      if(job&&endpoint===`/api/replays/${job.id}`) {
+        body.report_sha256='c'.repeat(64);
+        body.coaching_status=width===390&&!legacy&&!connectionMissing?{state:'ready',provider:'openai_api',verified_openai:true,reason_code:null,usage:{input_tokens:1200,output_tokens:300,cached_input_tokens:400},billing_state:'settled',charged_microusd:2750}:{state:'unavailable',provider:'openai_api',verified_openai:false,reason_code:connectionMissing?'CHATGPT_NOT_CONNECTED':'OPENAI_BUDGET_EXCEEDED',usage:null,billing_state:'none',charged_microusd:null};
+        if(body.archived_report) {
+          body.archived_report.coaching_status={state:archivedCoachingState,provider:null,verified_openai:false,reason_code:archivedCoachingState==='context_changed'?'REPLAY_COACH_CONTEXT_CHANGED':null,usage:null,billing_state:'none',charged_microusd:null};
+          if(archivedCoachingState==='unavailable'||archivedCoachingState==='context_changed')body.archived_report.report.coaching={status:archivedCoachingState,summary:'',points:[]};
+        }
+      }
       await route.fulfill({status,json:body,headers:responseHeaders});
     });
+    await page.addInitScript(()=>{
+      window.__narmaMotion=[];
+      document.addEventListener('animationstart',event=>{
+        if(event.animationName.startsWith('narma-')||event.animationName==='signature-fall')window.__narmaMotion.push({name:event.animationName,parent:event.target.parentElement?.id});
+      });
+    });
     await page.goto(origin+'/replays');
-    assert.equal(await page.evaluate(()=>getComputedStyle(document.body,'::before').animationName),'portal-mist');
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.body,'::before').animationName),'none');
     await page.emulateMedia({reducedMotion:'reduce'});
+    await page.waitForFunction(()=>!document.querySelector('.narma-cut-playing'));
     assert.deepEqual(await page.evaluate(()=>({animation:getComputedStyle(document.body,'::before').animationName,transform:getComputedStyle(document.body,'::before').transform,events:getComputedStyle(document.body,'::before').pointerEvents})),{animation:'none',transform:'none',events:'none'},'Personal replay pages respect reduced motion without blocking controls.');
     await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.reload();
+    await page.getByLabel('Email',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.__narmaMotion.length),0,'The brand introduction does not repeat on navigation in the same tab.');
     await page.getByLabel('Email',{exact:true}).fill('fixture@example.test');
     await page.getByLabel('Пароль',{exact:true}).fill('Synthetic passphrase 2026');
     await page.getByRole('button',{name:'Войти',exact:true}).click();
     await page.getByRole('heading',{name:'Разбор твоего матча'}).waitFor();
+    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='signature-fall'));
+    assert.equal(await page.locator('#workspace-signature').isVisible(),true,'The signed-in player sees the automatic signature after login.');
+    assert.equal(await page.locator('#workspace-signature button').count(),0,'The private workspace also removes replay controls.');
+    const nicknameBeforeShortcut=await page.locator('#nickname').inputValue();
+    await page.locator('#nickname').fill('Unsubmitted fixture draft');
+    await page.locator('.workspace-shortcuts a[data-tab="coach"]').click();
+    assert.equal(new URL(page.url()).pathname,'/coach');
+    await page.locator('.workspace-shortcuts a[data-tab="review"]').click();
+    assert.equal(new URL(page.url()).pathname,'/replays');
+    assert.equal(await page.locator('#nickname').inputValue(),'Unsubmitted fixture draft','Shortcuts preserve an unfinished upload form.');
+    await page.locator('#nickname').fill(nicknameBeforeShortcut);
     if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-entry.png`)});
     // A new player gets a usable learning section before uploading any match.
     const initialPoolRequests=requests.filter(endpoint=>endpoint==='/api/hero-pool').length;
@@ -230,12 +298,104 @@ try {
     assert.notEqual(replayCreates[2].id,replayCreates[0].id,'Changing context after a failed upload creates a distinct request.');
     assert.deepEqual({position:replayCreates[2].position,mmr:replayCreates[2].mmr,training_level:replayCreates[2].training_level},{position:2,mmr:6500,training_level:'advanced'});
     await page.getByText('17 / 16 / 20',{exact:true}).waitFor();
+    await page.locator('#report-chat').getByRole('button',{name:'Спросить тренера',exact:true}).waitFor();
+    await page.locator('#report-chat').getByLabel('Твой вопрос',{exact:true}).fill('Как проверить выкуп?');
+    await page.locator('#report-chat').getByRole('button',{name:'Спросить тренера',exact:true}).click();
+    await page.locator('#report-chat').getByText('Проверь, какую цель давало возвращение.',{exact:true}).waitFor();
+    assert.equal(chatTurns.length,1,'One explicit question creates one chat turn.');
+    await page.locator('#report-chat').getByRole('button',{name:'Обновить разговор',exact:true}).click();
+    assert.equal(chatTurns.length,1,'Reading saved chat never creates another paid request.');
+    await page.locator('#report-chat').getByLabel('Контекст разговора',{exact:true}).selectOption('series');
+    await page.locator('#report-chat').getByLabel('Твой вопрос',{exact:true}).fill('Как менялись мои решения в последних матчах?');
+    await page.locator('#report-chat').getByRole('button',{name:'Спросить тренера',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('#report-chat .chat-question').length===2);
+    assert.equal(chatTurns.at(-1).scope,'series');
+    const growth=page.locator('#report-growth');
+    await growth.getByText('Потренироваться на эпизоде из этого матча',{exact:true}).click();
+    await growth.getByLabel('Как бы ты поступил и почему?',{exact:true}).fill('Сначала проверю доступную цель и союзников.');
+    assert.equal(await growth.getByText('Сначала назови достижимую цель.',{exact:true}).count(),0);
+    await growth.getByRole('button',{name:'Сохранить ответ и разобрать варианты',exact:true}).click();
+    await growth.getByText('Сначала назови достижимую цель.',{exact:true}).waitFor();
+    assert.equal(growthAttempts.length,1);
+    if(width===390){
+      await growth.getByText('Оценить совет тренера',{exact:true}).click();
+      await growth.getByLabel('Пояснение',{exact:true}).fill('Не учтена защита базы.');
+      await growth.getByRole('button',{name:'Сохранить отзыв',exact:true}).click();
+      await growth.getByText('Отзыв сохранён. Спасибо!',{exact:false}).waitFor();
+      assert.equal(feedbackWrites.length,1);
+    }
+    await growth.getByText('Карточка для Telegram',{exact:true}).click();
+    assert.equal(await growth.getByLabel('Показать мой ник',{exact:true}).isChecked(),false);
+    assert.equal(await growth.getByLabel('Показать номер матча',{exact:true}).isChecked(),false);
+    await growth.getByRole('button',{name:'Посмотреть карточку',exact:true}).click();
+    await growth.locator('.share-preview').waitFor();
+    const png=page.waitForEvent('download');await growth.getByRole('button',{name:'Скачать PNG',exact:true}).click();
+    assert.equal((await png).suggestedFilename(),'narma-vision-result.png');
+    assert.equal(chatTurns.length,2,'Practice, feedback and preview do not silently call the model.');
+    await growth.getByText('Потренироваться на эпизоде из этого матча',{exact:true}).click();
+    await growth.getByText('Карточка для Telegram',{exact:true}).click();
+    if(screenshotDir)await page.screenshot({path:path.join(screenshotDir,`portal-${width}-coach-chat.png`),fullPage:true});
+    assert.equal(await page.evaluate(()=>window.__narmaMotion.filter(event=>event.parent==='result-signature').length),0,'Opening a saved report is not a new analysis completion.');
+    job.state='processing';job.progress=60;
+    await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
+    await page.locator('#result-state').getByText('Разбираем матч',{exact:true}).waitFor();
+    assert.equal(await page.locator('#result-signature').isHidden(),true);
+    job.state='ready';job.progress=100;
+    await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
+    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='narma-cut-line'&&event.parent==='result-signature'));
+    await page.waitForFunction(()=>!document.querySelector('#result-signature.narma-cut-playing'));
+    const completedCuts=await page.evaluate(()=>window.__narmaMotion.filter(event=>event.name==='narma-cut-line'&&event.parent==='result-signature').length);
+    await page.locator('#history').getByRole('button',{name:'Открыть',exact:true}).click();
+    await page.locator('#result-state').getByText('Разбор готов',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.__narmaMotion.filter(event=>event.name==='narma-cut-line'&&event.parent==='result-signature').length),completedCuts,'Reading a ready result does not repeat the completion animation.');
+    if(width===390) {
+      assert.match(await page.locator('#report-ai-status').textContent(),/Комментарий OpenAI подтверждён/);
+      assert.match(await page.locator('#report-ai-status').textContent(),/Учтено для этого разбора: 1\s?200 токенов на входе · 300 в ответе/);
+      assert.match(await page.locator('#report-ai-status').textContent(),/400 из кэша/);
+      assert.match(await page.locator('#report-ai-status').textContent(),/\$0,00275/);
+    } else {
+      assert.match(await page.locator('#report-ai-status').textContent(),/без нового комментария ИИ/);
+      assert.match(await page.locator('#report-ai-status').textContent(),/остановлен лимитом расходов/);
+      assert.equal(await page.locator('.report-ai-usage').count(),0,'Missing accounting is not displayed as zero token usage.');
+    }
+    assert.equal(await page.evaluate(()=>{
+      const top=id=>document.getElementById(id).getBoundingClientRect().top;
+      return top('coaching-heading')<top('next-game-heading')&&top('next-game-plan')<top('report-learning')&&top('next-game-heading')<top('metrics')&&top('metrics')<top('economy-heading');
+    }),true,'Grounded coaching and the next-game plan precede raw statistics and charts.');
     if(screenshotDir) {await page.locator('#report-hero').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(screenshotDir,`portal-${width}-hero-header.png`)});}
     assert.equal(await page.locator('#nickname-field').isHidden(),true);
     assert.equal(await page.locator('#timeline-value').textContent(),'78:41');
     await page.locator('#economy-heading').scrollIntoViewIfNeeded();
     if(screenshotDir) await page.screenshot({path:path.join(screenshotDir,`portal-${width}-charts.png`)});
-    await page.getByRole('button',{name:'10:00 · Смерть',exact:true}).first().click();
+    assert.equal(await page.locator('#combat-strip svg').count(),0,'Episode navigation does not depend on tiny overlapping SVG targets.');
+    assert.equal(await page.getByRole('button',{name:'Смерти · 1',exact:true,pressed:true}).count(),1);
+    await page.locator('.episode-choice').first().focus();await page.locator('.episode-choice').first().press('Enter');
+    await page.waitForFunction(()=>window.__narmaMotion.some(event=>event.name==='narma-episode-cut'));
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await page.waitForFunction(()=>!document.querySelector('.narma-episode-playing'));
+    assert.equal(await page.locator('.narma-episode-line').count(),0,'Reduced motion removes the active decoration, retaining the selected episode.');
+    await page.locator('.episode-choice').first().click();
+    assert.equal(await page.locator('.narma-episode-line').count(),0);
+    await page.emulateMedia({reducedMotion:'no-preference'});
+    assert.equal(await page.locator('#timeline-value').textContent(),'10:00');
+    assert.equal(await page.locator('.episode-choice[aria-pressed=true]').count(),1);
+    assert.match(await page.locator('.episode-detail').textContent(),/Время вне игры по реплею: 0:30/);
+    await page.getByRole('button',{name:'За 30 с до события',exact:true}).click();
+    assert.equal(await page.locator('#timeline-value').textContent(),'9:30');
+    assert.equal(await page.locator('#timeline').getAttribute('aria-valuetext'),'9:30');
+    assert.match(await page.locator('#timeline-snapshot').textContent(),/На графиках: 9:30.*Последняя запись: 9:00.*Убийства:.*Смерти:.*Помощи:/);
+    assert.equal(await page.locator('#gold-chart .chart-cursor').getAttribute('x1'),await page.locator('#xp-chart .chart-cursor').getAttribute('x1'));
+    await page.getByRole('button',{name:'В момент события',exact:true}).click();
+    assert.equal(await page.locator('#timeline-value').textContent(),'10:00');
+    if(screenshotDir) await page.locator('.episode-review').screenshot({path:path.join(screenshotDir,`portal-${width}-episodes.png`)});
+    await page.getByRole('button',{name:'Убийства · 0',exact:true}).click();
+    assert.equal(await page.locator('.episode-choice').count(),0,'Totals do not manufacture missing event timestamps.');
+    assert.match(await page.locator('.episode-detail').textContent(),/нет таймкодов/);
+    await page.getByRole('button',{name:'Ключевые предметы · 2',exact:true}).click();
+    await page.locator('#combat-strip').getByRole('button',{name:'21:40 · Покупка · Blink',exact:true}).click();
+    assert.equal(await page.locator('#timeline-value').textContent(),'21:40');
+    await page.getByRole('button',{name:'Смерти · 1',exact:true}).click();
+    await page.locator('#findings').getByRole('button',{name:'10:00 · Смерть',exact:true}).click();
     assert.equal(await page.locator('#timeline-value').textContent(),'10:00');
     assert.equal(await page.locator('#gold-chart .chart-cursor').getAttribute('x1'),await page.locator('#xp-chart .chart-cursor').getAttribute('x1'));
     assert.match(await page.locator('#gold-value').textContent(),/4\s?000/);
@@ -302,7 +462,7 @@ try {
     assert.equal(await selectedCard.getByRole('button',{name:'Первое применение: 22:10',exact:true}).textContent(),'22:10');
     const singleCardLayout=await page.locator('#item-cards').evaluate(element=>({width:element.getBoundingClientRect().width,card:element.querySelector('.item-card:not([hidden])').getBoundingClientRect().width}));
     assert.ok(Math.abs(singleCardLayout.width-singleCardLayout.card)<1,'The selected item fills the available row.');
-    await page.getByRole('button',{name:'10:00 · Смерть',exact:true}).first().click();
+    await page.locator('#findings').getByRole('button',{name:'10:00 · Смерть',exact:true}).click();
     assert.equal(await selectedCard.locator('h4').textContent(),'Blink','Seeking another event does not replace the chosen item.');
     await page.locator('#item-rail .item-chip').first().click();
     assert.equal(await itemCard.getByLabel('Личная цель, мин:сек',{exact:true}).inputValue(),'10:00','Unsaved goals survive switching items.');
@@ -329,17 +489,33 @@ try {
     await page.locator('#item-rail .item-chip').nth(1).click();
     await page.getByRole('button',{name:'Предыдущий тренерский разбор',exact:true}).click();
     await page.getByRole('heading',{name:'Сохранённый эпизод',exact:true}).waitFor();
+    assert.match(await page.locator('#report-ai-status').textContent(),/Показан сохранённый комментарий/);
+    assert.equal(await page.locator('.report-ai-usage').count(),0,'An archived comment does not inherit the current report call usage.');
     assert.equal(await page.locator('#item-cards .item-card:visible h4').textContent(),'Radiance','An archived report starts with its own first item.');
     assert.match(await page.locator('#hero-context').textContent(),/Контекст сохранённого разбора/);
     assert.match(await page.locator('#hero-context .hero-abilities').textContent(),/7 применений/);
     assert.match(await page.locator('#metrics').textContent(),/9 \/ 16 \/ 20/);
-    await page.getByRole('button',{name:'8:20 · Смерть',exact:true}).click();
+    await page.locator('#coaching').getByRole('button',{name:'8:20 · Смерть',exact:true}).click();
     assert.equal(await page.locator('#timeline-value').textContent(),'8:20');
-    assert.equal(await page.locator('#events [data-evidence-id=old-death]').count(),1);
+    assert.equal(await page.locator('#events [data-evidence-id=old-death].selected-event').count(),1);
     await page.locator('#item-rail .item-chip').nth(1).click();
     await page.getByRole('button',{name:'Вернуться к текущему разбору',exact:true}).click();
     assert.equal(await page.locator('#item-cards .item-card:visible h4').textContent(),'Radiance','Current-report selection never inherits the archived selection.');
     assert.equal(await page.locator('#events [data-evidence-id=old-death]').count(),0);
+    for(const [archiveState,heading] of [['unavailable','Статистика готова · без нового комментария ИИ'],['context_changed','Контекст изменился · комментарий требует обновления'],['unknown','Источник комментария не подтверждён']]) {
+      archivedCoachingState=archiveState;
+      const refreshedArchive=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/replays/${job.id}`);
+      await page.getByRole('button',{name:'Обновить',exact:true}).click();
+      await (await refreshedArchive).finished();
+      await page.waitForFunction(label=>document.querySelector('#previous-report-toggle').textContent===label,archiveState==='unknown'?'Предыдущий тренерский разбор':'Предыдущая версия разбора');
+      await page.locator('#previous-report-toggle').click();
+      assert.equal(await page.locator('#report-ai-status .report-ai-title').textContent(),heading,'Opening an archive preserves its explicit coaching failure/provenance verdict.');
+      assert.doesNotMatch(await page.locator('#report-ai-status').textContent(),/Показан сохранённый комментарий|Комментарий OpenAI подтверждён/);
+      assert.equal(await page.locator('.report-ai-usage').count(),0);
+      if(archiveState!=='unknown')assert.equal(await page.locator('#coaching .report-point').count(),0,'A factual-only or stale-context archive has no ready coaching points.');
+      await page.locator('#previous-report-toggle').click();
+    }
+    archivedCoachingState='saved';
     connectionMissing=true;
     await page.getByRole('button',{name:'Обновить',exact:true}).click();
     const coachingConnect=page.locator('#coaching a.coaching-connect');
@@ -630,5 +806,306 @@ try {
     assert.deepEqual(externalRequests,[],'Synthetic UI fixtures must never contact external providers.');
     assert.deepEqual(errors,[]); await page.close();
   }
-  console.log('Visual report income sources, item timings/delivery/realization, personal goals/reset and next-game plan; Portal .dem upload→report with role/MMR/training depth, frozen context and idempotent retry; selected-player binding, shared timeline, safe coaching links, account navigation, reduced motion, mobile layout and WCAG passed (mocked API; no paid calls).');
+  // Account controls use synthetic API responses; credential transaction rules
+  // are covered separately by the PostgreSQL suite.
+  for(const width of [390,1440]) {
+    const page=await browser.newPage({viewport:{width,height:1000}}),errors=[],commands=[];
+    let authenticated=false,owner=true,remaining=0,invites=[],releaseCodes=null,delayCodes=false,releaseInvite=null,delayInvite=false,observeCredential=null;
+    const code='01234567-89abcdef-01234567-89abcdef',inviteToken='A'.repeat(43),inviteId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.route('**/api/**',async route=>{if(await programFixture(route))return;
+      const request=route.request(),endpoint=new URL(request.url()).pathname,method=request.method();
+      if(method!=='GET')commands.push({endpoint,body:request.postDataJSON()});
+      let body;
+      if(endpoint==='/api/session')body={authenticated,setup_required:false,user:authenticated?{email:owner?'owner@example.test':'guest@example.test',is_platform_owner:owner}:null,coaching:{mode:'platform',available:true,personal_connect:false}};
+      else if(endpoint==='/api/auth/login'){authenticated=true;body={authenticated:true};}
+      else if(endpoint==='/api/auth/logout'){authenticated=false;body={authenticated:false};}
+      else if(endpoint==='/api/profile')body={profile:null};
+      else if(endpoint==='/api/replays')body={replays:[],worker_ready:true};
+      else if(endpoint==='/api/auth/security')body={recovery_codes_remaining:remaining};
+      else if(endpoint==='/api/auth/recovery-codes'){remaining=5;if(delayCodes)await new Promise(resolve=>{releaseCodes=resolve;observeCredential();});body={codes:Array(5).fill(code)};}
+      else if(endpoint==='/api/auth/invitations'&&method==='GET')body={invitations:invites,maximum_accounts:25};
+      else if(endpoint==='/api/auth/invitations'&&method==='POST'){invites=[{id:inviteId,email:'guest@example.test',expires_at:'2099-01-01T00:00:00Z'}];body={invitation:invites[0],token:inviteToken};if(delayInvite)await new Promise(resolve=>{releaseInvite=resolve;observeCredential();});}
+      else if(endpoint.startsWith('/api/auth/invitations/')&&method==='DELETE'){invites=[];body={revoked:true};}
+      else if(endpoint==='/api/auth/accept-invitation'){authenticated=true;owner=false;body={authenticated:true};}
+      else if(endpoint==='/api/auth/recover'){remaining--;authenticated=false;body={authenticated:false,password_changed:true};}
+      else if(endpoint==='/api/owner/dashboard')body={jobs:[{kind:'replay',ready:2,failed:0,queued:1,processing:0,mean_completion_seconds:120}],costs:[{kind:'chat',calls:2,spent_microusd:12000,held_microusd:3000}],users:[{owner_id:'synthetic-guest',email:'guest@example.test',spent_microusd:12000,held_microusd:3000,unknown_calls:0,limit_microusd:null}],feedback:[],openai_budget:null,window_note:'Задания за 7 дней',cost_note:'Учёт приложения'};
+      else if(endpoint==='/api/owner/users/synthetic-guest/ai-limit'&&method==='PUT')body={saved:true};
+      else throw Error(`Unexpected account request ${method} ${endpoint}`);
+      await route.fulfill({json:body});
+    });
+    await page.goto(origin+'/account');
+    await page.locator('#email').fill('owner@example.test');await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#auth-submit').click();
+    await page.locator('#pilot-invitations').waitFor();
+    await page.locator('#owner-nav').click();
+    const dashboard=page.locator('#owner-content');
+    await dashboard.getByRole('heading',{name:'Расходы на ИИ',exact:true}).waitFor();
+    await dashboard.getByLabel('Общий лимит игрока, $',{exact:true}).fill('2,50');
+    await dashboard.getByLabel('Твой пароль для изменения лимита',{exact:true}).fill('Synthetic passphrase 2026');
+    await dashboard.getByRole('button',{name:'Сохранить лимит',exact:true}).click();
+    await dashboard.getByText('Лимит сохранён. Общий бюджет платформы не изменился.',{exact:true}).waitFor();
+    assert.deepEqual(commands.find(command=>command.endpoint==='/api/owner/users/synthetic-guest/ai-limit').body,{limit_microusd:2500000,current_password:'Synthetic passphrase 2026'});
+    assert.equal(await dashboard.getByLabel('Твой пароль для изменения лимита',{exact:true}).inputValue(),'');
+    await dashboard.getByLabel('Твой пароль для изменения лимита',{exact:true}).fill('Unsaved synthetic credential');
+    await page.locator('nav [data-tab=account]').click();
+    assert.equal(await dashboard.getByLabel('Твой пароль для изменения лимита',{exact:true}).inputValue(),'');
+    await page.locator('#recovery-current-password').fill('Synthetic passphrase 2026');await page.locator('#recovery-generate-form button').click();await page.locator('#recovery-output').waitFor();
+    assert.equal(await page.locator('#recovery-code-list').inputValue(),Array(5).fill(code).join('\n'));
+    assert.equal(await page.locator('#recovery-current-password').inputValue(),'');
+    await page.locator('#recovery-saved').click();assert.equal(await page.locator('#recovery-code-list').inputValue(),'');
+    await page.locator('#invitation-email').fill('guest@example.test');await page.locator('#invitation-password').fill('Synthetic passphrase 2026');await page.locator('#invitation-form button').click();await page.locator('#invitation-output').waitFor();
+    const link=await page.locator('#invitation-link').inputValue(),url=new URL(link);
+    assert.equal(url.search,'');assert.equal(new URLSearchParams(url.hash.slice(1)).get('invite'),inviteToken);
+    assert.equal(await page.locator('#invitation-password').inputValue(),'');
+    await page.locator('#invitation-list button').click();await page.locator('#invitation-status').getByText('Введи текущий пароль для отзыва.').waitFor();
+    await page.locator('#invitation-password').fill('Synthetic passphrase 2026');await page.locator('#invitation-list button').click();await page.waitForFunction(()=>document.querySelector('#invitation-list').children.length===0);
+    assert.equal(await page.locator('#invitation-link').inputValue(),'');
+    // A delayed response must not put backup credentials back into the DOM
+    // after a user has left the account screen.
+    const codeStarted=new Promise(resolve=>{observeCredential=resolve;});delayCodes=true;await page.locator('#recovery-current-password').fill('Synthetic passphrase 2026');await page.locator('#recovery-generate-form button').click();
+    await codeStarted;await page.locator('nav [data-tab=review]').click();
+    const codeFinished=page.waitForResponse(response=>response.url().endsWith('/api/auth/recovery-codes'));releaseCodes();await codeFinished;
+    await page.waitForFunction(()=>!document.querySelector('#recovery-generate-form button').disabled);
+    assert.equal(await page.locator('#recovery-code-list').inputValue(),'');assert.equal(await page.locator('#recovery-output').isHidden(),true);
+    delayCodes=false;await page.locator('nav [data-tab=account]').click();await page.locator('#pilot-invitations').waitFor();
+    const inviteStarted=new Promise(resolve=>{observeCredential=resolve;});delayInvite=true;
+    await page.locator('#invitation-password').fill('Synthetic passphrase 2026');await page.locator('#invitation-form button').click();await inviteStarted;
+    await page.locator('#logout').click();await page.locator('#auth').waitFor();
+    const inviteFinished=page.waitForResponse(response=>response.url().endsWith('/api/auth/invitations'));releaseInvite();await inviteFinished;
+    await page.waitForFunction(()=>!document.querySelector('#invitation-form button').disabled);
+    assert.equal(await page.locator('#invitation-link').inputValue(),'');assert.equal(await page.locator('#invitation-output').isHidden(),true);
+    await page.locator('#forgot-password').click();await page.locator('#recovery-email').fill('owner@example.test');await page.locator('#recovery-code').fill(code);await page.locator('#recovery-password').fill('Synthetic changed password');await page.locator('#recovery-form .primary').click();
+    await page.locator('#notice').getByText(/Пароль восстановлен/).waitFor();assert.equal(await page.locator('#recovery-code').inputValue(),'');assert.equal(await page.locator('#recovery-password').inputValue(),'');
+    await page.goto(link);await page.locator('#auth-title').getByText('Прими приглашение').waitFor();
+    assert.equal(new URL(page.url()).hash,'');assert.equal(await page.locator('#email').inputValue(),'guest@example.test');
+    await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#auth-submit').click();await page.locator('#workspace').waitFor();
+    assert.equal(await page.locator('#pilot-invitations').isHidden(),true);
+    assert.equal(await page.locator('#owner-nav').isHidden(),true);
+    assert.equal(await page.locator('#owner-content').innerText(),'');
+    assert.deepEqual(commands.find(command=>command.endpoint==='/api/auth/accept-invitation').body,{email:'guest@example.test',password:'Synthetic passphrase 2026',token:inviteToken});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);await page.close();
+  }
+
+  // Public registration: isolated synthetic accounts, no live signup or AI calls.
+  for(const width of [390,1440]) {
+    const page=await browser.newPage({viewport:{width,height:1000}}),errors=[],writes=[];
+    const fixtures=personalCoachFixtures();
+    let authenticated=false,available=true,signupError=true,releaseSignup,signupStarted;
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.route('**/*',async route=>{
+      if(new URL(route.request().url()).origin!==origin)await route.abort();else await route.fallback();
+    });
+    await page.route('**/api/**',async route=>{if(await programFixture(route))return;
+      const request=route.request(),endpoint=new URL(request.url()).pathname;
+      let body,status=200;
+      if(request.method()!=='GET')writes.push({endpoint,body:request.postDataJSON()});
+      if(endpoint==='/api/session')body={authenticated,setup_required:false,registration_available:available,user:authenticated?{email:'new@example.test',is_platform_owner:false}:null,coaching:{mode:'platform',available:false,personal_connect:false}};
+      else if(endpoint==='/api/auth/register') {
+        if(signupError){status=409;body={detail:'Аккаунт с этой почтой уже существует. Войдите или восстановите доступ.'};}
+        else {await new Promise(resolve=>{releaseSignup=resolve;signupStarted();});authenticated=true;status=201;body={authenticated:true};}
+      }
+      else if(endpoint==='/api/auth/logout'){authenticated=false;body={authenticated:false};}
+      else if(endpoint==='/api/auth/login'){authenticated=true;body={authenticated:true};}
+      else if(endpoint==='/api/profile')body={profile:null};
+      else if(endpoint==='/api/replays')body={replays:[],worker_ready:true};
+      else if(endpoint==='/api/hero-pool')body=fixtures.pool(true);
+      else if(endpoint==='/api/learning/progress') body={plans:[]};
+      else if(endpoint==='/api/learning')body=fixtures.learning(true);
+      else throw Error(`Unexpected registration request ${endpoint}`);
+      await route.fulfill({status,json:body});
+    });
+    await page.goto(origin+'/login');
+    await page.locator('#auth-switch').getByText('Нет аккаунта? Создать аккаунт').waitFor();
+    await page.locator('#auth-switch').click();
+    assert.equal(new URL(page.url()).pathname,'/register');
+    await page.locator('#auth-title').getByText('Создай аккаунт NARMA VISION').waitFor();
+    assert.equal(await page.locator('#password').getAttribute('autocomplete'),'new-password');
+    assert.equal(await page.locator('#password-confirmation').isEnabled(),true);
+    assert.equal(await page.locator('#forgot-password').isHidden(),true);
+    await page.locator('#email').fill('new@example.test');
+    await page.locator('#password').fill('Synthetic passphrase 2026');
+    await page.locator('#password-confirmation').fill('Synthetic different passphrase');
+    await page.locator('#auth-submit').click();
+    await page.locator('#notice').getByText('Пароли не совпадают. Проверь повторный ввод.').waitFor();
+    assert.equal(writes.length,0);
+    await page.locator('#password-confirmation').fill('Synthetic passphrase 2026');
+    await page.locator('#auth-submit').click();
+    await page.locator('#notice').getByText(/Аккаунт с этой почтой уже существует/).waitFor();
+    await page.waitForFunction(()=>!document.querySelector('#auth-submit').disabled);
+    assert.deepEqual(writes[0],{endpoint:'/api/auth/register',body:{email:'new@example.test',password:'Synthetic passphrase 2026',password_confirmation:'Synthetic passphrase 2026'}});
+    assert.equal(await page.locator('#workspace').isHidden(),true);
+    // Browser Back switches to login without leaving a required hidden field.
+    await page.goBack();
+    assert.equal(new URL(page.url()).pathname,'/login');
+    await page.locator('#auth-title').getByText('Вход в NARMA VISION',{exact:true}).waitFor();
+    assert.equal(await page.locator('#password-confirmation').isEnabled(),false);
+    await page.locator('#forgot-password').click();assert.equal(await page.locator('#auth-switch').isHidden(),true);
+    await page.locator('#return-login').click();await page.locator('#auth-switch').waitFor();
+    await page.goto(origin+'/register');await page.locator('#auth-submit').waitFor();
+    await page.locator('#email').fill('new@example.test');
+    await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#password-confirmation').fill('Synthetic passphrase 2026');
+    signupError=false;const started=new Promise(resolve=>{signupStarted=resolve;});
+    await page.locator('#auth-submit').click();await started;
+    assert.equal(await page.locator('#auth-submit').isDisabled(),true);
+    assert.equal(await page.locator('#auth-switch').isDisabled(),true);
+    assert.equal(writes.filter(write=>write.endpoint==='/api/auth/register').length,2);
+    releaseSignup();await page.locator('#workspace').waitFor();await page.locator('#training').waitFor();
+    assert.equal(new URL(page.url()).pathname,'/training');
+    await page.locator('#program-content').getByText('Начнём с твоего матча').waitFor();
+    await page.locator('#program-content').getByRole('button',{name:'Разобрать свой матч',exact:true}).click();
+    await page.locator('#review').waitFor();
+    await page.locator('nav [data-tab=training]').click();await page.locator('#training').waitFor();
+    await page.locator('#notice').getByText(/Аккаунт создан/).waitFor();
+    assert.equal(await page.locator('#password').inputValue(),'');assert.equal(await page.locator('#password-confirmation').inputValue(),'');
+    assert.equal(await page.locator('#pilot-invitations').isHidden(),true);
+    await page.locator('#logout').click();await page.locator('#auth').waitFor();
+    await page.locator('#password').fill('Synthetic passphrase 2026');await page.locator('#auth-submit').click();await page.locator('#workspace').waitFor();
+    assert.deepEqual(writes.find(write=>write.endpoint==='/api/auth/login').body,{email:'new@example.test',password:'Synthetic passphrase 2026'});
+    await page.locator('#logout').click();available=false;
+    await page.goto(origin+'/register');await page.locator('#registration-unavailable').waitFor();
+    assert.equal(await page.locator('#auth-submit').isDisabled(),true);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    assert.ok(writes.every(write=>['/api/auth/register','/api/auth/login','/api/auth/logout'].includes(write.endpoint)));
+    assert.deepEqual(errors,[]);await page.close();
+  }
+
+  // Personal coaching is a read-only projection of the owner's saved reports.
+  // This independent fixture keeps provider/account/upload mutation scenarios above unchanged.
+  for(const width of [390,1440]) {
+    const page=await browser.newPage({viewport:{width,height:1000}}),fixture=personalCoachFixtures(),errors=[],commands=[],externalRequests=[];
+    let authenticated=true,empty=true,unavailable=false,reportChanged=false,delayedReport=null,releaseReport=null,observeReport=null;
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.route('**/*',async route=>{
+      const url=route.request().url();
+      if(url===heroImageUrl||url===itemImageUrl||url===blinkImageUrl)await route.fulfill({contentType:'image/png',body:itemImage});
+      else if(new URL(url).origin!==origin){externalRequests.push(url);await route.abort();}
+      else await route.fallback();
+    });
+    await page.route('**/api/**',async route=>{if(await programFixture(route))return;
+      const request=route.request(),endpoint=new URL(request.url()).pathname,method=request.method();commands.push({method,endpoint});
+      let body;
+      if(endpoint==='/api/session')body={authenticated,setup_required:false,user:authenticated?{email:'coach-owner@example.test',is_platform_owner:true}:null,coaching:{mode:'platform',available:true,personal_connect:false}};
+      else if(endpoint==='/api/auth/logout'){assert.equal(method,'POST');authenticated=false;body={authenticated:false};}
+      else {
+        assert.equal(method,'GET','Opening or switching saved coach reports must never create provider, upload or practice mutations.');
+        if(endpoint==='/api/profile')body={profile:empty?null:profile};
+        else if(endpoint==='/api/replays')body={replays:empty?[]:fixture.history.map(match=>fixture.detail(match.job_id).replay),worker_ready:true,max_bytes:512*1024**2};
+        else if(endpoint==='/api/hero-pool')body=fixture.pool(empty);
+        else if(endpoint==='/api/learning/progress') body={plans:[]};
+      else if(endpoint==='/api/learning')body=fixture.learning(empty);
+        else if(endpoint.startsWith('/api/learning/reports/'))body=fixture.learning(empty,endpoint.split('/').at(-1));
+        else if(endpoint.endsWith('/chat')){const id=endpoint.split('/').at(-2);body={turns:[],report_sha256:fixture.detail(id).report_sha256,context:{},available:false};}
+        else if(endpoint.startsWith('/api/replays/')){
+          const id=endpoint.split('/').at(-1);body=fixture.detail(id,{unavailable});
+          if(reportChanged&&id==='coach-new'){body.report_sha256='d'.repeat(64);body.report.evidence[0].time=1260;}
+          if(id===delayedReport){await new Promise(resolve=>{releaseReport=resolve;observeReport();});delayedReport=null;}
+        }
+        else throw Error(`Unexpected personal coach request ${method} ${endpoint}`);
+      }
+      await route.fulfill({json:body});
+    });
+    await page.goto(origin+'/coach');
+    await page.locator('#coach-empty').waitFor();
+    assert.equal(await page.locator('nav [data-tab]').first().getAttribute('data-tab'),'training','The current practice is the first customer tab.');
+    assert.equal(await page.locator('nav [data-tab=coach]').getAttribute('aria-current'),'page');
+    assert.match(await page.locator('#coach-empty').textContent(),/Загрузи полный \.dem/);
+    assert.equal(await page.locator('#coach-decisions,#coach-match-select').count(),0,'An empty account never receives invented match findings.');
+    assert.equal(commands.some(command=>/^\/api\/replays\//.test(command.endpoint)),false);
+    await page.locator('#coach-empty').getByRole('button',{name:'Загрузить первый реплей',exact:true}).click();
+    assert.equal(new URL(page.url()).pathname,'/replays');
+    await page.locator('nav [data-tab=coach]').click();
+    empty=false;
+    await page.route('**/api/program',route=>route.fulfill({json:{focus:fixture.plan,choices:[fixture.plan],review:{status:'waiting',note:'Синтетическая проверка'},check_candidates:[{job_id:'coach-new',match_id:'8984100002'}],stage:'check',jobs:[]}}));
+    await page.locator('nav [data-tab=training]').click();
+    await page.locator('#program-content').getByRole('heading',{name:fixture.exercise.title,exact:true}).waitFor();
+    await page.locator('#program-content').getByRole('button',{name:'Проверить следующий матч',exact:true}).click();
+    await page.locator('#learning-pool-coach-practice-match').waitFor();
+    assert.equal(await page.locator('#learning-pool-coach-practice-match').inputValue(),'coach-new');
+    await page.locator('#learning-pool-coach-practice-match').selectOption('coach-old');
+    await page.locator('nav [data-tab=training]').click();
+    await page.locator('#program-content').getByRole('button',{name:'Проверить следующий матч',exact:true}).click();
+    await page.locator('#learning-pool-coach-practice-match').waitFor();
+    assert.equal(await page.locator('#learning-pool-coach-practice-match').inputValue(),'coach-new','Next-game check must replace the older selected match.');
+    await page.locator('nav [data-tab=coach]').click();
+    await page.locator('#coach-refresh').click();
+    await page.locator('#coach-decisions .decision-details').waitFor();
+    assert.equal(await page.locator('#coach-match-select').inputValue(),'coach-new');
+    assert.equal(await page.locator('#coach-match-detail .mode-step').count(),3);
+    await page.locator('#coach-match-detail').getByRole('heading',{name:'Цена альтернативы',exact:true}).waitFor();
+    assert.equal(await page.locator('#coach-matches .coach-match-row').count(),2);
+    assert.match(await page.locator('#coach-match-detail').textContent(),/Матч 8984100002/);
+    assert.match(await page.locator('#coach-next-game').textContent(),/До выхода назови цель и безопасный путь/);
+    assert.match(await page.locator('#coach-next-game').textContent(),/После игры проверь три таких решения/);
+    assert.match(await page.locator('#coach-practice').textContent(),/Проверка перед возвращением/);
+    assert.match(await page.locator('#coach-practice').textContent(),/Подходящих матчей с твоей проверкой: 1/);
+    assert.match(await page.locator('#coach-practice').textContent(),/самооценка/);
+    const decision=page.locator('#coach-decisions .decision-details');
+    await decision.locator('summary').focus();await decision.locator('summary').press('Enter');
+    assert.equal(await decision.getAttribute('open'),'','Structured decisions expand using the keyboard.');
+    for(const label of ['Факты эпизода','Почему это имеет значение','Другой вариант действия','Когда применять','Когда выбрать другое'])assert.equal(await decision.getByText(label,{exact:true}).isVisible(),true);
+    for(const key of ['observation','decision_question','reasoning','alternative','when_to_apply','when_not_to_apply'])assert.equal(await decision.getByText(fixture.structuredPoint[key],{exact:true}).isVisible(),true);
+    assert.equal(await page.locator('#coach-decisions img, #coach-decisions script, #coach-decisions iframe').count(),0,'Model prose remains literal text.');
+    const axe=dependency('axe-core');await page.addScriptTag({content:axe.source});
+    const coachAccessibility=await page.evaluate(async()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+    assert.deepEqual(coachAccessibility.violations.map(violation=>({id:violation.id,nodes:violation.nodes.map(item=>item.target)})),[]);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'The personal coach fits both mobile and desktop widths.');
+    if(screenshotDir)await page.screenshot({path:path.join(screenshotDir,`portal-${width}-personal-coach.png`),fullPage:true});
+    reportChanged=true;
+    await decision.getByRole('button',{name:'12:00 · Смерть',exact:true}).click();
+    await page.getByRole('heading',{name:'Матч 8984100002',exact:true}).waitFor();
+    await page.locator('#notice').getByText(/Этот разбор обновился/).waitFor();
+    assert.equal(await page.locator('#events .selected-event').count(),0,'A reprocessed report cannot reuse an old evidence ID as proof of the same episode.');
+    assert.notEqual(await page.locator('#timeline-value').textContent(),'12:00','Changing the report hash prevents seeking to its old timestamp.');
+    assert.match(await page.locator('#events [data-evidence-id=coach-new-death]').textContent(),/21:00/);
+    reportChanged=false;
+    await page.locator('nav [data-tab=coach]').click();
+    await page.locator('#coach-decisions .decision-details').waitFor();
+    await decision.locator('summary').click();
+    await decision.getByRole('button',{name:'12:00 · Смерть',exact:true}).click();
+    await page.getByRole('heading',{name:'Матч 8984100002',exact:true}).waitFor();
+    await page.waitForFunction(()=>document.querySelector('#timeline-value').textContent==='12:00');
+    assert.equal(new URL(page.url()).pathname,'/replays');
+    assert.equal(await page.locator('#events [data-evidence-id=coach-new-death].selected-event').count(),1,'An episode opens and seeks its own saved report.');
+    assert.equal(await page.locator('#coaching .decision-details').count(),1,'The full report renders the same versioned decision contract.');
+    await page.locator('#coaching .decision-details > summary').click();
+    assert.equal(await page.locator('#coaching').getByText(fixture.structuredPoint.alternative,{exact:true}).isVisible(),true);
+    await page.locator('nav [data-tab=coach]').click();
+    await page.locator('#coach-decisions .decision-details').waitFor();
+    await page.locator('#coach-match-select').selectOption('coach-old');
+    await page.locator('#coach-decisions').getByRole('heading',{name:'Старое наблюдение',exact:true}).waitFor();
+    assert.match(await page.locator('#coach-match-detail').textContent(),/Сохранённый разбор в прежнем формате/);
+    assert.match(await page.locator('#coach-decisions').textContent(),/Проверь положение перед возвращением/);
+    assert.equal(await page.locator('#coach-decisions .decision-field').count(),0,'Legacy advice is not expanded into invented structured fields.');
+    assert.equal(await page.locator('#coach-next-game').count(),0,'Selecting an older report clears the other match\'s next-game focus.');
+    await page.locator('#coach-practice').getByRole('button',{name:'Продолжить практику',exact:true}).click();
+    assert.equal(new URL(page.url()).pathname,'/my-learning');
+    await page.locator('#learning .learning-stages').waitFor();
+    await page.locator('nav [data-tab=coach]').click();
+    await page.locator('#coach-decisions').getByRole('heading',{name:'Старое наблюдение',exact:true}).waitFor();
+    unavailable=true;
+    await page.locator('#coach-match-select').selectOption('coach-new');
+    await page.locator('#coach-match-detail .coach-unavailable').waitFor();
+    assert.match(await page.locator('#coach-match-detail').textContent(),/нет готового комментария ИИ/);
+    assert.equal(await page.locator('#coach-decisions,#coach-next-game,.coach-summary').count(),0,'An unavailable verdict hides stale model text and goals contained in a saved response.');
+    assert.doesNotMatch(await page.locator('#coach-match-detail').textContent(),/Начни с решения о возвращении/);
+    assert.match(await page.locator('#coach-practice').textContent(),/Проверка перед возвращением/,'A separately saved practice stays available without a new AI comment.');
+    assert.ok(commands.every(command=>command.method==='GET'),'Viewing the coach, old reports, episodes and saved practice creates no mutations.');
+    // A response that was authorized before logout must not restore private findings afterwards.
+    unavailable=false;delayedReport='coach-old';
+    const reportStarted=new Promise(resolve=>{observeReport=resolve;});
+    await page.locator('#coach-match-select').selectOption('coach-old');await reportStarted;
+    await page.locator('#logout').click();await page.locator('#auth').waitFor();
+    const reportFinished=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/replays/coach-old');
+    releaseReport();await (await reportFinished).finished();
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await page.locator('#coach-content').innerText(),'');
+    assert.equal(await page.locator('#coach-content').isHidden(),true);
+    assert.equal(await page.locator('#coach-player').textContent(),'Личный разбор','Logout also clears the selected player name.');
+    assert.equal(await page.locator('#coach-decisions,#coach-match-detail').count(),0,'Late selected-report responses cannot repopulate a logged-out session.');
+    assert.deepEqual(commands.filter(command=>command.method!=='GET'),[{method:'POST',endpoint:'/api/auth/logout'}]);
+    assert.deepEqual(externalRequests,[],'The personal coach fixture never contacts a provider or other external service.');
+    assert.deepEqual(errors,[]);await page.close();
+  }
+
+  console.log('Personal coach empty/history/structured and legacy reports, episode navigation, saved practice and logout race; visual report income sources, item timings/delivery/realization, personal goals/reset and next-game plan; Portal .dem upload→report with role/MMR/training depth, frozen context and idempotent retry; selected-player binding, shared timeline, safe coaching links, account navigation, reduced motion, mobile layout and WCAG passed (mocked API; no paid calls).');
 } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }

@@ -45,7 +45,7 @@ import {
   formatTime,
   type AxisKey,
   type StageKey,
-} from "@/app/data/match-8963624400";
+} from "@/app/data/demo-match";
 
 import { TRAINING_PLAN } from "@/app/data/training-plan";
 export { TRAINING_PLAN } from "@/app/data/training-plan";
@@ -113,7 +113,7 @@ export default function NarmaAnalysis({
   const [matchIdDraft, setMatchIdDraft] = useState("");
   const [matchNotice, setMatchNotice] = useState("");
   const [trainingStage, setTrainingStage] = useState<StageKey>("laning");
-  const trainingProgress = useTrainingProgress("demo:8963624400",!!viewer);
+  const trainingProgress = useTrainingProgress("demo:training-example",!!viewer);
   const completedDrills = trainingProgress.completed;
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     heroes: true,
@@ -247,21 +247,17 @@ export default function NarmaAnalysis({
                 onSubmit={(event) => {
                   event.preventDefault();
                   const normalizedMatchId = matchIdDraft.trim();
-                  if (!/^\d{8,12}$/.test(normalizedMatchId)) {
+                  if (!/^[1-9]\d{7,11}$/.test(normalizedMatchId)) {
                     setMatchNotice("Match ID должен содержать от 8 до 12 цифр.");
-                  } else if (normalizedMatchId === String(MATCH.id)) {
-                    closeMatchDialog();
-                    setMatchNotice("");
-                    window.scrollTo({ top: 0, behavior: "smooth" });
                   } else {
-                    setMatchNotice("Этот Match ID пока не поддерживается. Доступен матч 8963624400.");
+                    window.location.assign(`/analyses?match=${encodeURIComponent(normalizedMatchId)}`);
                   }
                 }}
               >
                 <p className="eyebrow">Новый анализ</p>
                 <h2 id="match-dialog-title">Введите Match ID</h2>
                 <p id="match-dialog-description">Здесь открыт подготовленный пример. Свой ник и Match ID можно указать в разделе «Мои разборы».</p>
-                <p className="field-help" id="match-id-help">Доступный Match ID: 8963624400. Формат — от 8 до 12 цифр.</p>
+                <p className="field-help" id="match-id-help">Пример вымышленный и не имеет Match ID. Для своего матча укажи от 8 до 12 цифр.</p>
                 <label htmlFor="match-id"><span>Match ID</span></label>
                 <input
                   id="match-id"
@@ -275,10 +271,10 @@ export default function NarmaAnalysis({
                   aria-invalid={Boolean(matchNotice)}
                   aria-describedby={matchNotice ? "match-id-help match-id-error" : "match-id-help"}
                   onChange={(event) => { setMatchIdDraft(event.target.value.replace(/\D/g, "").slice(0, 12)); setMatchNotice(""); }}
-                  placeholder="8963624400"
+                  placeholder="ID твоего матча"
                 />
                 {matchNotice && <div className="dialog-notice" id="match-id-error" role="alert"><Info size={15} aria-hidden="true" />{matchNotice}</div>}
-                <button className="dialog-submit" type="submit">Открыть пример <ChevronRight size={17} /></button>
+                <button className="dialog-submit" type="submit">Перейти к своему матчу <ChevronRight size={17} /></button>
                 <Link className="price-button secondary" href="/analyses">Мой ник и мои матчи</Link>
               </form>
             )}
@@ -291,18 +287,18 @@ export default function NarmaAnalysis({
           <div className="match-result">
             <span className="status-dot" />
             <div>
-              <p>Матч {MATCH.id} · {MATCH.date} · патч {MATCH.patch}</p>
+              <p>{MATCH.date} · карта {MATCH.patch}</p>
               <h1>Разбор матча <span>{selectedHero ? `· ${selectedHero.name}` : "· командный"}</span></h1>
             </div>
           </div>
           <div className="scoreboard" aria-label={`Счёт ${MATCH.score.radiant}:${MATCH.score.dire}, победа Dire`}>
             <span className="radiant-score">{MATCH.score.radiant}</span>
-            <small>{MATCH.durationLabel}<br />RANKED · ALL DRAFT</small>
+            <small>{MATCH.durationLabel}<br />УЧЕБНЫЙ ПРИМЕР</small>
             <span className="dire-score">{MATCH.score.dire}</span>
           </div>
-          <div className="source-badge"><Database size={16} /> OpenDota</div>
+          <div className="source-badge"><Database size={16} /> Учебные данные</div>
           <div className="hero-prompt">
-            <div><strong>Пример разбора · {selectedHero?.name}</strong><span>Это подготовленный пример. Свои матчи разбирайте по закреплённому нику.</span></div>
+            <div><strong>Пример разбора · {selectedHero?.name}</strong><span>Все игроки, показатели и события вымышлены. Этот пример не использует данные пользователей.</span></div>
             <Link className="price-button secondary" href="/analyses">Указать мой ник</Link>
           </div>
         </section>
@@ -318,7 +314,7 @@ export default function NarmaAnalysis({
 
         <section className="data-scope surface" aria-label="Какие данные есть в разборе">
           <Database size={19} aria-hidden="true" />
-          <p><strong>Данные матча:</strong> экономика, объекты и места смертей из OpenDota.</p>
+          <p><strong>Данные матча:</strong> вымышленные экономика, события и отметки на карте.</p>
           <p><strong>Без replay .dem не видно:</strong> точные маршруты, нажатия, камеру и намерение игрока.</p>
         </section>
 
@@ -401,7 +397,7 @@ export default function NarmaAnalysis({
         </section>
 
         <section className="timeline-resources surface" id="economy">
-          <div className="section-head"><div><p className="eyebrow">Gold + XP · одна шкала</p><h3>Золото и драки по времени</h3></div><span className="confidence"><Database size={14} /> OpenDota</span></div>
+          <div className="section-head"><div><p className="eyebrow">Gold + XP · одна шкала</p><h3>Золото и драки по времени</h3></div><span className="confidence"><Database size={14} /> Учебные данные</span></div>
           <MatchEconomyTimeline samples={DEMO_ECONOMY} fights={DEMO_FIGHTS} duration={MATCH.duration} time={time} onSeek={seek}/>
         </section>
 
@@ -527,8 +523,8 @@ export default function NarmaAnalysis({
         </section>
 
         <footer>
-          <span><Sparkles size={15} /> NARMA VISION · матч {MATCH.id}</span>
-          <span>Данные: OpenDota. Для точных маршрутов и нажатий нужен replay .dem.</span>
+          <span><Sparkles size={15} /> NARMA VISION · учебный пример</span>
+          <span>Вымышленные учебные данные. Для личного разбора нужен свой replay .dem.</span>
         </footer>
       </div>
     </main>

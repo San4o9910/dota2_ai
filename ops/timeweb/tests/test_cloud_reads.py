@@ -61,6 +61,14 @@ class CloudReadsTest(unittest.TestCase):
                     self.assertEqual(opener.open.call_count, 1)
                     sleep.assert_not_called()
 
+    def test_transport_diagnostic_distinguishes_read_and_mutation_without_secrets(self):
+        for method, prefix, count in (("GET", "cloud_read_unavailable", 3), ("POST", "cloud_request_outcome_unknown", 1)):
+            opener = SimpleNamespace(open=Mock(side_effect=OSError("private socket detail")))
+            with patch.object(pilot.urllib.request, "build_opener", return_value=opener), patch.object(pilot.time, "sleep"):
+                with self.assertRaisesRegex(pilot.CheckError, "^" + prefix + "_" + method + "_/api/v1/servers$"):
+                    self.cloud.call(method, "/api/v1/servers?limit=100")
+            self.assertEqual(opener.open.call_count, count)
+
     def test_get_auth_schema_and_oversize_failures_do_not_retry(self):
         for failure in (http_error(401), http_error(404), response(b"not json"), response(b"x" * (2 * 1024**2 + 1))):
             opener = SimpleNamespace(open=Mock(side_effect=failure) if isinstance(failure, Exception) else Mock(return_value=failure))

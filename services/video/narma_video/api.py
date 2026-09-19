@@ -8,16 +8,17 @@ import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from .config import PART_BYTES, MAX_VIDEO_BYTES, job_directory, media_root, service_token
 from .db import database
-from . import budget
+from . import budget, media_storage
 from .build_meta import cache as build_cache, router as build_meta_router
 from .workshop_builds import cache as workshop_cache
 
@@ -66,8 +67,9 @@ def ready():
             connection.execute("SELECT 1 FROM replay_jobs LIMIT 1")
             connection.execute("SELECT 1 FROM hero_pool_match_notes LIMIT 1")
             migrated = connection.execute("""SELECT count(*) AS n FROM video_schema_migrations
-                WHERE name IN ('010_hero_pool_progress.sql','008_replay_coaching_history.sql','009_hermes_reviews.sql','011_hermes_runtime.sql','012_learning_curriculum.sql','013_chatgpt_auth.sql','014_chatgpt_calls.sql','015_hermes_chatgpt_provider.sql')""").fetchone()
-            if migrated["n"] != 8:
+                WHERE name IN ('010_hero_pool_progress.sql','008_replay_coaching_history.sql','009_hermes_reviews.sql','011_hermes_runtime.sql','012_learning_curriculum.sql','013_chatgpt_auth.sql','014_chatgpt_calls.sql','015_hermes_chatgpt_provider.sql',
+                    '018_openai_api.sql','019_selective_video.sql','020_hermes_openai.sql','021_portal_multiple_accounts.sql')""").fetchone()
+            if migrated["n"] != 12:
                 raise RuntimeError("Progress schema not ready")
         with tempfile.TemporaryFile(dir=media_root()) as handle:
             handle.write(b"ready"); handle.flush()
@@ -90,9 +92,13 @@ class CreateVideo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: UUID
     filename: str = Field(min_length=5, max_length=180)
-    size_bytes: int = Field(ge=16, le=MAX_VIDEO_BYTES)
+    size_bytes: int = Field(ge=16, le=MAX_VIDEO_BYTES, strict=True)
     account_id: int = Field(ge=1, le=4294967294)
     nickname: str = Field(min_length=1, max_length=128)
+    hero: str | None = Field(default=None, min_length=1, max_length=80)
+    position: int | None = Field(default=None, ge=1, le=5)
+    mmr: int | None = Field(default=None, ge=0, le=20000)
+    training_level: Literal['foundations','application','advanced'] | None = None
 
 def owned(connection, owner, job_id, lock=False):
     row = connection.execute("SELECT * FROM video_jobs WHERE id=%s AND owner_id=%s AND state<>'deleted'" + (" FOR UPDATE" if lock else ""), (job_id, owner)).fetchone()
@@ -101,64 +107,104 @@ def owned(connection, owner, job_id, lock=False):
     return row
 
 def public(row):
-    return {**{key: row[key] for key in ("id", "filename", "size_bytes", "state", "nickname", "frame_count", "processed_frames", "duration_seconds", "failure_code", "created_at")},"identity_status":"nickname_only"}
+    fields = ("id", "filename", "size_bytes", "state", "nickname", "frame_count", "processed_frames", "duration_seconds", "failure_code", "created_at",
+        "hero", "position", "mmr", "training_level", "analysis_mode", "analysis_phase", "completed_stages", "total_stages")
+    return {**{key: row.get(key) for key in fields},"identity_status":"nickname_only"}
 
 @app.get("/v1/videos")
 def videos(owner: Owner):
+    from .video_analysis import configured_mode, coach_available
     with database() as connection:
         rows = connection.execute("SELECT * FROM video_jobs WHERE owner_id=%s AND state<>'deleted' ORDER BY created_at DESC LIMIT 30", (owner,)).fetchall()
         worker = connection.execute("SELECT 1 FROM video_workers WHERE last_seen>now()-interval '5 minutes' LIMIT 1").fetchone()
+        coach_ready = coach_available(connection, owner)
     allowance=budget.status()
     return {"videos": [public(row) for row in rows], "worker_ready": bool(worker), "max_bytes": MAX_VIDEO_BYTES,
         "frame_budget":int(os.environ.get('VIDEO_FRAME_BUDGET','3600')),
-        "budget_available":allowance['enabled'] and allowance['available_microusd']>=budget.RESERVATION}
+        "analysis_mode": configured_mode(), "coach_available": coach_ready,
+        "storage_policy": media_storage.SOURCE_POLICY,
+        "budget_available":bool(allowance['enabled'] and allowance['available_microusd']>=budget.RESERVATION
+            and (configured_mode() != 'selective_v1' or coach_ready))}
 
 @app.post("/v1/videos", status_code=201)
 def create_video(body: CreateVideo, owner: Owner):
+    from .video_analysis import configured_mode, coach_available
     if not re.fullmatch(r"[^\x00-\x1f\x7f/\\]+\.(?:mp4|mkv|webm|mov)", body.filename, re.I):
         raise HTTPException(400, "Выберите MP4, MKV, WebM или MOV.")
     with database() as connection:
+        media_storage.lock(connection)
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner,))
         existing = connection.execute("SELECT * FROM video_jobs WHERE id=%s", (body.id,)).fetchone()
         if existing:
             if existing["owner_id"] != owner or existing["filename"] != body.filename or existing["size_bytes"] != body.size_bytes or existing["account_id"] != body.account_id:
                 raise HTTPException(409, "Этот запрос уже относится к другому файлу.")
+            if existing['nickname'] != body.nickname or any(existing.get(key) != getattr(body, key)
+                    for key in ('hero','position','mmr','training_level')):
+                raise HTTPException(409, "Контекст этого разбора уже сохранён. Начните новую загрузку.")
             if existing["state"] == "deleted":
                 raise HTTPException(409, "Видео удалено. Начните новую загрузку.")
             return {"video": public(existing), "part_bytes": PART_BYTES}
         allowance=budget.status(connection)
         if not allowance['enabled'] or allowance['available_microusd']<budget.RESERVATION:
             raise HTTPException(503, "Тестовый бюджет видеоанализа исчерпан или приостановлен. Сохранённые результаты доступны.")
+        mode = configured_mode()
+        if mode == 'selective_v1' and not coach_available(connection, owner):
+            raise HTTPException(503, "Разбор с тренером временно недоступен. Сохранённые результаты доступны.")
         limits = connection.execute("SELECT count(*) FILTER (WHERE created_at>now()-interval '1 day') AS daily, coalesce(sum(size_bytes) FILTER(WHERE storage_deleted_at IS NULL),0) AS stored FROM video_jobs WHERE owner_id=%s", (owner,)).fetchone()
         if limits["daily"] >= 4 or limits["stored"] + body.size_bytes > 8 * 1024**3:
             raise HTTPException(429, "Лимит видео исчерпан. Удалите ненужные файлы или повторите позже.")
-        row = connection.execute("INSERT INTO video_jobs(id,owner_id,account_id,nickname,filename,size_bytes) VALUES (%s,%s,%s,%s,%s,%s) RETURNING *", (body.id,owner,body.account_id,body.nickname,body.filename,body.size_bytes)).fetchone()
+        media_storage.check_admission(connection, owner, body.size_bytes)
+        row = connection.execute("""INSERT INTO video_jobs(id,owner_id,account_id,nickname,filename,size_bytes,
+            analysis_mode,hero,position,mmr,training_level) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (body.id,owner,body.account_id,body.nickname,body.filename,body.size_bytes,mode,body.hero,body.position,body.mmr,body.training_level)).fetchone()
         directory = job_directory(body.id)
         if directory.exists():
             # A rolled-back initialization may leave an empty directory only.
             if any(directory.iterdir()):
                 raise HTTPException(409, "Повторите загрузку с новым заданием.")
         else:
-            directory.mkdir(mode=0o700, parents=True)
+            with media_storage.storage_errors():
+                directory.mkdir(mode=0o700, parents=True)
     return {"video": public(row), "part_bytes": PART_BYTES}
 
 @app.get("/v1/videos/{job_id}")
 def get_video(job_id: UUID, owner: Owner, after: int = -1):
+    from .video_analysis import public_analysis
     with database() as connection:
         row = owned(connection, owner, job_id)
         parts = connection.execute("SELECT part_number FROM video_parts WHERE job_id=%s ORDER BY part_number", (job_id,)).fetchall()
         batches = connection.execute("SELECT first_frame,last_frame,first_pts_seconds,last_pts_seconds,payload FROM video_batches WHERE job_id=%s AND first_frame>%s ORDER BY first_frame LIMIT 30", (job_id, max(-1,after))).fetchall()
+        analysis = public_analysis(connection, row)
     return {"video": public(row), "parts": [p["part_number"] for p in parts], "batches": batches,
+            "analysis": analysis,
             "next_cursor": batches[-1]["first_frame"] if len(batches)==30 else None}
 
 @app.put("/v1/videos/{job_id}/parts/{part_number}")
 async def upload_part(job_id: UUID, part_number: int, request: Request, owner: Owner):
+    # Reject foreign IDs and closed uploads before reading their request body.
+    expected = await run_in_threadpool(video_part_size, job_id, part_number, owner)
+    length = request.headers.get("content-length")
+    if length and (not length.isdigit() or int(length) > expected):
+        raise HTTPException(413, "Часть файла слишком велика.")
     data = bytearray()
     async for chunk in request.stream():
-        if len(data) + len(chunk) > PART_BYTES:
+        if len(data) + len(chunk) > expected:
             raise HTTPException(413, "Часть файла слишком велика.")
         data.extend(chunk)
+    return await run_in_threadpool(store_video_part, job_id, part_number, bytes(data), owner)
+
+
+def video_part_size(job_id, part_number, owner):
     with database() as connection:
+        row = owned(connection, owner, job_id)
+        if row["state"] != "uploading" or not 1 <= part_number <= math.ceil(row["size_bytes"] / PART_BYTES):
+            raise HTTPException(409, "Загрузка закрыта или номер части неверен.")
+        return min(PART_BYTES, row["size_bytes"] - (part_number - 1) * PART_BYTES)
+
+
+def store_video_part(job_id, part_number, data, owner):
+    with database() as connection:
+        media_storage.lock(connection)
         row = owned(connection, owner, job_id, True)
         expected = min(PART_BYTES, row["size_bytes"] - (part_number-1)*PART_BYTES)
         if row["state"] != "uploading" or part_number < 1 or part_number > math.ceil(row["size_bytes"]/PART_BYTES):
@@ -167,12 +213,22 @@ async def upload_part(job_id: UUID, part_number: int, request: Request, owner: O
             raise HTTPException(400, "Часть файла передана не полностью.")
         if part_number == 1 and not (data[4:8] == b"ftyp" or data[:4] == b"\x1aE\xdf\xa3"):
             raise HTTPException(415, "Не удалось определить формат видео.")
+        digest = hashlib.sha256(data).hexdigest()
+        previous = connection.execute("SELECT sha256,size_bytes FROM video_parts WHERE job_id=%s AND part_number=%s", (job_id, part_number)).fetchone()
+        if previous and (previous["sha256"] != digest or previous["size_bytes"] != len(data)):
+            raise HTTPException(409, "Содержимое загруженной части изменилось. Начните новую загрузку.")
+        media_storage.check_space(connection)
         directory = job_directory(job_id)
         temporary = directory / f"{uuid4()}.tmp"
         try:
-            temporary.write_bytes(data)
-            os.replace(temporary, directory / f"part-{part_number}")
-            connection.execute("INSERT INTO video_parts(job_id,part_number,size_bytes,sha256) VALUES (%s,%s,%s,%s) ON CONFLICT(job_id,part_number) DO UPDATE SET size_bytes=excluded.size_bytes,sha256=excluded.sha256", (job_id,part_number,len(data),hashlib.sha256(data).hexdigest()))
+            with media_storage.storage_errors():
+                with temporary.open("xb") as destination:
+                    os.chmod(temporary, 0o600)
+                    destination.write(data)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                os.replace(temporary, directory / f"part-{part_number}")
+            connection.execute("INSERT INTO video_parts(job_id,part_number,size_bytes,sha256) VALUES (%s,%s,%s,%s) ON CONFLICT(job_id,part_number) DO NOTHING", (job_id,part_number,len(data),digest))
         finally:
             temporary.unlink(missing_ok=True)
     return {"uploaded": True, "part_number": part_number}
@@ -180,6 +236,7 @@ async def upload_part(job_id: UUID, part_number: int, request: Request, owner: O
 @app.post("/v1/videos/{job_id}/complete")
 def complete_video(job_id: UUID, owner: Owner):
     with database() as connection:
+        media_storage.lock(connection)
         row = owned(connection, owner, job_id, True)
         if row["state"] in ("queued", "processing", "ready"):
             return {"video": public(row)}
@@ -190,14 +247,24 @@ def complete_video(job_id: UUID, owner: Owner):
             raise HTTPException(409, "Переданы не все части видео.")
         directory = job_directory(job_id); digest = hashlib.sha256()
         temporary = directory / "source.pending"
+        media_storage.check_space(connection)
         try:
-            with temporary.open("wb") as destination:
+            with media_storage.storage_errors(), temporary.open("wb") as destination:
+                os.chmod(temporary, 0o600)
                 for number, part in enumerate(parts,1):
-                    data = (directory / f"part-{number}").read_bytes()
-                    if part["part_number"] != number or hashlib.sha256(data).hexdigest() != part["sha256"]:
+                    path = directory / f"part-{number}"
+                    expected = min(PART_BYTES, row["size_bytes"] - (number-1)*PART_BYTES)
+                    if (part["part_number"] != number or part["size_bytes"] != expected
+                            or not path.is_file() or path.stat().st_size != expected):
+                        raise HTTPException(409, "Проверка целостности видео не прошла.")
+                    data = path.read_bytes()
+                    if len(data) != expected or hashlib.sha256(data).hexdigest() != part["sha256"]:
                         raise HTTPException(409, "Проверка целостности видео не прошла.")
                     destination.write(data); digest.update(data)
-            os.replace(temporary, directory / "source")
+                destination.flush()
+                os.fsync(destination.fileno())
+            with media_storage.storage_errors():
+                os.replace(temporary, directory / "source")
             row = connection.execute("UPDATE video_jobs SET state='queued',source_sha256=%s,updated_at=now() WHERE id=%s RETURNING *", (digest.hexdigest(),job_id)).fetchone()
         finally:
             temporary.unlink(missing_ok=True)
@@ -219,11 +286,17 @@ def source(job_id: UUID, owner: Owner):
 
 @app.delete("/v1/videos/{job_id}")
 def delete_video(job_id: UUID, owner: Owner):
+    from .openai_provider import forget_output
     with database() as connection:
+        media_storage.lock(connection)
+        connection.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,1))', (owner,))
         row=connection.execute("SELECT id FROM video_jobs WHERE id=%s AND owner_id=%s FOR UPDATE",(job_id,owner)).fetchone()
         if not row:
             raise HTTPException(404,"Видео не найдено.")
-        connection.execute("UPDATE video_jobs SET state='deleted',lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE id=%s", (job_id,))
+        connection.execute("""UPDATE video_jobs SET state='deleted',lease_token=NULL,lease_expires_at=NULL,
+            video_plan=NULL,video_coaching=NULL,updated_at=now() WHERE id=%s""", (job_id,))
+        forget_output(connection, owner_id=owner, video_job_id=job_id)
+        connection.execute('DELETE FROM video_analysis_steps WHERE job_id=%s', (job_id,))
         connection.execute("DELETE FROM video_batches WHERE job_id=%s", (job_id,))
         connection.execute("DELETE FROM video_parts WHERE job_id=%s", (job_id,))
     try:
@@ -241,12 +314,26 @@ from .web import attach_web
 attach_web(app)
 from .replay_jobs import attach_replays
 attach_replays(app)
+from .coach_chat import attach_coach_chat
+attach_coach_chat(app)
 from .replay_archive import attach_replay_archive
 attach_replay_archive(app)
 from .hero_pool import attach_hero_pool
 attach_hero_pool(app)
 from .learning import attach_learning
 attach_learning(app)
+from .growth import attach_growth
+attach_growth(app)
+from .player_profile import attach_player_profile
+attach_player_profile(app)
+from .human_coach import attach_human_coach
+attach_human_coach(app)
+from .player_program import attach_program
+attach_program(app)
+from .billing import attach_billing
+attach_billing(app)
+from .owner_dashboard import attach_owner_dashboard
+attach_owner_dashboard(app)
 from .hermes_bridge import attach_hermes
 attach_hermes(app)
 from .chatgpt_auth import attach_chatgpt
@@ -265,17 +352,26 @@ app.mount('/assets',StaticFiles(directory=STATIC_ROOT),name='portal-assets')
 @app.get('/learn')
 @app.get('/practice')
 @app.get('/updates')
+@app.get('/example')
+@app.get('/start')
 def explore_page():
     return FileResponse(STATIC_ROOT/'explore.html',media_type='text/html',headers={'Cache-Control':'no-cache'})
 
 
 @app.get('/setup')
+@app.get('/register')
+@app.get('/login')
+@app.get('/coach')
 @app.get('/videos')
 @app.get('/replays')
 @app.get('/hero-pool')
 @app.get('/player')
+@app.get('/player-profile')
+@app.get('/human-coach')
 @app.get('/my-learning')
+@app.get('/training')
 @app.get('/account')
+@app.get('/owner')
 def portal_page():
     return FileResponse(STATIC_ROOT/'index.html',media_type='text/html',headers={'Cache-Control':'no-store'})
 

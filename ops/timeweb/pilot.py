@@ -17,11 +17,13 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from preflight import CheckError, NoRedirect, ORIGIN
 from prebuilt_images import ImageError, prepare_bundle
 from stratz_secrets import build_stats_payload, build_stats_source
+from openai_secrets import validate_key as validate_openai_key
+from coaching_evidence import collect_rollout_snapshot
 
 NAME = "narma-vision-pilot-01"
 MARKER = "NARMA managed pilot San4o9910/dota2_ai 2026-09-06"
@@ -32,8 +34,8 @@ MAX_VM_MONTH_EQUIVALENT = 2760
 PINNED_TARGET = {"server_id": 9037783, "project_id": 2655641, "ipv4": "72.56.98.68"}
 
 
-def event(name, **values):
-    print(json.dumps({"event": name, **values}), flush=True)
+def event(event_name, **values):
+    print(json.dumps({"event": event_name, **values}), flush=True)
 
 
 def validate_build_reviews(evidence, guides):
@@ -83,13 +85,12 @@ class Cloud:
                     continue
                 # Do not log bodies: VM/S3 responses may contain passwords and keys.
                 raise CheckError("cloud_http_" + str(status) + "_" + method + "_" + path.split("?")[0]) from None
-            except (urllib.error.URLError, TimeoutError):
+            except (urllib.error.URLError, TimeoutError, OSError):
                 if attempt + 1 < attempts:
                     time.sleep((2, 4)[attempt])
                     continue
-                raise CheckError("cloud_request_outcome_unknown") from None
-            except OSError:
-                raise CheckError("cloud_request_outcome_unknown") from None
+                code = "cloud_read_unavailable" if method == "GET" else "cloud_request_outcome_unknown"
+                raise CheckError(code + "_" + method + "_" + path.split("?")[0]) from None
             except (ValueError, UnicodeError):
                 raise CheckError("cloud_response_invalid") from None
 
@@ -100,7 +101,32 @@ class Cloud:
         return value
 
 
-def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
+class BootstrapDeferred(CheckError):
+    """This attempt proved no stop was attempted; leave live containers alone."""
+
+
+def bootstrap_deferred(result, attempt):
+    if result.returncode != 75 or not isinstance(attempt, str) or not re.fullmatch('[0-9a-f]{32}', attempt):
+        return False
+    stages = [line for line in result.stdout.splitlines() if line.startswith(b'NARMA_BOOTSTRAP_STAGE:')]
+    if not stages or stages[-1] != b'NARMA_BOOTSTRAP_STAGE:quiesce_workers':
+        return False
+    if result.stderr.splitlines().count(b'NARMA_BOOTSTRAP_FAILURE:quiesce_workers:75') != 1:
+        return False
+    receipts = []
+    for line in result.stdout.splitlines():
+        try:
+            value = json.loads(line)
+        except (ValueError, UnicodeError):
+            continue
+        if isinstance(value, dict) and value.get('event') == 'deployment_quiescence_failed':
+            receipts.append(value)
+    return (len(receipts) == 1 and set(receipts[0]) == {'event', 'code', 'disposition', 'attempt'}
+        and receipts[0]['disposition'] == 'deferred_before_stop' and receipts[0]['attempt'] == attempt
+        and isinstance(receipts[0]['code'], str) and bool(re.fullmatch('deployment_[a-z_]{1,80}', receipts[0]['code'])))
+
+
+def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command", deferred_attempt=None):
     # Never expose raw stdout/stderr from commands that may handle secrets.
     result = subprocess.run(argv, input=input, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, timeout=timeout)
@@ -133,7 +159,7 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
                 item=json.loads(line)
                 event('provider_usage_diagnostic',keys=item.get('keys'),usage=item.get('usage'),billing_status=item.get('billing_status'))
     if bootstrap:
-        stages = {"lock", "cloud_init", "packages", "docker_firewall", "stop_worker", "prebuilt_images",
+        stages = {"lock", "cloud_init", "packages", "docker_firewall", "quiesce_workers", "stop_worker", "prebuilt_images",
                   "build", "database_api", "readiness", "ready"}
         for line in (result.stdout + b"\n" + result.stderr).splitlines():
             vision_state = re.fullmatch(rb"NARMA_GEMINI_CHECK:(passed|previously_passed|previous_attempt_unresolved|failed)", line)
@@ -174,17 +200,93 @@ def command(argv, *, input=None, timeout=180, bootstrap=False, phase="command"):
                 except (ValueError, TypeError):
                     pass
     if result.returncode:
+        if bootstrap and phase == 'bootstrap' and bootstrap_deferred(result, deferred_attempt):
+            event('deployment_deferred', reason='workers_not_proved_idle', live_workers_preserved=True)
+            raise BootstrapDeferred('deployment_deferred_before_stop')
         phases = {"command", "release_directory", "source_transfer", "secret_install", "bootstrap", "gemini_check"}
         safe_phase = phase if phase in phases else "command"
         raise CheckError("command_failed_" + safe_phase + "_exit_" + str(result.returncode))
     return result.stdout
 
 
+def restore_bootstrap_failure(error, ssh, release, sha, hostname):
+    if isinstance(error, BootstrapDeferred):
+        try:
+            command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py rollback-tags " + sha], timeout=150)
+            event('settings_and_image_tags_restored_before_stop')
+        except Exception:
+            event('settings_and_image_tags_restore_unconfirmed')
+        return
+    try:
+        command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py rollback " + sha], timeout=150)
+        event("previous_images_and_api_restored")
+    except Exception:
+        event("previous_images_and_api_restore_unconfirmed")
+    try:
+        command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+' --rollback-only'],timeout=150)
+        event('previous_worker_restored_after_bootstrap_failure')
+    except Exception:
+        event('previous_worker_restore_unconfirmed')
+
+
+def prepare_before_bootstrap(ssh, release, sha, deployment_attempt, secret_input, image_archive,
+        *, server_id, activate_hermes=False, prepare_chatgpt_auth=False, prepare_openai_api=False):
+    """Prepare files/images without changing running containers or draining work.
+
+On failure, loaded image tags/cache may remain pending. The next attempt
+reinstalls and revalidates them; stale image checkpoints never stop live work.
+"""
+    try:
+        command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
+        event("installing_private_services", server_id=server_id, release=sha)
+        command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
+        if not activate_hermes and not prepare_chatgpt_auth and not prepare_openai_api:
+            # Refuse an update that would silently disable an active runtime.
+            deploy_hermes(ssh, release, sha)
+        transfer_image_archive(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py receive " + sha], image_archive)
+        command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py install " + sha], timeout=1000)
+        event("prebuilt_images_installed", release=sha, immutable_ids_verified=True)
+    except Exception:
+        # This attempt has not invoked bootstrap or changed containers. Restore
+        # its settings only; do not consult a possibly stale image checkpoint.
+        rollback_code = prebootstrap_rollback_code(release, sha, deployment_attempt,
+            prepare_chatgpt_auth=prepare_chatgpt_auth, prepare_openai_api=prepare_openai_api)
+        try:
+            command(ssh + ['python3 -c ' + shlex.quote(rollback_code)], timeout=30)
+            event('provider_settings_restored_before_bootstrap')
+        except Exception:
+            event('provider_settings_restore_unconfirmed')
+        raise
+
+
 def emit_image_failure(line):
+    """Forward only whitelisted image failure codes and aggregate storage evidence."""
     try:
         item = json.loads(line)
+        if not isinstance(item, dict):
+            return
         if item.get("event") == "prebuilt_images_failed" and re.fullmatch("prebuilt_[a-z_]{1,80}", item.get("code", "")):
             event("prebuilt_images_failed", code=item["code"])
+            return item["code"]
+        elif item.get("event") == "prebuilt_image_retention":
+            if (set(item) == {"event", "removed_images", "examined_images", "cleanup_status"}
+                    and type(item["removed_images"]) is int and type(item["examined_images"]) is int
+                    and 0 <= item["removed_images"] <= item["examined_images"] <= 24
+                    and item["cleanup_status"] in {"not_needed", "completed", "unavailable", "bounded"}):
+                event("prebuilt_image_retention", **{key: value for key, value in item.items() if key != "event"})
+        elif item.get("event") == "prebuilt_storage_check":
+            numbers = {"required_bytes", "free_before_bytes", "free_after_bytes",
+                "reclaimed_bytes", "reclaimed_archives", "eligible_bytes", "eligible_archives"}
+            if (set(item) != numbers | {"event", "cleanup_status", "capacity_ok"}
+                    or any(type(item[key]) is not int or not 0 <= item[key] < 2**63 for key in numbers)
+                    or not 0 < item["required_bytes"] <= 44 * 1024**3
+                    or not item["reclaimed_archives"] <= item["eligible_archives"] <= 256
+                    or item["reclaimed_bytes"] > item["eligible_bytes"]
+                    or item["cleanup_status"] not in {"not_needed", "completed", "unavailable", "bounded"}
+                    or type(item["capacity_ok"]) is not bool
+                    or item["capacity_ok"] != (item["free_after_bytes"] >= item["required_bytes"])):
+                return
+            event("prebuilt_storage_check", **{key: value for key, value in item.items() if key != "event"})
     except (ValueError, TypeError):
         pass
 
@@ -195,10 +297,13 @@ def transfer_image_archive(argv, archive, timeout=900):
         with Path(archive).open("rb") as source, tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
             result = subprocess.run(argv, stdin=source, stdout=output, stderr=errors, timeout=timeout)
             output.seek(0)
+            failure_code = None
             for line in output.read(65536).splitlines():
-                emit_image_failure(line)
+                failure_code = emit_image_failure(line) or failure_code
             if result.returncode:
-                raise CheckError("prebuilt_archive_transfer_failed")
+                # Preserve the actual authenticated receiver error instead of
+                # hiding a full disk behind a generic network-transfer failure.
+                raise CheckError(failure_code or "prebuilt_archive_transfer_failed")
     except (OSError, subprocess.TimeoutExpired):
         raise CheckError("prebuilt_archive_transfer_failed") from None
 
@@ -283,8 +388,9 @@ def ensure_https(ssh,release,hostname,host):
             raise CheckError('https_auth_check_failed') from None
     event('https_public_endpoint',origin='https://'+hostname,certificate_verified=True,anonymous_api_status=401)
     portal_origin='https://'+hostname
-    for path,signature in (('/',b'NARMA VISION'),('/replays',b'/assets/portal.js'),
+    for path,signature in (('/',b'NARMA VISION'),('/coach',b'/assets/portal.js'),('/replays',b'/assets/portal.js'),
                            ('/my-learning',b'pool-learning'),('/assets/portal.js',b'/api/session'),
+                           ('/assets/personal-coach.js',b'createPersonalCoach'),
                            ('/assets/portal.css',b'--surface'),('/practice',b'/assets/explore.js'),
                            ('/builds',b'/assets/builds.css'),('/assets/builds.js',b'build-inventory-grid'),
                            ('/assets/build-meta.js',b'/api/explore/builds?guide='),
@@ -455,9 +561,72 @@ def validate_chatgpt_preparation(state):
         gemini_ledger_preserved=True)
 
 
-def main(*, activate_hermes=False, prepare_chatgpt_auth=False):
-    if activate_hermes and prepare_chatgpt_auth:
+def provider_modes(existing, *, activate_hermes=False, prepare_chatgpt_auth=False, prepare_openai_api=False):
+    """Explicit changes win; ordinary releases preserve an existing API provider."""
+    if sum((bool(activate_hermes), bool(prepare_chatgpt_auth), bool(prepare_openai_api))) > 1:
         raise CheckError('conflicting_provider_activation_modes')
+    if activate_hermes or prepare_chatgpt_auth or prepare_openai_api:
+        return prepare_chatgpt_auth, prepare_openai_api
+    if not isinstance(existing, dict) or set(existing) != {'replay', 'hermes'}:
+        raise CheckError('existing_provider_configuration_invalid')
+    values = set(existing.values())
+    if not values <= {'gemini', 'chatgpt_subscription', 'openai_api', None}:
+        raise CheckError('existing_provider_configuration_invalid')
+    if 'openai_api' in values:
+        if values != {'openai_api'}:
+            raise CheckError('existing_provider_configuration_mixed')
+        return False, True
+    # This preserves a previously selected personal-provider deployment. It never
+    # opts a Gemini/disabled installation into owner OAuth just because of push.
+    if 'chatgpt_subscription' in values:
+        if values != {'chatgpt_subscription'}:
+            raise CheckError('existing_provider_configuration_mixed')
+        return True, False
+    return False, False
+
+
+def validate_openai_preparation(state):
+    if (not isinstance(state, dict) or state.get('event') != 'openai_api_ready'
+            or state.get('provider') != 'openai_api' or state.get('configured') is not True
+            or state.get('video_mode') != 'selective_v1'
+            or state.get('network_isolation_verified') is not True
+            or state.get('resource_lock_available') is not True
+            or state.get('generation_smoke_performed') is not False
+            or state.get('provider_calls_created_by_preflight') != 0
+            or state.get('existing_ledgers_preserved') is not True):
+        raise CheckError('openai_preparation_unverified')
+    event('openai_api_ready', configured=True, provider='openai_api', video_mode='selective_v1',
+        generation_smoke_performed=False, provider_calls_created_by_preflight=0,
+        provider_access_verified=False, existing_ledgers_preserved=True,
+        explicit_allowance_configured=state.get('explicit_allowance_configured') is True)
+
+
+def prebootstrap_rollback_code(release, sha, attempt, *, prepare_chatgpt_auth=False, prepare_openai_api=False):
+    """Undo only this attempt's selected provider; an earlier snapshot is stale."""
+    code = 'import sys; sys.path.insert(0,' + repr(release + '/ops/timeweb') + '); '
+    if prepare_openai_api:
+        return (code + 'from openai_secrets import restore_settings; '
+            'restore_settings(' + repr(sha) + ',attempt=' + repr(attempt) + ')')
+    if prepare_chatgpt_auth:
+        return code + 'from chatgpt_secrets import restore_settings; restore_settings(' + repr(sha) + ')'
+    return code + 'pass'
+
+
+def main(*, activate_hermes=False, prepare_chatgpt_auth=False, prepare_openai_api=False):
+    # Reject conflicting CLI calls and invalid budget inputs before cloud access.
+    provider_modes({'replay': None, 'hermes': None}, activate_hermes=activate_hermes,
+        prepare_chatgpt_auth=prepare_chatgpt_auth, prepare_openai_api=prepare_openai_api)
+    from prepare_openai_api import allowance_input
+    try:
+        openai_allowance = allowance_input(os.getenv('OPENAI_LIMIT_MICROUSD'), os.getenv('OPENAI_EXPIRES_AT'))
+        if openai_allowance and not prepare_openai_api:
+            raise RuntimeError('openai_explicit_allowance_mode_required')
+        incoming_openai_key = os.getenv('OPENAI_API_KEY', '') if prepare_openai_api else ''
+        if incoming_openai_key:
+            validate_openai_key(incoming_openai_key)
+    except RuntimeError as error:
+        raise CheckError(str(error)) from None
+    explicit_openai = prepare_openai_api
     try:
         statistics_payload = build_stats_payload(os.environ)
     except ValueError:
@@ -587,6 +756,20 @@ runcmd:
                 technical=[d.get('fqdn') for d in domains.get('domains',[]) if d.get('is_technical') is True and d.get('linked_ip')==host]
                 hostname=technical[0] if len(technical)==1 else 'narma-'+host.replace('.','-')+'.sslip.io'
             release = "/opt/narma/releases/" + sha
+            existing_code = '''import json,pathlib
+p=pathlib.Path('/opt/narma/secrets/video.env')
+v=dict(line.split('=',1) for line in p.read_text().splitlines()) if p.is_file() else {}
+allowed={'gemini','chatgpt_subscription','openai_api',None}
+providers={'replay':v.get('REPLAY_COACH_PROVIDER'),'hermes':v.get('HERMES_PROVIDER')}
+assert set(providers.values())<=allowed
+print(json.dumps({'providers':providers,'openai_key_present':bool(v.get('OPENAI_API_KEY'))}))
+'''
+            existing_modes = json.loads(command(ssh + ['python3 -c ' + shlex.quote(existing_code)], timeout=30))
+            prepare_chatgpt_auth, prepare_openai_api = provider_modes(existing_modes.get('providers'),
+                activate_hermes=activate_hermes, prepare_chatgpt_auth=prepare_chatgpt_auth,
+                prepare_openai_api=prepare_openai_api)
+            if prepare_openai_api and not incoming_openai_key and existing_modes.get('openai_key_present') is not True:
+                raise CheckError('missing_openai_secret')
             command(ssh+["mkdir -p " + release], timeout=30, phase="release_directory")
             archive = temporary/"source.tar.gz"
             with tarfile.open(archive, "w:gz") as bundle:
@@ -605,33 +788,23 @@ runcmd:
             command(ssh+["tar --no-same-owner -xzf - -C " + release], input=archive.read_bytes(), timeout=120, phase="source_transfer")
             # Secrets cross SSH only; none enters cloud-init, the source archive,
             # GitHub artifacts, command arguments or public logs.
+            deployment_attempt = uuid4().hex
             secret_input = json.dumps({"gemini_key":key, "release":sha,
+                                      "deployment_attempt":deployment_attempt,
                                       **statistics_payload,
-                                      "prepare_chatgpt_auth":prepare_chatgpt_auth}).encode()
-            command(ssh+["python3 " + release + "/ops/timeweb/write_secrets.py"], input=secret_input, timeout=30, phase="secret_install")
-            event("installing_private_services", server_id=server_id, release=sha)
-            command(ssh+['python3 '+release+'/ops/timeweb/snapshot_worker_state.py '+sha],timeout=45)
-            if not activate_hermes and not prepare_chatgpt_auth:
-                # Fail before stopping/changing services if this update would
-                # silently disable a previously active Hermes runtime.
-                deploy_hermes(ssh, release, sha)
+                                      "prepare_chatgpt_auth":prepare_chatgpt_auth,
+                                      "prepare_openai_api":prepare_openai_api,
+                                      "openai_activation_explicit":explicit_openai,
+                                      **({"openai_key":incoming_openai_key} if incoming_openai_key else {})}).encode()
+            prepare_before_bootstrap(ssh, release, sha, deployment_attempt, secret_input, image_archive,
+                server_id=server_id, activate_hermes=activate_hermes,
+                prepare_chatgpt_auth=prepare_chatgpt_auth, prepare_openai_api=prepare_openai_api)
             try:
-                transfer_image_archive(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py receive " + sha], image_archive)
-                command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py install " + sha], timeout=1000)
-                event("prebuilt_images_installed", release=sha, immutable_ids_verified=True)
-                command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha + " --prebuilt"], timeout=1200, bootstrap=True, phase="bootstrap")
+                command(ssh+["bash " + release + "/ops/timeweb/bootstrap.sh " + sha + " --prebuilt " + deployment_attempt],
+                    timeout=1200, bootstrap=True, phase="bootstrap", deferred_attempt=deployment_attempt)
                 ensure_https(ssh,release,hostname,host)
-            except Exception:
-                try:
-                    command(ssh+["python3 " + release + "/ops/timeweb/prebuilt_images.py rollback " + sha], timeout=150)
-                    event("previous_images_and_api_restored")
-                except Exception:
-                    event("previous_images_and_api_restore_unconfirmed")
-                try:
-                    command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+' --rollback-only'],timeout=150)
-                    event('previous_worker_restored_after_bootstrap_failure')
-                except Exception:
-                    event('previous_worker_restore_unconfirmed')
+            except Exception as error:
+                restore_bootstrap_failure(error, ssh, release, sha, hostname)
                 raise
             event("private_services_ready", server_id=server_id, release=sha,
                 public_application=False, worker_enabled=False,
@@ -645,6 +818,11 @@ runcmd:
                 # Learning/schema/owner checks run before starting the replay
                 # worker. Their failure restores the API as well as workers.
                 auth_option = ' --prepare-chatgpt-auth' if prepare_chatgpt_auth else ''
+                if prepare_openai_api:
+                    auth_option = ' --prepare-openai-api'
+                    if openai_allowance:
+                        auth_option += ' --openai-limit-microusd ' + str(openai_allowance['limit_microusd'])
+                        auth_option += ' --openai-expires-at ' + shlex.quote(openai_allowance['expires_at'])
                 output=command(ssh+['python3 '+release+'/ops/timeweb/activate_replays.py '+sha+' '+hostname+auth_option],timeout=540)
                 activated=json.loads(output)
                 if (activated.get('event')!='replay_pipeline_ready'
@@ -652,10 +830,14 @@ runcmd:
                         or activated.get('synthetic_paid_calls')!=0):
                     raise CheckError('replay_pipeline_not_ready')
                 event('replay_pipeline_ready',worker_enabled=True,fresh_worker_heartbeat=True,
-                    video_worker_stopped=True,synthetic_paid_calls=0,
+                    video_worker_stopped=activated.get('video_worker_stopped'),synthetic_paid_calls=0,
                     hero_pool=activated.get('hero_pool'), learning=activated.get('learning'))
                 if prepare_chatgpt_auth:
                     validate_chatgpt_preparation(activated.get('chatgpt'))
+                elif prepare_openai_api:
+                    if activated.get('video_worker_fresh') is not True or activated.get('video_worker_stopped') is not False:
+                        raise CheckError('economic_video_worker_not_ready')
+                    validate_openai_preparation(activated.get('openai'))
                 else:
                     deploy_hermes(ssh, release, sha, activate=activate_hermes)
             except Exception:
@@ -672,6 +854,7 @@ runcmd:
             event('post_activation_allowance',enabled=state.get('enabled'),
                 limit_microusd=state.get('limit_microusd'),spent_microusd=state.get('spent_microusd'),
                 reserved_microusd=state.get('reserved_microusd'))
+            collect_rollout_snapshot(ssh, release, command, event)
             handoff=Path('ops/timeweb/bridge-handoff.json')
             if handoff.exists():
                 expected=json.loads(handoff.read_text())
@@ -706,6 +889,8 @@ if __name__ == "__main__":
             main(activate_hermes=True)
         elif sys.argv[1:] == ['--prepare-chatgpt-auth']:
             main(prepare_chatgpt_auth=True)
+        elif sys.argv[1:] == ['--prepare-openai-api']:
+            main(prepare_openai_api=True)
         else:
             raise CheckError("invalid_pilot_arguments")
     except CheckError as error:

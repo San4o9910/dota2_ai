@@ -11,8 +11,6 @@ import tempfile
 import time
 from uuid import uuid4
 
-import boto3
-from botocore.config import Config
 from pilot import Cloud,CheckError,MARKER,NAME,address,command,event
 
 SERVER=9037783
@@ -24,7 +22,7 @@ MAX_DUMP=1024**3-16*1024**2  # Seven retained copies + next copy + manifests fit
 
 # Conditional queries preserve the ability to restore earlier pilot snapshots.
 REPLAY_RESTORE_SQL="""SELECT json_build_object(
-    'tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('replay_jobs','replay_parts','replay_workers')),
+    'tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name IN ('replay_jobs','replay_parts','replay_workers')),
     'jobs',(SELECT count(*) FROM replay_jobs),
     'orphan_jobs',(SELECT count(*) FROM replay_jobs j LEFT JOIN portal_accounts a ON a.owner_id=j.owner_id WHERE a.owner_id IS NULL),
     'orphan_parts',(SELECT count(*) FROM replay_parts p LEFT JOIN replay_jobs j ON j.id=p.job_id WHERE j.id IS NULL),
@@ -32,6 +30,7 @@ REPLAY_RESTORE_SQL="""SELECT json_build_object(
         j.result_payload->>'match_id' IS DISTINCT FROM j.match_id
         OR j.result_payload->'player'->>'account_id' IS DISTINCT FROM j.account_id::text))
 );"""
+
 PROVIDER_RESTORE_SQL="""SELECT json_build_object(
     'invalid_call_jobs',(SELECT count(*) FROM video_provider_calls c
         LEFT JOIN video_jobs v ON v.id=c.job_id
@@ -39,11 +38,180 @@ PROVIDER_RESTORE_SQL="""SELECT json_build_object(
         WHERE CASE c.call_kind
             WHEN 'video' THEN c.job_id IS NULL OR c.replay_job_id IS NOT NULL
                 OR v.id IS NULL OR c.owner_id IS DISTINCT FROM v.owner_id
+                OR c.first_frame<0 OR c.last_frame<c.first_frame
             WHEN 'replay' THEN c.job_id IS NOT NULL OR c.replay_job_id IS NULL
                 OR r.id IS NULL OR c.owner_id IS DISTINCT FROM r.owner_id
                 OR c.first_frame<>0 OR c.last_frame<>0
             ELSE true END)
 );"""
+
+
+def provider_restore_sql(migrations):
+    """Use the source schema's legal targets; never accept unknown call kinds."""
+    if '011_hermes_runtime.sql' not in migrations:
+        return PROVIDER_RESTORE_SQL
+    provider_check = (" OR h.provider IS DISTINCT FROM 'gemini' OR h.model IS DISTINCT FROM c.model"
+                      if '015_hermes_chatgpt_provider.sql' in migrations else '')
+    return """SELECT json_build_object('invalid_call_jobs',count(*) FILTER (WHERE invalid),
+        'invalid_video',count(*) FILTER (WHERE invalid AND call_kind='video'),
+        'invalid_replay',count(*) FILTER (WHERE invalid AND call_kind='replay'),
+        'invalid_hermes',count(*) FILTER (WHERE invalid AND call_kind='hermes'))
+        FROM (SELECT c.call_kind,CASE c.call_kind
+            WHEN 'video' THEN c.job_id IS NULL OR c.replay_job_id IS NOT NULL
+                OR c.hermes_task_id IS NOT NULL OR v.id IS NULL
+                OR c.owner_id IS DISTINCT FROM v.owner_id
+                OR c.first_frame<0 OR c.last_frame<c.first_frame
+            WHEN 'replay' THEN c.job_id IS NOT NULL OR c.replay_job_id IS NULL
+                OR c.hermes_task_id IS NOT NULL OR r.id IS NULL
+                OR c.owner_id IS DISTINCT FROM r.owner_id OR c.first_frame<>0 OR c.last_frame<>0
+            WHEN 'hermes' THEN c.job_id IS NOT NULL OR c.replay_job_id IS NOT NULL
+                OR c.hermes_task_id IS NULL OR h.id IS NULL
+                OR c.owner_id IS DISTINCT FROM h.owner_id OR c.first_frame<>0 OR c.last_frame<>0
+                """ + provider_check + """
+            ELSE true END AS invalid
+        FROM video_provider_calls c LEFT JOIN video_jobs v ON v.id=c.job_id
+        LEFT JOIN replay_jobs r ON r.id=c.replay_job_id
+        LEFT JOIN hermes_tasks h ON h.id=c.hermes_task_id) checks;"""
+
+
+def openai_restore_sql(migrations):
+    hermes_check = ("c.job_id IS NOT NULL OR c.video_job_id IS NOT NULL OR c.task_id IS NULL "
+        "OR h.id IS NULL OR c.owner_id IS DISTINCT FROM h.owner_id "
+        "OR c.source_sha256 IS DISTINCT FROM h.snapshot_sha256 "
+        "OR h.provider IS DISTINCT FROM 'openai_api' OR h.model IS DISTINCT FROM c.model"
+        if '020_hermes_openai.sql' in migrations else 'true')
+    has_chat = '024_coach_chat.sql' in migrations
+    chat_join = (" LEFT JOIN coach_chat_turns cc ON cc.id=c.task_id"
+        " LEFT JOIN replay_jobs cr ON cr.id=cc.job_id" if has_chat else '')
+    chat_check = ("c.job_id IS NOT NULL OR c.video_job_id IS NOT NULL OR c.task_id IS NULL "
+        "OR cc.id IS NULL OR c.owner_id IS DISTINCT FROM cc.owner_id "
+        "OR c.source_sha256 IS DISTINCT FROM cc.snapshot_sha256 "
+        "OR cr.id IS NULL OR cc.owner_id IS DISTINCT FROM cr.owner_id" if has_chat else 'true')
+    return """SELECT json_build_object(
+        'tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema()
+            AND table_name IN ('openai_api_budget','openai_api_calls')),
+        'budget_rows',(SELECT count(*) FROM openai_api_budget),
+        'invalid_call_jobs',(SELECT count(*) FROM openai_api_calls c
+            LEFT JOIN replay_jobs r ON r.id=c.job_id
+            LEFT JOIN video_jobs v ON v.id=c.video_job_id
+            LEFT JOIN hermes_tasks h ON h.id=c.task_id """ + chat_join + """
+            WHERE CASE c.kind
+                WHEN 'replay' THEN c.job_id IS NULL OR c.video_job_id IS NOT NULL OR c.task_id IS NOT NULL
+                    OR r.id IS NULL OR c.owner_id IS DISTINCT FROM r.owner_id
+                    OR c.source_sha256 IS DISTINCT FROM r.source_sha256
+                WHEN 'video' THEN c.video_job_id IS NULL OR c.job_id IS NOT NULL OR c.task_id IS NOT NULL
+                    OR v.id IS NULL OR c.owner_id IS DISTINCT FROM v.owner_id
+                    OR c.source_sha256 IS DISTINCT FROM v.source_sha256
+                WHEN 'hermes' THEN """ + hermes_check + """
+                WHEN 'chat' THEN """ + chat_check + """ ELSE true END),
+        'invalid_call_accounting',(SELECT count(*) FROM openai_api_calls c
+            LEFT JOIN openai_api_budget b ON b.id=c.budget_id
+            WHERE b.id IS NULL OR c.model IS DISTINCT FROM b.model OR CASE c.billing_status
+                WHEN 'reserved' THEN c.state NOT IN ('reserved','calling') OR c.charged_microusd IS NOT NULL
+                WHEN 'unknown' THEN c.state<>'unknown' OR c.charged_microusd IS NOT NULL
+                WHEN 'settled' THEN c.state NOT IN ('succeeded','failed') OR c.charged_microusd IS NULL
+                WHEN 'breach' THEN c.state<>'failed' OR c.charged_microusd IS NULL
+                ELSE true END),
+        'invalid_budget',(SELECT count(*) FROM openai_api_budget b WHERE b.id<>1
+            OR b.limit_microusd NOT BETWEEN 0 AND 10000000
+            OR b.spent_microusd IS DISTINCT FROM (SELECT coalesce(sum(c.charged_microusd),0)
+                FROM openai_api_calls c WHERE c.budget_id=b.id)
+            OR b.reserved_microusd IS DISTINCT FROM (SELECT coalesce(sum(c.reserved_microusd),0)
+                FROM openai_api_calls c WHERE c.budget_id=b.id AND c.billing_status IN ('reserved','unknown'))));"""
+
+
+def verify_restored_database(query):
+    """Check only the isolated restored database supplied by verify_restore.
+
+    query never receives a source/VPS connection. Migration names select schema
+    features; counts alone cannot identify whether a particular feature exists.
+    """
+    migrations=set(query("SELECT json_build_object('names',coalesce(json_agg(name),'[]'::json)) FROM video_schema_migrations;")['names'])
+    state=query("""SELECT json_build_object('tables',(SELECT count(*) FROM information_schema.tables
+        WHERE table_schema=current_schema() AND table_name IN ('video_schema_migrations','video_jobs','video_parts',
+        'video_batches','video_workers','video_provider_calls','video_ai_budget','video_budget_operations')),
+        'migrations',(SELECT count(*) FROM video_schema_migrations),'jobs',(SELECT count(*) FROM video_jobs),
+        'calls',(SELECT count(*) FROM video_provider_calls),'allowance',(SELECT limit_microusd FROM video_ai_budget WHERE id=1),
+        'orphans',(SELECT count(*) FROM video_batches b LEFT JOIN video_jobs j ON j.id=b.job_id WHERE j.id IS NULL));""")
+    expected_tables=8 if '003_record_generate_content_cutover.sql' in migrations else 7
+    if state['tables']!=expected_tables or '002_global_ai_budget.sql' not in migrations or state['orphans']!=0 or state['allowance']>10000000:
+        raise CheckError('backup_restore_invariants_failed')
+    if '004_standalone_portal.sql' in migrations:
+        portal=query("""SELECT json_build_object('tables',(SELECT count(*) FROM information_schema.tables
+            WHERE table_schema=current_schema() AND table_name IN ('portal_accounts','portal_sessions','portal_auth_limits','portal_dota_profiles','portal_replay_uploads')),
+            'accounts',(SELECT count(*) FROM portal_accounts),
+            'orphan_sessions',(SELECT count(*) FROM portal_sessions s LEFT JOIN portal_accounts a ON a.owner_id=s.owner_id WHERE a.owner_id IS NULL),
+            'orphan_profiles',(SELECT count(*) FROM portal_dota_profiles p LEFT JOIN portal_accounts a ON a.owner_id=p.owner_id WHERE a.owner_id IS NULL));""")
+        singleton='021_portal_multiple_accounts.sql' not in migrations
+        if portal['tables']!=5 or (singleton and portal['accounts']>1) or portal['orphan_sessions'] or portal['orphan_profiles']:
+            raise CheckError('backup_portal_restore_invariants_failed')
+        state['portal']=portal
+    if '023_portal_invites_recovery.sql' in migrations:
+        access=query("""SELECT json_build_object(
+            'tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema()
+                AND table_name IN ('portal_invitations','portal_recovery_codes')),
+            'platform_owners',(SELECT count(*) FROM portal_accounts WHERE is_platform_owner),
+            'orphan_invitations',(SELECT count(*) FROM portal_invitations i
+                LEFT JOIN portal_accounts a ON a.owner_id=i.invited_by WHERE a.owner_id IS NULL),
+            'orphan_recovery_codes',(SELECT count(*) FROM portal_recovery_codes r
+                LEFT JOIN portal_accounts a ON a.owner_id=r.owner_id WHERE a.owner_id IS NULL),
+            'invalid_tokens',(SELECT count(*) FROM portal_invitations WHERE token_hash !~ '^[0-9a-f]{64}$'
+                OR expires_at<=created_at)+(SELECT count(*) FROM portal_recovery_codes
+                WHERE token_hash !~ '^[0-9a-f]{64}$'));
+        """)
+        if (access['tables']!=2 or access['platform_owners']>1 or access['orphan_invitations']
+                or access['orphan_recovery_codes'] or access['invalid_tokens']):
+            raise CheckError('backup_account_access_restore_invariants_failed')
+        state['account_access']=access
+    if '005_replay_analysis.sql' in migrations:
+        replay=query(REPLAY_RESTORE_SQL)
+        if replay['tables']!=3 or replay['orphan_jobs'] or replay['orphan_parts'] or replay['invalid_ready_identity']:
+            raise CheckError('backup_replay_restore_invariants_failed')
+        state['replay']=replay
+    if '006_replay_shared_ai_budget.sql' in migrations:
+        provider=query(provider_restore_sql(migrations))
+        if provider['invalid_call_jobs']:
+            event('backup_provider_restore_diagnostics',**provider)
+            raise CheckError('backup_provider_restore_invariants_failed')
+        state['provider']=provider
+    if '018_openai_api.sql' in migrations:
+        openai=query(openai_restore_sql(migrations))
+        if (openai['tables']!=2 or openai['budget_rows']!=1 or openai['invalid_call_jobs']
+                or openai['invalid_call_accounting'] or openai['invalid_budget']):
+            event('backup_openai_restore_diagnostics',**openai)
+            raise CheckError('backup_openai_restore_invariants_failed')
+        state['openai']=openai
+    # An older snapshot can contain credentials already consumed or revoked on
+    # the original server. Invalidate bearer credentials in the disconnected
+    # restore copy; a recovery must never resurrect those capabilities.
+    if '004_standalone_portal.sql' in migrations:
+        query("""WITH revoked AS (DELETE FROM portal_sessions RETURNING 1)
+            SELECT json_build_object('sessions_revoked',count(*)) FROM revoked;""")
+        state['restored_sessions_revoked']=True
+    if '023_portal_invites_recovery.sql' in migrations:
+        query("""WITH invitations AS (UPDATE portal_invitations SET used_at=now()
+            WHERE used_at IS NULL RETURNING 1), codes AS (UPDATE portal_recovery_codes SET used_at=now()
+            WHERE used_at IS NULL RETURNING 1)
+            SELECT json_build_object('invitations_revoked',(SELECT count(*) FROM invitations),
+                'recovery_codes_revoked',(SELECT count(*) FROM codes));""")
+        state['restored_access_tokens_revoked']=True
+    if '029_human_coaching.sql' in migrations:
+        query("""WITH links AS (UPDATE coaching_links SET status='revoked',token_hash=NULL,share_profile=false
+            RETURNING 1), grants AS (DELETE FROM coaching_shares RETURNING 1)
+            SELECT json_build_object('links_revoked',(SELECT count(*) FROM links),
+                'grants_revoked',(SELECT count(*) FROM grants));""")
+        state['restored_coaching_grants_revoked']=True
+    # Both writes target the disconnected drill copy. Never reset money, holds,
+    # expiry or a prior accounting freeze, and never enable either provider.
+    query("""UPDATE video_ai_budget SET enabled=false,
+        frozen_reason=coalesce(frozen_reason,'RESTORE_REQUIRES_SPEND_RECONCILIATION') WHERE id=1
+        RETURNING json_build_object('disabled',NOT enabled);""")
+    if '018_openai_api.sql' in migrations:
+        query("""UPDATE openai_api_budget SET enabled=false,
+            frozen_reason=coalesce(frozen_reason,'RESTORE_REQUIRES_SPEND_RECONCILIATION') WHERE id=1
+            RETURNING json_build_object('disabled',NOT enabled);""")
+    return state
+
 
 def bucket(cloud):
     plans=cloud.list('/api/v1/presets/storages','storages_presets')
@@ -100,41 +268,20 @@ def verify_restore(dump):
             result=subprocess.run(['docker','exec','-i',name,'pg_restore','--username=drill','--dbname=narma_restore_drill',
                 '--no-owner','--no-acl','--single-transaction','--exit-on-error','--no-password'],stdin=source,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=300)
         if result.returncode: raise CheckError('backup_restore_failed')
-        sql="""SELECT json_build_object('tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('video_schema_migrations','video_jobs','video_parts','video_batches','video_workers','video_provider_calls','video_ai_budget','video_budget_operations')),
-            'migrations',(SELECT count(*) FROM video_schema_migrations),'jobs',(SELECT count(*) FROM video_jobs),
-            'calls',(SELECT count(*) FROM video_provider_calls),'allowance',(SELECT limit_microusd FROM video_ai_budget WHERE id=1),
-            'orphans',(SELECT count(*) FROM video_batches b LEFT JOIN video_jobs j ON j.id=b.job_id WHERE j.id IS NULL));
-            UPDATE video_ai_budget SET enabled=false,frozen_reason='RESTORE_REQUIRES_SPEND_RECONCILIATION' WHERE id=1;"""
-        output=command(['docker','exec','-i',name,'psql','-U','drill','-d','narma_restore_drill','-v','ON_ERROR_STOP=1','-At'],input=sql.encode())
-        state=json.loads(output.decode().splitlines()[0])
-        expected_tables=8 if state['migrations']>=3 else 7
-        if state['tables']!=expected_tables or state['migrations']<2 or state['orphans']!=0 or state['allowance']>10000000:
-            raise CheckError('backup_restore_invariants_failed')
-        if state['migrations']>=4:
-            portal_sql="""SELECT json_build_object('tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('portal_accounts','portal_sessions','portal_auth_limits','portal_dota_profiles','portal_replay_uploads')),
-                'accounts',(SELECT count(*) FROM portal_accounts),
-                'orphan_sessions',(SELECT count(*) FROM portal_sessions s LEFT JOIN portal_accounts a ON a.owner_id=s.owner_id WHERE a.owner_id IS NULL),
-                'orphan_profiles',(SELECT count(*) FROM portal_dota_profiles p LEFT JOIN portal_accounts a ON a.owner_id=p.owner_id WHERE a.owner_id IS NULL));"""
-            portal=json.loads(command(['docker','exec','-i',name,'psql','-U','drill','-d','narma_restore_drill','-v','ON_ERROR_STOP=1','-At'],input=portal_sql.encode()).decode().splitlines()[0])
-            if portal['tables']!=5 or portal['accounts']>1 or portal['orphan_sessions'] or portal['orphan_profiles']:
-                raise CheckError('backup_portal_restore_invariants_failed')
-            state['portal']=portal
-        if state['migrations']>=5:
-            replay=json.loads(command(['docker','exec','-i',name,'psql','-U','drill','-d','narma_restore_drill','-v','ON_ERROR_STOP=1','-At'],input=REPLAY_RESTORE_SQL.encode()).decode().splitlines()[0])
-            if replay['tables']!=3 or replay['orphan_jobs'] or replay['orphan_parts'] or replay['invalid_ready_identity']:
-                raise CheckError('backup_replay_restore_invariants_failed')
-            state['replay']=replay
-        if state['migrations']>=6:
-            provider=json.loads(command(['docker','exec','-i',name,'psql','-U','drill','-d','narma_restore_drill','-v','ON_ERROR_STOP=1','-At'],input=PROVIDER_RESTORE_SQL.encode()).decode().splitlines()[0])
-            if provider['invalid_call_jobs']:
-                raise CheckError('backup_provider_restore_invariants_failed')
-            state['provider']=provider
+        def restored_query(sql):
+            output=command(['docker','exec','-i',name,'psql','-U','drill','-d','narma_restore_drill',
+                '-v','ON_ERROR_STOP=1','-At'],input=sql.encode())
+            return json.loads(output.decode().splitlines()[0])
+        state=verify_restored_database(restored_query)
         event('backup_restore_verified',**state)
         return state
     finally:
         subprocess.run(['docker','rm','--force','--volumes',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
 
 def backup(cloud,ssh,temporary):
+    # Cloud-only dependencies are unnecessary for isolated SQL verification.
+    import boto3
+    from botocore.config import Config
     destination=bucket(cloud)
     dump=temporary/'database.dump'
     # Enforce the output cap in the SSH process; an oversized dump cannot fill the runner.
@@ -179,7 +326,9 @@ def backup(cloud,ssh,temporary):
             raise CheckError('backup_download_hash_mismatch')
         verified=verify_restore(restored)
         manifest={'sha256':digest,'bytes':dump.stat().st_size,'source_vm':SERVER,'created_at':datetime.now(timezone.utc).isoformat(),
-            'restore_verified':True,'schema':verified,'restore_budget_action':'disable until provider spend reconciled'}
+            'restore_verified':True,'schema':verified,'restore_budget_action':'disable until provider spend reconciled',
+            'restore_auth_action':'revoke all sessions, invitations and recovery codes before opening access',
+            'media_included':False}
         client.put_object(Bucket=name,Key=key+'.json',Body=json.dumps(manifest).encode(),ContentType='application/json')
         verified_success=True
     finally:

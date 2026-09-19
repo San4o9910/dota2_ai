@@ -35,7 +35,16 @@ _SAFE_FAILURES = frozenset({'HERMES_TOKEN_INVALID', 'HERMES_LEASE_EXPIRED', 'HER
     'VIDEO_GLOBAL_BUDGET_DISABLED', 'VIDEO_GLOBAL_BUDGET_EXCEEDED', 'VIDEO_GLOBAL_BUDGET_INVALID',
     'VIDEO_BUDGET_PRICE_POLICY_EXPIRED', 'VIDEO_REQUEST_BUDGET_EXCEEDED',
     'VIDEO_BUDGET_RECONCILIATION_REQUIRED', 'VIDEO_BUDGET_ACCOUNTING_FAILED', 'GEMINI_USAGE_UNSUPPORTED',
-    'HERMES_CONNECTION_CHANGED', 'HERMES_SUBSCRIPTION_UNAVAILABLE'})
+    'HERMES_CONNECTION_CHANGED', 'HERMES_SUBSCRIPTION_UNAVAILABLE',
+    'OPENAI_NOT_CONFIGURED', 'OPENAI_BUDGET_DISABLED', 'OPENAI_BUDGET_EXCEEDED',
+    'OPENAI_BUDGET_INVALID', 'OPENAI_BUDGET_PRICE_POLICY_EXPIRED', 'OPENAI_CALL_ALREADY_ATTEMPTED',
+    'OPENAI_BUDGET_BOUND_INVALID', 'OPENAI_BUDGET_ACCOUNTING_FAILED',
+    'OPENAI_BUDGET_RECONCILIATION_REQUIRED', 'OPENAI_BUDGET_USAGE_INVALID',
+    'OPENAI_USAGE_MISSING', 'OPENAI_CALL_NOT_SETTLED', 'OPENAI_MODEL_UNSUPPORTED',
+    'OPENAI_LEASE_LOST', 'OPENAI_CALL_CONFLICT', 'OPENAI_CALL_EXPIRED', 'OPENAI_DAILY_LIMIT',
+    'OPENAI_AUTHENTICATION_FAILED', 'OPENAI_RATE_LIMITED', 'OPENAI_PROVIDER_UNAVAILABLE',
+    'OPENAI_PROVIDER_REJECTED', 'OPENAI_RESPONSE_INVALID', 'OPENAI_RESPONSE_INCOMPLETE',
+    'OPENAI_RESPONSE_REFUSED', 'OPENAI_TIMEOUT', 'OPENAI_TRANSPORT_ERROR'})
 _FINISH_REASONS = frozenset({'STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION', 'OTHER', 'BLOCKLIST',
     'PROHIBITED_CONTENT', 'SPII', 'MALFORMED_FUNCTION_CALL', 'FINISH_REASON_UNSPECIFIED',
     'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT', 'IMAGE_RECITATION', 'NO_IMAGE',
@@ -185,11 +194,13 @@ def validate_request(value):
     """Accept only the bounded text-only subset used by the pinned AIAgent."""
     if not isinstance(value, dict) or set(value) - _FIELDS:
         raise ValueError('HERMES_REQUEST_INVALID')
-    from .hermes_tasks import CHATGPT_MODEL
-    if value.get('model') not in (budget.MODEL, CHATGPT_MODEL):
+    from .hermes_tasks import CHATGPT_MODEL, OPENAI_MODEL
+    if value.get('model') not in (budget.MODEL, CHATGPT_MODEL, OPENAI_MODEL):
         raise ValueError('HERMES_MODEL_UNSUPPORTED')
     for key in ('max_tokens', 'max_completion_tokens'):
         if key in value and (type(value[key]) is not int or not 1 <= value[key] <= 4096):
+            raise ValueError('HERMES_REQUEST_INVALID')
+        if value.get('model') == OPENAI_MODEL and key in value and value[key] < 256:
             raise ValueError('HERMES_REQUEST_INVALID')
     if (value.get('stream', False) is not False or type(value.get('n', 1)) is not int
             or value.get('n', 1) != 1 or value.get('tools', []) != []
@@ -302,10 +313,11 @@ def complete(token, request, provider_factory=GeminiHermesProvider):
     """Reserve durably before dispatch; settle even on invalid output or failure."""
     provider = None
     subscription_call = None
+    openai_call = None
     try:
         with database() as connection:
             task = authorize_call(connection, token)
-            from .hermes_tasks import CHATGPT_PROVIDER, task_model
+            from .hermes_tasks import CHATGPT_PROVIDER, OPENAI_PROVIDER, task_model
             model = task_model(task)
             if request.get('model') != model:
                 raise ValueError('HERMES_MODEL_UNSUPPORTED')
@@ -318,10 +330,36 @@ def complete(token, request, provider_factory=GeminiHermesProvider):
                 subscription_call = reserve_call(connection, owner_id=task['owner_id'],
                     request_key=f"hermes:{task['id']}", task_id=task['id'], instructions=instructions,
                     input_data=input_data, expected_generation=str(task['connection_generation']), model=model)
+            elif task.get('provider') == OPENAI_PROVIDER:
+                from .openai_provider import reserve_call
+                from .hermes_bridge import Review
+                instructions = '\n\n'.join(message['content'] for message in request['messages']
+                    if message['role'] in ('system', 'developer'))
+                input_data = json.dumps([message for message in request['messages']
+                    if message['role'] in ('user', 'assistant')], ensure_ascii=False, separators=(',', ':'))
+                schema = Review.model_json_schema()
+                openai_call = reserve_call(connection, owner_id=task['owner_id'],
+                    request_key=f"hermes:{task['id']}", instructions=instructions, input_data=input_data,
+                    schema=schema, kind='hermes', task_id=task['id'], lease_token=task['lease_token'],
+                    max_output_tokens=request['max_tokens'])
             else:
                 # Configuration can fail without recording a provider attempt.
                 provider = provider_factory()
                 call_id = budget.reserve_hermes(connection, task, model)
+        if openai_call is not None:
+            from .openai_provider import perform_reserved
+            result = perform_reserved(openai_call['id'], task['owner_id'], instructions, input_data,
+                schema, max_output_tokens=request['max_tokens'])
+            if result['model'] != model:
+                raise ValueError('HERMES_MODEL_UNSUPPORTED')
+            output = result['text']
+            if not isinstance(output, str) or not output or len(output.encode()) > MAX_RESPONSE_BYTES:
+                raise ValueError('HERMES_PROVIDER_RESPONSE_INVALID')
+            # Settlement and the exact output hash are owned by the API ledger;
+            # Hermes's aggregate usage is never trusted to establish billing.
+            return {'id': f"chatcmpl-narma-openai-{openai_call['id']}",
+                'object': 'chat.completion', 'created': int(time.time()), 'model': model,
+                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': output}, 'finish_reason': 'stop'}]}
         if subscription_call is not None:
             from .chatgpt_provider import perform_reserved
             result = perform_reserved(subscription_call['id'], task['owner_id'], instructions, input_data)
@@ -365,17 +403,18 @@ def _failure(error):
     code = str(error) if isinstance(error, ValueError) and str(error) in _SAFE_FAILURES else 'HERMES_PROVIDER_UNAVAILABLE'
     if code == 'HERMES_TOKEN_INVALID':
         status = 401
-    elif code in ('HERMES_LEASE_EXPIRED', 'HERMES_SOURCE_CHANGED', 'HERMES_CONNECTION_CHANGED'):
+    elif code in ('HERMES_LEASE_EXPIRED', 'HERMES_SOURCE_CHANGED', 'HERMES_CONNECTION_CHANGED',
+                  'OPENAI_LEASE_LOST', 'OPENAI_CALL_CONFLICT', 'OPENAI_CALL_EXPIRED'):
         status = 409
     elif code in ('HERMES_REQUEST_INVALID', 'HERMES_MODEL_UNSUPPORTED'):
         status = 400
     elif code == 'HERMES_REQUEST_TOO_LARGE':
         status = 413
-    elif code == 'HERMES_REQUEST_BUDGET_EXCEEDED':
+    elif code in ('HERMES_REQUEST_BUDGET_EXCEEDED', 'OPENAI_CALL_ALREADY_ATTEMPTED'):
         status = 403  # Non-retryable: this task has consumed its one attempt.
-    elif 'BUDGET' in code:
+    elif 'BUDGET' in code or code in ('OPENAI_DAILY_LIMIT', 'OPENAI_RATE_LIMITED'):
         status = 429
-    elif code == 'HERMES_NOT_CONFIGURED':
+    elif code in ('HERMES_NOT_CONFIGURED', 'OPENAI_NOT_CONFIGURED'):
         status = 503
     else:
         status = 502

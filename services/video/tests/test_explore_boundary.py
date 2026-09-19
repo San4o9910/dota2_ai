@@ -19,10 +19,12 @@ def public_client(monkeypatch):
 
 
 def test_public_browsing_does_not_require_database_or_login(public_client):
-    for path in ('/', '/heroes', '/builds', '/learn', '/practice', '/updates'):
+    for path in ('/', '/heroes', '/builds', '/learn', '/practice', '/updates', '/example', '/start'):
         response = public_client.get(path)
         assert response.status_code == 200
         assert '/assets/explore.js' in response.text
+        assert 'papa_prima' not in response.text.lower()
+        assert '8963624400' not in response.text
         assert 'script-src \'self\'' in response.headers['content-security-policy']
         assert response.headers['x-frame-options'] == 'DENY'
 
@@ -32,7 +34,7 @@ def test_public_browsing_does_not_require_database_or_login(public_client):
 
 
 def test_public_launch_does_not_expose_personal_reports_or_provider_access(public_client):
-    for path in ('/api/profile', '/api/replays', '/api/hero-pool',
+    for path in ('/api/player-profile', '/api/profile', '/api/replays', '/api/hero-pool',
                  '/api/learning', '/api/integrations/chatgpt'):
         response = public_client.get(path)
         assert response.status_code == 401, path
@@ -43,8 +45,18 @@ def test_public_launch_does_not_expose_personal_reports_or_provider_access(publi
 
 
 def test_private_navigation_direct_links_keep_the_portal_shell(public_client):
-    for path in ('/replays', '/hero-pool', '/player', '/my-learning', '/account', '/setup'):
+    for path in ('/coach', '/replays', '/hero-pool', '/player', '/player-profile', '/my-learning', '/account', '/setup'):
         response = public_client.get(path)
         assert response.status_code == 200
         assert '/assets/portal.js' in response.text
+        assert 'papa_prima' not in response.text.lower()
+        assert '8963624400' not in response.text
         assert response.headers['cache-control'] == 'no-store'
+
+
+def test_public_script_assets_do_not_embed_owner_demo(public_client):
+    for path in ('/assets/explore.js', '/assets/portal.js'):
+        response = public_client.get(path)
+        assert response.status_code == 200
+        assert 'papa_prima' not in response.text.lower()
+        assert '8963624400' not in response.text
