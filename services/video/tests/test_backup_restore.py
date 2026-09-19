@@ -330,3 +330,17 @@ def test_restore_rejects_multiple_platform_owners_even_if_index_was_lost(restore
                     password_hash='synthetic', is_platform_owner=True)
     with pytest.raises(restored.backup.CheckError, match='backup_account_access_restore_invariants_failed'):
         restored.verify()
+
+
+@pytest.mark.parametrize('restored',[29],indirect=True)
+def test_restore_never_resurrects_human_coaching_grants(restored):
+    student='portal_restore_student'
+    restored.insert('portal_accounts',owner_id=student,email='student@example.invalid',password_hash='synthetic')
+    restored.insert('human_coaches',owner_id=OWNER,display_name='Synthetic coach',experience='Synthetic experience',status='approved')
+    link_id=uuid4()
+    restored.insert('coaching_links',id=link_id,coach_id=OWNER,student_id=student,student_name='Synthetic student',status='active',share_profile=True)
+    restored.insert('coaching_links',id=uuid4(),coach_id=OWNER,token_hash='c'*64)
+    result=restored.verify()
+    assert result['restored_coaching_grants_revoked'] is True
+    rows=restored.connection.execute('SELECT status,token_hash,share_profile FROM coaching_links').fetchall()
+    assert all(row==('revoked',None,False) for row in rows)

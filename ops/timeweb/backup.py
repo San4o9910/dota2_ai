@@ -195,6 +195,12 @@ def verify_restored_database(query):
             SELECT json_build_object('invitations_revoked',(SELECT count(*) FROM invitations),
                 'recovery_codes_revoked',(SELECT count(*) FROM codes));""")
         state['restored_access_tokens_revoked']=True
+    if '029_human_coaching.sql' in migrations:
+        query("""WITH links AS (UPDATE coaching_links SET status='revoked',token_hash=NULL,share_profile=false
+            RETURNING 1), grants AS (DELETE FROM coaching_shares RETURNING 1)
+            SELECT json_build_object('links_revoked',(SELECT count(*) FROM links),
+                'grants_revoked',(SELECT count(*) FROM grants));""")
+        state['restored_coaching_grants_revoked']=True
     # Both writes target the disconnected drill copy. Never reset money, holds,
     # expiry or a prior accounting freeze, and never enable either provider.
     query("""UPDATE video_ai_budget SET enabled=false,

@@ -93,6 +93,7 @@ export function mountNarmaSignature(host, { compact = false } = {}) {
 // Progressive enhancement: content is visible even without animation support.
 // Observe only editorial blocks, never live messages, form errors or polling rows.
 const revealTargets = [
+  '.human-card > h2', '.human-intro > p', '.human-person', '.human-focus > h3',
   '.page-heading', '.practice-feature > .eyebrow', '.practice-feature > h1',
   '.practice-feature > p', '.practice-feature > .button-row', '.practice-feature > .feature-note',
   '.vision-path > a', '.section-heading', '.home-news', '.personal-promo',

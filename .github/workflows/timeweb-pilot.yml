@@ -3,7 +3,7 @@ run-name: ${{ inputs.prepare_openai_api && 'NARMA — запрос на вклю
 
 on:
   push:
-    branches: [codex/replay-map-hardening-8ea829a]
+    branches: [codex/openai-video-coach]
     paths:
       - .github/workflows/timeweb-pilot.yml
       - ops/timeweb/**
@@ -13,6 +13,11 @@ on:
       - scripts/check-portal-ui.mjs
       - scripts/check-explore-ui.mjs
       - scripts/check-video-workspace.mjs
+      - scripts/check-player-profile.mjs
+      - scripts/check-human-coach.mjs
+      - scripts/program-fixtures.mjs
+      - .github/workflows/ci.yml
+      - .github/workflows/deep-learning-ci.yml
       - .dockerignore
   workflow_dispatch:
     inputs:
@@ -53,6 +58,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: timeweb-pilot-deployment
@@ -62,10 +68,9 @@ jobs:
   deploy:
     if: >-
       github.repository == 'San4o9910/dota2_ai' &&
-      (github.ref == 'refs/heads/codex/replay-map-hardening-8ea829a' ||
-       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/openai-video-coach'))
+      github.ref == 'refs/heads/codex/openai-video-coach'
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 70
     env:
       NARMA_BUILD_STATS_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_stats_source || 'authored' }}
     steps:
@@ -73,6 +78,10 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Require successful checks of this exact release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ops/timeweb/release_gate.py
       - name: Validate provider selection and explicit allowance before building
         env:
           ACTIVATE_HERMES: ${{ github.event_name == 'workflow_dispatch' && inputs.activate_hermes && 'true' || 'false' }}
@@ -138,6 +147,8 @@ jobs:
           node scripts/check-portal-ui.mjs
           node scripts/check-explore-ui.mjs
           node scripts/check-video-workspace.mjs
+          node scripts/check-player-profile.mjs
+          node scripts/check-human-coach.mjs
       - name: Preserve synthetic report screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -200,7 +211,11 @@ jobs:
             --env NARMA_EXPLORE_REFRESH_ENABLED=0 \
             --volume "$PWD:/repo:ro" narma-video-check \
             sh -c 'pip install --no-cache-dir pytest==8.4.2 >/dev/null && python -m pytest /repo/services/video/tests -q -p no:cacheprovider'
-      - name: Create or reuse one hourly billed pilot and start private services
+      - name: Reject superseded release before changing the server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ops/timeweb/release_gate.py --current-only
+      - name: Update the pinned existing pilot and start private services
         env:
           TIMEWEB_CLOUD_TOKEN: ${{ secrets.TIMEWEB_CLOUD_TOKEN }}
           STRATZ_API_TOKEN: ${{ env.NARMA_BUILD_STATS_SOURCE == 'stratz' && secrets.STRATZ_API_TOKEN || '' }}
@@ -227,3 +242,5 @@ jobs:
           python3 ops/timeweb/pilot.py "${pilot_args[@]}"
       - name: Verify published deep learning and all-hero catalog
         run: python3 ops/timeweb/check_learning_release.py --origin https://narma-72-56-98-68.sslip.io
+      - name: Verify installed coaching UI and private access boundary
+        run: python3 ops/timeweb/check_coach_release.py --origin https://narma-72-56-98-68.sslip.io
