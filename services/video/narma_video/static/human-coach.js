@@ -17,11 +17,16 @@ function block(title,copy){const n=el('section',undefined,'human-card');n.append
 function disclosure(title){const d=el('details',undefined,'human-details');d.append(el('summary',title));return d;}
 function displayDate(s){return s?new Date(s).toLocaleString('ru-RU',{dateStyle:'medium',timeStyle:'short'}):'Время уточняется';}
 
-export function createHumanCoach({host,api,current}){
+export function createHumanCoach({host,api,current,onInvite}){
  let generation=0,selected=null,data=null,active=false;
  const params=new URLSearchParams(location.hash.slice(1));
  let invite=/^[A-Za-z0-9_-]{43}$/.test(params.get('coach_invite')??'')?params.get('coach_invite'):null;
  if(params.has('coach_invite'))history.replaceState(null,'',location.pathname);
+ window.addEventListener('hashchange',()=>{
+  const incoming=new URLSearchParams(location.hash.slice(1)).get('coach_invite');
+  if(!/^[A-Za-z0-9_-]{43}$/.test(incoming??''))return;
+  invite=incoming;history.replaceState(null,'',location.pathname);onInvite?.();
+ });
  const endpoint=(id=selected)=>`/api/human-coach/links/${encodeURIComponent(id)}`;
  function clear(){generation++;selected=null;data=null;host.replaceChildren();}
  function visible(value){active=value;if(!value){generation++;host.replaceChildren();}}

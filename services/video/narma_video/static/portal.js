@@ -89,7 +89,7 @@ async function openProgramCheck(plan,match){
 
 const playerProfile=createPlayerProfile({host:$('player-profile-content'),api,current:()=>state.user,onNavigate:tab=>switchTab(tab),onChanged:data=>{state.coachingProfile=data.profile;}});
 
-const humanCoach=createHumanCoach({host:$('human-coach-content'),api,current:()=>state.user});
+const humanCoach=createHumanCoach({host:$('human-coach-content'),api,current:()=>state.user,onInvite:()=>switchTab('human-coach',{historyMode:'replace'})});
 
 const tabPaths={'human-coach':'/human-coach','player-profile':'/player-profile',training:'/training',coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
 function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'training';}

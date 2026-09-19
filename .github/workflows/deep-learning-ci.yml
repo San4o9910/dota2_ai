@@ -31,12 +31,12 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/narma-portal-qa" --no-audit --no-fund playwright@1.62.1 axe-core@4.10.3
           "$RUNNER_TEMP/narma-portal-qa/node_modules/.bin/playwright" install --with-deps chromium
+          node scripts/check-human-coach.mjs
           node scripts/check-workshop-builds.mjs
           node scripts/check-explore-ui.mjs
           node scripts/check-portal-ui.mjs
           node scripts/check-video-workspace.mjs
           node scripts/check-player-profile.mjs
-          node scripts/check-human-coach.mjs
       - name: Preserve synthetic UI screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
