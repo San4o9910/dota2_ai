@@ -1,3 +1,4 @@
+import { createHumanCoach } from './human-coach.js';
 import { createPlayerProfile } from './player-profile.js';
 import { createBilling } from './billing.js';
 import { showReportFreshness } from './report-freshness.js';
@@ -88,20 +89,24 @@ async function openProgramCheck(plan,match){
 
 const playerProfile=createPlayerProfile({host:$('player-profile-content'),api,current:()=>state.user,onNavigate:tab=>switchTab(tab),onChanged:data=>{state.coachingProfile=data.profile;}});
 
-const tabPaths={'player-profile':'/player-profile',training:'/training',coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
+const humanCoach=createHumanCoach({host:$('human-coach-content'),api,current:()=>state.user,onInvite:()=>switchTab('human-coach',{historyMode:'replace'})});
+
+const tabPaths={'human-coach':'/human-coach','player-profile':'/player-profile',training:'/training',coach:'/coach',review:'/replays',videos:'/videos','hero-pool':'/hero-pool',learning:'/my-learning',player:'/player',account:'/account',owner:'/owner'};
 function pathTab() {return Object.keys(tabPaths).find(tab=>tabPaths[tab]===location.pathname)??'training';}
 function switchTab(tab,{historyMode='push',loadPractice=true}={}) {
   if(!Object.hasOwn(tabPaths,tab)||!$(tab)) return;
   if(historyMode==='push'&&location.pathname!==tabPaths[tab])history.pushState({tab},'',tabPaths[tab]);
   if(historyMode==='replace')history.replaceState({tab},'',tabPaths[tab]);
   for(const section of document.querySelectorAll('.tab-section')) section.hidden=section.id!==tab;
-  document.querySelector('.workspace-intro').hidden=tab==='player-profile';
+  document.querySelector('.workspace-intro').hidden=['player-profile','human-coach'].includes(tab);
   for(const button of document.querySelectorAll('nav [data-tab]')) { if(button.dataset.tab===tab) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); }
   // Keep the current report and unsaved forms in the DOM when changing sections.
   if(tab==='hero-pool'&&state.user&&(!state.pool||state.poolDirty)) void loadPool();
   if(tab==='training'&&state.user)void playerProgram.load();
   if(tab==='player-profile'&&state.user&&!playerProfile.value)void playerProfile.load();
   if(tab==='learning'&&state.user&&loadPractice) void loadLearning({preserveView:true});
+  humanCoach.visible(tab==='human-coach');
+  if(tab==='human-coach'&&state.user)void humanCoach.load();
   videoWorkspace.setVisible(tab==='videos');
   personalCoach.setVisible(tab==='coach');
   stopChatgptPolling();
@@ -157,7 +162,7 @@ async function session() {
   const data=await api('/api/session'); state.setup=data.setup_required===true; state.user=data.authenticated?data.user:null;
   state.coaching=data.coaching??{};
   state.registrationAvailable=data.registration_available===true;
-  if(!state.user){billing.clear();playerProgram.clear();playerProfile.clear();state.coachingProfile=null;}
+  if(!state.user){humanCoach.clear();billing.clear();playerProgram.clear();playerProfile.clear();state.coachingProfile=null;}
   ownerDashboard.setSession(state.user);$('owner-nav').hidden=!state.user?.is_platform_owner;
   $('chatgpt-integration').hidden=state.coaching.personal_connect!==true;
   $('platform-coach').hidden=!state.user||state.coaching.mode!=='platform';
@@ -183,7 +188,9 @@ async function session() {
   if(pathTab()==='owner')void ownerDashboard.load();
   $('pilot-invitations').hidden=state.user.is_platform_owner!==true;
   if(state.invite) notice('Чтобы принять приглашение на другой аккаунт, сначала нажми «Выйти».');
-  if(['/register','/login'].includes(location.pathname))switchTab('training',{historyMode:'replace'});
+  if(humanCoach.pendingInvitation)switchTab('human-coach',{historyMode:'replace'});
+  else if(['/register','/login'].includes(location.pathname))switchTab('training',{historyMode:'replace'});
+  else if(pathTab()==='human-coach')void humanCoach.load();
   if(!$('account').hidden){void loadSecurity();void billing.load();}
   if(!$('training').hidden)void playerProgram.load();
   if($('learning')&&!$('learning').hidden)void loadLearning();

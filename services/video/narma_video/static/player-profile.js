@@ -23,6 +23,13 @@ const scenarios=[
 const scenarioChoices=[['act','Попробую сразу действовать'],['wait','Сначала соберу недостающую информацию'],['alternative','Выберу другое доступное действие'],['unknown','Пока не знаю — хочу разобрать с тренером']];
 const TOTAL=fields.length+scenarios.length;
 const labelFor=(f,value)=>f.choices.find(([key])=>key===value)?.[1]??'Не указано';
+export function profileAnswerRows(answers){
+ const rows=[...fields,tone].filter(f=>Object.hasOwn(answers,f.key)).map(f=>[f.title,labelFor(f,answers[f.key])]);
+ if(answers.heroes?.length)rows.push(['Герои',answers.heroes.join(', ')]);
+ if(answers.goal_note)rows.push(['Своя цель',answers.goal_note]);
+ for(const scenario of scenarios){const a=answers.scenarios?.[scenario.id];if(a)rows.push([scenario.title,`${scenarioChoices.find(([k])=>k===a.choice)?.[1]||'Не указано'}. ${a.reason||''}`]);}
+ return rows;
+}
 export function renderProfileGuidance(guide,{preliminary=false}={}){
  const card=node('section',null,'profile-guidance');card.dataset.profileRevision=String(guide.revision);
  card.append(node('p',preliminary?'Твоя первая практика · по ответам':'Твой ритм практики','eyebrow'),node('h3',preliminary?guide.title:guide.goal));
